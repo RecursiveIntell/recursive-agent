@@ -1,0 +1,27 @@
+[package]
+name = "recursive-agent-cli"
+version = "0.1.0"
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+authors.workspace = true
+publish.workspace = true
+description = "M0 CLI: ra run, ra verify, ra replay, ra doctor"
+
+[[bin]]
+name = "ra"
+path = "src/main.rs"
+
+[dependencies]
+recursive-agent-contracts = { path = "../recursive-agent-contracts" }
+recursive-agent-ledger = { path = "../recursive-agent-ledger" }
+recursive-agent-runner = { path = "../recursive-agent-runner" }
+serde = { workspace = true }
+serde_json = { workspace = true }
+chrono = { workspace = true }
+thiserror = { workspace = true }
+clap = { workspace = true }
+hex = { workspace = true }
+
+[lints]
+workspace = true

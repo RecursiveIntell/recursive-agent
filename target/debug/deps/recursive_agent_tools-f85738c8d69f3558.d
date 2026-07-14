@@ -1,0 +1,9 @@
+/home/sikmindz/Coding/recursive-agent/target/debug/deps/recursive_agent_tools-f85738c8d69f3558.d: crates/recursive-agent-tools/src/lib.rs Cargo.toml
+
+/home/sikmindz/Coding/recursive-agent/target/debug/deps/librecursive_agent_tools-f85738c8d69f3558.rmeta: crates/recursive-agent-tools/src/lib.rs Cargo.toml
+
+crates/recursive-agent-tools/src/lib.rs:
+Cargo.toml:
+
+# env-dep:CLIPPY_ARGS=-D__CLIPPY_HACKERY__warnings__CLIPPY_HACKERY__
+# env-dep:CLIPPY_CONF_DIR

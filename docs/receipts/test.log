@@ -1,0 +1,56 @@
++ cargo test --workspace --locked --all-targets --no-fail-fast
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.10s
+     Running unittests src/main.rs (target/debug/deps/ra-5cbdd8cd7c2043e0)
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+     Running unittests src/lib.rs (target/debug/deps/recursive_agent_contracts-8e6b954f30f0c25c)
+
+running 6 tests
+test tests::family_id_composes_family_and_suffix ... ok
+test tests::family_id_rejects_empty_family ... ok
+test tests::content_digest_matches_recursive_jcs ... ok
+test tests::lineage_full_chain_passes ... ok
+test tests::lineage_requires_request_then_effect ... ok
+test tests::jcs_canonical_is_stable_across_reordering ... ok
+
+test result: ok. 6 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+     Running unittests src/lib.rs (target/debug/deps/recursive_agent_ledger-bd23f5ec73cb6939)
+
+running 3 tests
+test tests::genesis_is_deterministic ... ok
+test tests::open_initializes_chain ... ok
+test tests::chain_round_trip_and_verify ... ok
+
+test result: ok. 3 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+     Running unittests src/lib.rs (target/debug/deps/recursive_agent_policy-484753c983ff223d)
+
+running 5 tests
+test tests::default_allowlist_accepts_echo ... ok
+test tests::lineage_is_canonical ... ok
+test tests::permit_is_family_qualified ... ok
+test tests::default_allowlist_rejects_unknown_tool ... ok
+test tests::time_now_requires_frozen_clock ... ok
+
+test result: ok. 5 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+     Running unittests src/lib.rs (target/debug/deps/recursive_agent_runner-55861283497b8004)
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+     Running unittests src/lib.rs (target/debug/deps/recursive_agent_tools-a4aabf8b57dcb247)
+
+running 4 tests
+test tests::echo_returns_text ... ok
+test tests::time_now_requires_frozen_clock ... ok
+test tests::unknown_tool_errors ... ok
+test tests::time_now_returns_frozen_timestamp ... ok
+
+test result: ok. 4 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+

@@ -1,0 +1,48 @@
+[workspace]
+resolver = "2"
+members = [
+    "crates/recursive-agent-contracts",
+    "crates/recursive-agent-ledger",
+    "crates/recursive-agent-policy",
+    "crates/recursive-agent-tools",
+    "crates/recursive-agent-runner",
+    "crates/recursive-agent-cli",
+]
+
+[workspace.package]
+edition = "2021"
+rust-version = "1.75"
+license = "MIT OR Apache-2.0"
+authors = ["RecursiveIntell"]
+publish = false
+
+[workspace.dependencies]
+# Path deps are absolute; Cargo resolves them in any crate that lists
+# these workspace entries.
+boundary-compiler = { version = "0.1.0", path = "/home/sikmindz/Coding/Libraries/boundary-compiler" }
+stack-ids = { version = "0.1.1", path = "/home/sikmindz/Coding/Libraries/stack-ids" }
+bitemporal-runtime = { version = "0.1.0", path = "/home/sikmindz/Coding/Libraries/bitemporal-runtime", default-features = false }
+claim-ledger = { version = "0.1.0", path = "/home/sikmindz/Coding/Libraries/claim-ledger" }
+
+serde = { version = "1.0.228", features = ["derive"] }
+serde_json = "1.0.149"
+chrono = { version = "0.4.44", features = ["serde"] }
+thiserror = "2.0.18"
+clap = { version = "4.5", features = ["derive"] }
+blake3 = "1.8.3"
+sha2 = "0.10"
+hex = "0.4"
+
+[workspace.lints.rust]
+unsafe_code = "forbid"
+unused_must_use = "deny"
+
+# Clippy lints. The `deny` group is enforced as a hard error in CI.
+# Tests opt back in to `unwrap`/`expect` with `#[allow(...)]` because
+# idiomatic Rust unit tests use them to assert on error cases.
+[workspace.lints.clippy]
+unwrap_used = "deny"
+expect_used = "deny"
+panic = "deny"
+todo = "deny"
+dbg_macro = "deny"

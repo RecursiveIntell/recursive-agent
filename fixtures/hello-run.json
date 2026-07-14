@@ -1,0 +1,22 @@
+{
+  "name": "hello",
+  "policy_version": "m0-1",
+  "frozen_clock": "2026-07-14T00:00:00Z",
+  "steps": [
+    {
+      "name": "echo-greeting",
+      "call": {
+        "tool": "echo",
+        "args": { "text": "hello, recursive-agent" }
+      }
+    },
+    {
+      "name": "record-time",
+      "call": {
+        "tool": "time_now",
+        "args": { "label": "frozen-at-build" },
+        "frozen_clock": "2026-07-14T00:00:00Z"
+      }
+    }
+  ]
+}

@@ -1,0 +1,8 @@
+recursive-agent M0
+mode: recorded-replay-only (no provider)
+boundary-compiler: 0.1.0
+stack-ids: 0.1.1
+bitemporal-runtime: 0.1.0
+claim-ledger: 0.1.0
+tools: echo, time_now
+default runs root: /home/sikmindz/.local/share/recursive-agent/runs
