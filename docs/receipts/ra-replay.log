@@ -1,12 +1,12 @@
 replay: ok
 length: 6
-final_head: 0062f908206720656fb85b5e92862883b91497d75cd8fddcd7cd1880352e0faf
+final_head: af18470a619301766981c6b4c0c82ba08ecd0c65b32adfd650e5000d2b698dc2
 steps: 6
   step step:graph-start kind=RunStarted outcome=Ok artifacts=0
-  step step:step:a937dbec-bcc0-4329-8276-0a9eea896360 kind=StepStarted outcome=Ok artifacts=0
-  step step:step:a937dbec-bcc0-4329-8276-0a9eea896360 kind=StepCompleted outcome=Ok artifacts=1
-  step step:step:fb25b6c3-10cd-447e-afbf-55520df86922 kind=StepStarted outcome=Ok artifacts=0
-  step step:step:fb25b6c3-10cd-447e-afbf-55520df86922 kind=StepCompleted outcome=Ok artifacts=1
+  step step:step:d7cc5564-43c7-43c5-84a0-87446b369875 kind=StepStarted outcome=Ok artifacts=0
+  step step:step:d7cc5564-43c7-43c5-84a0-87446b369875 kind=StepCompleted outcome=Ok artifacts=1
+  step step:step:2941ad0e-c4ab-4466-a747-d3791f6ad6fb kind=StepStarted outcome=Ok artifacts=0
+  step step:step:2941ad0e-c4ab-4466-a747-d3791f6ad6fb kind=StepCompleted outcome=Ok artifacts=1
   step step:graph-end kind=RunFinalized outcome=Ok artifacts=0
 artifacts: 2
   blake3:23aa347f0a7e0663c8d0445bee7f80954feedb90f91c702151bdfb0d3ba22506

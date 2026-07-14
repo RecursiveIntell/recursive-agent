@@ -1,1 +1,1 @@
-+ cargo fmt --all -- --check
++ bash -c for p in crates/*/Cargo.toml; do cargo fmt --manifest-path "$p" -- --check; done

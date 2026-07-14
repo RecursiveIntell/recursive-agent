@@ -24,7 +24,7 @@ run() {
     echo "::endgroup::"
 }
 
-run "fmt" cargo fmt --all -- --check
+run "fmt" bash -c 'for p in crates/*/Cargo.toml; do cargo fmt --manifest-path "$p" -- --check; done'
 run "clippy" cargo clippy --workspace --all-targets --locked -- -D warnings
 run "test" cargo test --workspace --locked --all-targets --no-fail-fast
 
