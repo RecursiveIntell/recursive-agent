@@ -1,0 +1,20 @@
+{
+  "name": "phase3-sandbox",
+  "policy_version": "m0-2",
+  "frozen_clock": "2026-07-14T00:00:00Z",
+  "steps": [
+    {
+      "name": "sandboxed-echo",
+      "call": {
+        "tool": "shell",
+        "args": {
+          "command": "/usr/bin/echo",
+          "args": ["hello-from-sandbox"],
+          "allowed_read_paths": ["/usr/bin"],
+          "allowed_write_paths": [],
+          "timeout_ms": 5000
+        }
+      }
+    }
+  ]
+}

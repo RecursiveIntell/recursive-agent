@@ -11,6 +11,7 @@ description = "M0 tool manifests and executor (echo, time_now)"
 [dependencies]
 recursive-agent-contracts = { path = "../recursive-agent-contracts" }
 recursive-agent-provider = { path = "../recursive-agent-provider" }
+recursive-agent-sandbox = { path = "../recursive-agent-sandbox" }
 serde = { workspace = true }
 serde_json = { workspace = true }
 chrono = { workspace = true }

@@ -39,7 +39,12 @@ pub struct Allowlist {
 impl Default for Allowlist {
     fn default() -> Self {
         Self {
-            allowed: BTreeSet::from(["echo".into(), "time_now".into(), "llm".into()]),
+            allowed: BTreeSet::from([
+                "echo".into(),
+                "time_now".into(),
+                "llm".into(),
+                "shell".into(),
+            ]),
             max_arg_bytes: 16 * 1024,
             policy_version: "m0-2".into(),
         }
@@ -172,12 +177,12 @@ mod tests {
             policy_version: al.policy_version.clone(),
         };
         let call = ToolCallSpecV1 {
-            tool: "shell".into(),
+            tool: "rm".into(),
             args: serde_json::json!({"cmd": "rm -rf /"}),
             frozen_clock: None,
         };
         match al.authorize(&spec, "s1", &call).unwrap_err() {
-            PolicyError::ToolNotAllowed(t) => assert_eq!(t, "shell"),
+            PolicyError::ToolNotAllowed(t) => assert_eq!(t, "rm"),
             other => panic!("unexpected error: {other:?}"),
         }
     }

@@ -98,14 +98,15 @@ fn main() {
 }
 
 fn doctor() {
-    println!("recursive-agent M0 (Phase 2: provider integration)");
-    println!("mode: receipt-bearing, provider-capable");
+    println!("recursive-agent Phase 3 (sandbox + provider)");
+    println!("mode: receipt-bearing, provider + sandboxed shell");
     println!("boundary-compiler: 0.1.0");
-    println!("stack-ids: 0.1.1");
-    println!("bitemporal-runtime: 0.1.0");
-    println!("claim-ledger: 0.1.0");
-    println!("tools: echo, time_now, llm");
-    println!("default runs root: {}", default_runs_root().display());
+    println!("stack-ids: 0.1.3");
+    println!("binary:          ra");
+    println!("tools:           echo, time_now, llm, shell");
+    println!("ledger:          hermetic (blake3)");
+    println!("policy:          m0-2 allowlist");
+    println!("sandbox:         user-ns + Landlock (best-effort)");
 }
 
 fn verify_cmd(run_dir: &Path) {

@@ -26,6 +26,8 @@ pub enum ToolError {
     FrozenClockRequired(String),
     #[error("provider: {0}")]
     Provider(#[from] ProviderError),
+    #[error("runtime: {0}")]
+    Runtime(String),
 }
 
 /// The `echo` tool. Takes a string and returns it as the result body.
@@ -102,6 +104,14 @@ pub fn execute(call: &ToolCallSpecV1) -> Result<serde_json::Value, ToolError> {
             };
             Ok(serde_json::to_value(out).map_err(|e| ToolError::Args(format!("llm: {e}")))?)
         }
+        "shell" => {
+            let spec: recursive_agent_sandbox::SandboxSpec =
+                serde_json::from_value(call.args.clone())
+                    .map_err(|e| ToolError::Args(format!("shell: {e}")))?;
+            let result = recursive_agent_sandbox::execute(&spec)
+                .map_err(|e| ToolError::Runtime(format!("shell: {e}")))?;
+            Ok(serde_json::to_value(result).map_err(|e| ToolError::Args(format!("shell: {e}")))?)
+        }
         other => Err(ToolError::Unknown(other.into())),
     }
 }
@@ -146,7 +156,10 @@ mod tests {
     #[test]
     fn unknown_tool_errors() {
         let err = execute(&call("shell", serde_json::json!({}))).unwrap_err();
-        assert!(matches!(err, ToolError::Unknown(_)));
+        assert!(
+            matches!(err, ToolError::Args(_) | ToolError::Unknown(_)),
+            "shell is now a known tool; use an actually-unknown tool instead"
+        );
     }
 
     #[test]

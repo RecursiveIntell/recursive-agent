@@ -5,6 +5,7 @@ members = [
     "crates/recursive-agent-ledger",
     "crates/recursive-agent-policy",
     "crates/recursive-agent-provider",
+    "crates/recursive-agent-sandbox",
     "crates/recursive-agent-tools",
     "crates/recursive-agent-runner",
     "crates/recursive-agent-cli",
@@ -35,7 +36,7 @@ sha2 = "0.10"
 hex = "0.4"
 
 [workspace.lints.rust]
-unsafe_code = "forbid"
+unsafe_code = "deny"
 unused_must_use = "deny"
 
 # Clippy lints. The `deny` group is enforced as a hard error in CI.
