@@ -1,0 +1,29 @@
+{
+  "name": "phase2-llm",
+  "policy_version": "m0-2",
+  "frozen_clock": "2026-07-14T00:00:00Z",
+  "steps": [
+    {
+      "name": "echo-probe",
+      "call": {
+        "tool": "echo",
+        "args": { "text": "phase2 provider integration" }
+      }
+    },
+    {
+      "name": "llm-greet",
+      "call": {
+        "tool": "llm",
+        "args": {
+          "provider": {
+            "kind": "ollama",
+            "base_url": "http://127.0.0.1:11434",
+            "model": "llama3.2:3b"
+          },
+          "prompt": "Reply with exactly the word READY and nothing else.",
+          "max_tokens": 64
+        }
+      }
+    }
+  ]
+}

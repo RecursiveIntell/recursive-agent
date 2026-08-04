@@ -21,10 +21,16 @@ def main() -> int:
         print("tamper: need at least 2 lines", file=sys.stderr)
         return 2
     receipt = json.loads(lines[1])
-    old = receipt["prev_chain_digest"]["hex"]
+    # stack-ids ContentDigest serializes as a plain hex string (e.g.
+    # "blake3:ab12..."). The old object form had a `.hex` field.
+    raw = receipt["prev_chain_digest"]
+    old = raw["hex"] if isinstance(raw, dict) else str(raw)
     new_first = "0" if old[0] != "0" else "1"
     new = new_first + old[1:]
-    receipt["prev_chain_digest"]["hex"] = new
+    if isinstance(raw, dict):
+        raw["hex"] = new
+    else:
+        receipt["prev_chain_digest"] = new
     lines[1] = json.dumps(receipt, sort_keys=True, separators=(",", ":"))
     path.write_text("\n".join(lines) + "\n")
     print(f"tampered: {old} -> {new}")

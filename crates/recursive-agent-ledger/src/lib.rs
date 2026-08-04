@@ -153,7 +153,7 @@ impl ChainHandle {
 
         // Compute new chain digest as blake3(prev.hex || canonical_bytes).
         let mut hasher = blake3::Hasher::new();
-        hasher.update(&self.head.as_bytes());
+        hasher.update(self.head.hex().as_bytes());
         hasher.update(&bytes);
         let next_hex = hasher.finalize().to_hex().to_string();
         let next = ContentDigest::from_hex(next_hex)
@@ -226,7 +226,7 @@ pub fn verify(paths: &RunPaths) -> Result<ChainVerification, LedgerError> {
         }
         let bytes = jcs_canonical(&receipt)?;
         let mut hasher = blake3::Hasher::new();
-        hasher.update(&head.as_bytes());
+        hasher.update(head.hex().as_bytes());
         hasher.update(&bytes);
         let next_hex = hasher.finalize().to_hex().to_string();
         head = ContentDigest::from_hex(next_hex)

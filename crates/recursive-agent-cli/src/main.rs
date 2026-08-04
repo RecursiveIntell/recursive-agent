@@ -98,13 +98,13 @@ fn main() {
 }
 
 fn doctor() {
-    println!("recursive-agent M0");
-    println!("mode: recorded-replay-only (no provider)");
+    println!("recursive-agent M0 (Phase 2: provider integration)");
+    println!("mode: receipt-bearing, provider-capable");
     println!("boundary-compiler: 0.1.0");
     println!("stack-ids: 0.1.1");
     println!("bitemporal-runtime: 0.1.0");
     println!("claim-ledger: 0.1.0");
-    println!("tools: echo, time_now");
+    println!("tools: echo, time_now, llm");
     println!("default runs root: {}", default_runs_root().display());
 }
 

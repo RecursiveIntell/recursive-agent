@@ -1,1 +1,1 @@
-verify: FAIL at receipt index 1 (prev_chain_digest mismatch): expected_head=0b27c6b2edd7d463de1c8f1b1984964fce6879a8c00246870356d6a8de50bc9d observed_head=bb27c6b2edd7d463de1c8f1b1984964fce6879a8c00246870356d6a8de50bc9d
+verify: FAIL at receipt index 1 (prev_chain_digest mismatch): expected_head=020a9ed50a3490af3941d848965dca2dceeddc621f057d4798472b410b95315e observed_head=720a9ed50a3490af3941d848965dca2dceeddc621f057d4798472b410b95315e

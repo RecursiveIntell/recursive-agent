@@ -4,6 +4,7 @@ members = [
     "crates/recursive-agent-contracts",
     "crates/recursive-agent-ledger",
     "crates/recursive-agent-policy",
+    "crates/recursive-agent-provider",
     "crates/recursive-agent-tools",
     "crates/recursive-agent-runner",
     "crates/recursive-agent-cli",

@@ -7,6 +7,9 @@
 
 use chrono::{DateTime, Utc};
 use recursive_agent_contracts::{ContractError, ToolCallSpecV1};
+use recursive_agent_provider::{
+    complete as provider_complete, CompletionRequestV1, ProviderError, ProviderSpecV1,
+};
 use serde::{Deserialize, Serialize};
 use thiserror::Error;
 
@@ -21,6 +24,8 @@ pub enum ToolError {
     Contract(#[from] ContractError),
     #[error("missing frozen_clock for {0}")]
     FrozenClockRequired(String),
+    #[error("provider: {0}")]
+    Provider(#[from] ProviderError),
 }
 
 /// The `echo` tool. Takes a string and returns it as the result body.
@@ -44,6 +49,23 @@ pub struct TimeNowOutput {
     pub label: Option<String>,
 }
 
+/// The `llm` tool. Sends a prompt to a configured provider (Ollama or
+/// OpenAI-compatible) and returns the assistant text. The provider spec
+/// and prompt are bound into the run's receipt chain by the runner.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct LlmArgs {
+    pub provider: ProviderSpecV1,
+    pub prompt: String,
+    #[serde(default)]
+    pub max_tokens: Option<u32>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct LlmOutput {
+    pub model: String,
+    pub text: String,
+}
+
 /// Execute a tool. Returns the JSON body of the result. The runner is
 /// responsible for writing the body to the artifact store and recording
 /// the reference on the receipt.
@@ -65,6 +87,20 @@ pub fn execute(call: &ToolCallSpecV1) -> Result<serde_json::Value, ToolError> {
                 label: parsed.label,
             };
             Ok(serde_json::to_value(out).map_err(|e| ToolError::Args(format!("time_now: {e}")))?)
+        }
+        "llm" => {
+            let parsed: LlmArgs = serde_json::from_value(call.args.clone())
+                .map_err(|e| ToolError::Args(format!("llm: {e}")))?;
+            let resp = provider_complete(&CompletionRequestV1 {
+                provider: parsed.provider,
+                prompt: parsed.prompt,
+                max_tokens: parsed.max_tokens,
+            })?;
+            let out = LlmOutput {
+                model: resp.model,
+                text: resp.text,
+            };
+            Ok(serde_json::to_value(out).map_err(|e| ToolError::Args(format!("llm: {e}")))?)
         }
         other => Err(ToolError::Unknown(other.into())),
     }
@@ -111,5 +147,12 @@ mod tests {
     fn unknown_tool_errors() {
         let err = execute(&call("shell", serde_json::json!({}))).unwrap_err();
         assert!(matches!(err, ToolError::Unknown(_)));
+    }
+
+    #[test]
+    fn llm_rejects_malformed_args_without_network() {
+        // No provider spec provided -> malformed args error, no network I/O.
+        let err = execute(&call("llm", serde_json::json!({ "prompt": "hi" }))).unwrap_err();
+        assert!(matches!(err, ToolError::Args(_)));
     }
 }

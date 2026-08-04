@@ -21,8 +21,15 @@ provider or network call.
    rejection, not a panic.
 6. **Provider-free in M0.** No Ollama, no OpenAI-compatible call, no
    network. The product survives its own restart and verifies offline.
+   **Phase 2 deliberately lifts this** for the `llm` tool only: provider
+   calls are receipt-bearing and typed (see `recursive-agent-provider`),
+   and the receipt chain still verifies offline. All other tools remain
+   provider-free.
 7. **Recorded replay only.** Do not promise "deterministic replay" of any
-   LLM. Recorded replay is the only replay contract M0 offers.
+   LLM. Recorded replay is the only replay contract M0 offers. A
+   provider-backed `llm` step records its response as a content-addressed
+   artifact; replay re-emits that recorded output and never re-calls the
+   provider.
 8. **Bounded safety.** No `unsafe`, no `unwrap`/`expect` in lib code
    (`cargo clippy -D warnings`). Any panic is a bug.
 9. **Source hierarchy.** This workspace depends on Libraries by **path**.
@@ -40,7 +47,8 @@ provider or network call.
 | Run orchestration | this workspace | new |
 | Receipt chain | this workspace (`ledger` crate) | new |
 | Tool plane | this workspace (`tools` crate) | new |
-| Provider / MCP / channel | none | out of scope M0 |
+| Provider / LLM | `recursive-agent-provider` (new) | Ollama + OpenAI-compatible adapters |
+| MCP / channel | none | out of scope M0/Phase 2 |
 
 ## Receipt contract (M0)
 

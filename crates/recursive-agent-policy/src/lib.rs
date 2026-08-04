@@ -26,8 +26,9 @@ pub enum PolicyError {
     FrozenClockRequired(String),
 }
 
-/// The M0 allowlist. Two tools, both pure. `time_now` requires a frozen
-/// clock so a recorded run is reproducible.
+/// The M0 allowlist. Two pure tools plus the Phase 2 `llm` provider
+/// tool. `time_now` requires a frozen clock so a recorded run is
+/// reproducible; `llm` is authorized only when a provider is configured.
 #[derive(Debug, Clone)]
 pub struct Allowlist {
     pub allowed: BTreeSet<String>,
@@ -38,9 +39,9 @@ pub struct Allowlist {
 impl Default for Allowlist {
     fn default() -> Self {
         Self {
-            allowed: BTreeSet::from(["echo".into(), "time_now".into()]),
+            allowed: BTreeSet::from(["echo".into(), "time_now".into(), "llm".into()]),
             max_arg_bytes: 16 * 1024,
-            policy_version: "m0-1".into(),
+            policy_version: "m0-2".into(),
         }
     }
 }
