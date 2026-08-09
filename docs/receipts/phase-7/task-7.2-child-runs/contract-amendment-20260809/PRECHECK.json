@@ -1,0 +1,31 @@
+{
+  "schema": "RepositoryPrecheckV1",
+  "version": 1,
+  "captured_at": "2026-08-09T19:17:59Z",
+  "repo_root": "/home/sikmindz/Coding/recursive-agent",
+  "branch": "main",
+  "head": "9388911f103e84da8a24d86ea8880f61ddb87738",
+  "upstream": "origin/main",
+  "goal": "Phase 7.2A V2 child-operation contract and family authority reservation; Phase 7.2B admission review",
+  "instructions": ["AGENTS.md", "PHASE_CONTRACT.md", "PHASE_7_2A_CONTRACTS_POLICY.md"],
+  "canonical_owners": [
+    "recursive-agent-contracts: V1/V2 operation ingress and identity",
+    "recursive-agent-policy: family authority and reservation",
+    "recursive-agent-runner: future canonical child execution",
+    "recursive-agent-ledger: future child-link strict verification"
+  ],
+  "allowed_paths": [
+    "crates/recursive-agent-contracts/{src,tests}",
+    "crates/recursive-agent-policy/{src,tests}",
+    "docs/receipts/phase-7/task-7.2-child-runs/contract-amendment-20260809/"
+  ],
+  "forbidden_paths": [
+    "/home/sikmindz/Coding/Libraries/**",
+    "runner/ledger/scheduler source until V2 live-parent lifecycle is admitted",
+    "provider, MCP, remote, memory, skill, and CLI source"
+  ],
+  "blockers": [
+    "PHASE_7_2B_LIVE_PARENT_LIFECYCLE_DESIGN_REQUIRED"
+  ],
+  "evidence_state": "verified for 7.2A; blocked for 7.2B"
+}

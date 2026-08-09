@@ -864,6 +864,386 @@ pub enum PolicyError {
     PolicyVersionMismatch { submitted: String, active: String },
 }
 
+const FAMILY_STATE_NAME: &str = "family-authority.json";
+const FAMILY_LOCK_NAME: &str = ".family-authority.lock";
+const MAX_FAMILY_STATE_BYTES: u64 = 1024 * 1024;
+
+/// The child-control power held by one admitted root operation. It is distinct
+/// from the root's normal effect ceiling: allocating a child must not spend or
+/// widen the parent's independent effect budget.
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct ChildRunCeilingV1 {
+    pub max_depth: u32,
+    pub max_children: u32,
+    pub family_budget: PermitBudgetV1,
+    pub not_before: DateTime<Utc>,
+    pub expires_at: DateTime<Utc>,
+}
+
+impl ChildRunCeilingV1 {
+    fn validate(&self) -> Result<(), PolicyError> {
+        if self.max_depth == 0
+            || self.max_children == 0
+            || self.not_before >= self.expires_at
+            || self.family_budget.max_wall_time_ms == 0
+            || self.family_budget.max_output_bytes == 0
+            || self.family_budget.max_artifact_bytes == 0
+        {
+            return Err(PolicyError::InvalidLease(
+                "invalid child-run family ceiling".into(),
+            ));
+        }
+        Ok(())
+    }
+}
+
+/// The one root-family grant material owned by the family authority store.
+/// `parent_control_permit_id` is an already-admitted parent authority reference;
+/// Phase 7.2B verifies its ledger/permit evidence before opening this store.
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct FamilyRootGrantV1 {
+    pub root_operation_id: CurrentRunId,
+    pub parent_control_permit_id: CurrentPermitId,
+    pub actor: ActorPrincipalV1,
+    pub policy_version: String,
+    pub effect_budget: PermitBudgetV1,
+    pub child_run_ceiling: ChildRunCeilingV1,
+}
+
+impl FamilyRootGrantV1 {
+    fn validate(&self) -> Result<(), PolicyError> {
+        if self.policy_version.is_empty()
+            || self.effect_budget.max_wall_time_ms == 0
+            || self.effect_budget.max_output_bytes == 0
+            || self.effect_budget.max_artifact_bytes == 0
+        {
+            return Err(PolicyError::InvalidLease(
+                "invalid root family control grant".into(),
+            ));
+        }
+        self.child_run_ceiling.validate()
+    }
+}
+
+/// The exact child proposal that may receive one family-scoped child-control
+/// permit. The parent receipt ID is deliberately opaque here: the policy store
+/// prevents budget/lineage widening, while the runner/ledger owner must verify
+/// that referenced receipt before this request reaches the store.
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct FamilyChildRequestV1 {
+    pub child_run_id: CurrentRunId,
+    pub parent_operation_id: CurrentRunId,
+    pub root_operation_id: CurrentRunId,
+    pub parent_control_permit_id: CurrentPermitId,
+    pub parent_admission_receipt_id: recursive_agent_contracts::CurrentReceiptId,
+    pub requested_budget: PermitBudgetV1,
+    pub child_operation_digest: ContentDigest,
+    pub depth: u32,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "snake_case", deny_unknown_fields)]
+pub enum FamilyChildPermitStateV1 {
+    Issued,
+    Revoked {
+        revoked_at: DateTime<Utc>,
+        reason: PermitRevocationReasonV1,
+    },
+}
+
+/// Persisted child-control permit. It is intentionally not an
+/// `ExecutionPermitV1`: existing V1 permits are single-run and must never be
+/// widened into cross-run authority.
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct FamilyChildControlPermitV1 {
+    pub child_control_permit_id: CurrentPermitId,
+    pub request: FamilyChildRequestV1,
+    pub state: FamilyChildPermitStateV1,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[serde(deny_unknown_fields)]
+struct FamilyAuthorityStateV1 {
+    grant: FamilyRootGrantV1,
+    parent_revoked_at: Option<DateTime<Utc>>,
+    children: std::collections::BTreeMap<CurrentRunId, FamilyChildControlPermitV1>,
+}
+
+/// Descriptor-rooted authoritative allocation store for one causal family.
+/// This is deliberately separate from `DurablePermitStore`, whose one-run
+/// binding must remain fail-closed for child-run proposals.
+#[derive(Debug, Clone)]
+pub struct FamilyAuthorityStore {
+    root: Arc<File>,
+    lock: Arc<File>,
+    gate: Arc<Mutex<()>>,
+    root_device: u64,
+    root_inode: u64,
+}
+
+impl FamilyAuthorityStore {
+    /// Open or atomically initialize a store rooted at the runtime-selected
+    /// deterministic family directory. A conflicting root grant is rejected;
+    /// callers cannot overwrite authority after initialization.
+    pub fn from_dir_fd(root: &File, grant: FamilyRootGrantV1) -> Result<Self, PolicyError> {
+        grant.validate()?;
+        let identity = directory_identity(root)?;
+        let root = Arc::new(root.try_clone()?);
+        let lock = File::from(secure_open_at(
+            &root,
+            FAMILY_LOCK_NAME,
+            OFlags::RDWR | OFlags::CREATE | OFlags::NOFOLLOW | OFlags::CLOEXEC,
+            Mode::RUSR | Mode::WUSR,
+        )?);
+        if !lock.metadata()?.is_file() {
+            return Err(PolicyError::UnsafePermitRoot(
+                "family authority lock must be a regular file".into(),
+            ));
+        }
+        let store = Self {
+            root,
+            lock: Arc::new(lock),
+            gate: Arc::new(Mutex::new(())),
+            root_device: identity.0,
+            root_inode: identity.1,
+        };
+        store.with_lock(|| match store.read_state() {
+            Ok(existing) if existing.grant == grant => Ok(()),
+            Ok(_) => Err(PolicyError::PermitStateConflict),
+            Err(PolicyError::Io(error)) if error.kind() == std::io::ErrorKind::NotFound => store
+                .write_state(&FamilyAuthorityStateV1 {
+                    grant,
+                    parent_revoked_at: None,
+                    children: std::collections::BTreeMap::new(),
+                }),
+            Err(error) => Err(error),
+        })?;
+        Ok(store)
+    }
+
+    /// Atomically reserve exactly one attenuated child-control allocation.
+    /// Repeating the identical request returns the original permit without
+    /// double-counting. A conflicting request for the same child run rejects.
+    pub fn reserve_child(
+        &self,
+        request: &FamilyChildRequestV1,
+        trusted_now: DateTime<Utc>,
+    ) -> Result<FamilyChildControlPermitV1, PolicyError> {
+        self.with_lock(|| {
+            let mut state = self.read_state()?;
+            validate_family_request(&state, request, trusted_now)?;
+            if let Some(existing) = state.children.get(&request.child_run_id) {
+                if existing.request == *request
+                    && matches!(existing.state, FamilyChildPermitStateV1::Issued)
+                {
+                    return Ok(existing.clone());
+                }
+                return Err(PolicyError::PermitStateConflict);
+            }
+            let max_children = usize::try_from(state.grant.child_run_ceiling.max_children)
+                .map_err(|_| {
+                    PolicyError::InvalidLease("family child count does not fit usize".into())
+                })?;
+            if state.children.len() >= max_children {
+                return Err(PolicyError::BudgetOverrun(
+                    "child allocation exceeds family child-count ceiling".into(),
+                ));
+            }
+            let allocated = state
+                .children
+                .values()
+                .try_fold(PermitBudgetV1::zero(), |total, child| {
+                    total.checked_add(&child.request.requested_budget)
+                })?
+                .checked_add(&request.requested_budget)?;
+            if !allocated.is_within(&state.grant.child_run_ceiling.family_budget) {
+                return Err(PolicyError::BudgetOverrun(
+                    "child allocation exceeds cumulative family budget".into(),
+                ));
+            }
+            let permit = FamilyChildControlPermitV1 {
+                child_control_permit_id: derive_family_child_permit_id(request, &state.grant)?,
+                request: request.clone(),
+                state: FamilyChildPermitStateV1::Issued,
+            };
+            state
+                .children
+                .insert(request.child_run_id.clone(), permit.clone());
+            self.write_state(&state)?;
+            Ok(permit)
+        })
+    }
+
+    /// Record parent cancellation/revocation before dispatch. Existing permits
+    /// are preserved as evidence but all future reservations fail closed.
+    pub fn revoke_parent(&self, trusted_now: DateTime<Utc>) -> Result<(), PolicyError> {
+        self.with_lock(|| {
+            let mut state = self.read_state()?;
+            if state.parent_revoked_at.is_none() {
+                state.parent_revoked_at = Some(trusted_now);
+                self.write_state(&state)?;
+            }
+            Ok(())
+        })
+    }
+
+    /// The root effect power is immutable and separate from child reservations.
+    pub fn effect_budget(&self) -> Result<PermitBudgetV1, PolicyError> {
+        self.with_lock(|| Ok(self.read_state()?.grant.effect_budget))
+    }
+
+    /// Sum of durable child allocations, not an inferred scheduler projection.
+    pub fn reserved_budget(&self) -> Result<PermitBudgetV1, PolicyError> {
+        self.with_lock(|| {
+            self.read_state()?
+                .children
+                .values()
+                .try_fold(PermitBudgetV1::zero(), |total, child| {
+                    total.checked_add(&child.request.requested_budget)
+                })
+        })
+    }
+
+    pub fn root_identity(&self) -> (u64, u64) {
+        (self.root_device, self.root_inode)
+    }
+
+    fn with_lock<T>(
+        &self,
+        operation: impl FnOnce() -> Result<T, PolicyError>,
+    ) -> Result<T, PolicyError> {
+        let _thread_guard = self
+            .gate
+            .lock()
+            .map_err(|_| PolicyError::PermitStateConflict)?;
+        rustix::fs::flock(self.lock.as_fd(), FlockOperation::LockExclusive)
+            .map_err(std::io::Error::from)?;
+        let result = operation();
+        let unlock = rustix::fs::flock(self.lock.as_fd(), FlockOperation::Unlock);
+        match (result, unlock) {
+            (Ok(value), Ok(())) => Ok(value),
+            (Err(error), _) => Err(error),
+            (Ok(_), Err(error)) => Err(PolicyError::Io(error.into())),
+        }
+    }
+
+    fn read_state(&self) -> Result<FamilyAuthorityStateV1, PolicyError> {
+        let fd = secure_open_at(
+            &self.root,
+            FAMILY_STATE_NAME,
+            OFlags::RDONLY | OFlags::NOFOLLOW | OFlags::CLOEXEC | OFlags::NONBLOCK,
+            Mode::empty(),
+        )?;
+        let file = File::from(fd);
+        let metadata = file.metadata()?;
+        if !metadata.is_file() || metadata.len() > MAX_FAMILY_STATE_BYTES {
+            return Err(PolicyError::UnsafePermitRoot(
+                "family authority state is not a bounded regular file".into(),
+            ));
+        }
+        let mut bytes = Vec::new();
+        file.take(MAX_FAMILY_STATE_BYTES + 1)
+            .read_to_end(&mut bytes)?;
+        if bytes.len() as u64 > MAX_FAMILY_STATE_BYTES {
+            return Err(PolicyError::UnsafePermitRoot(
+                "family authority state exceeds its byte limit".into(),
+            ));
+        }
+        let state: FamilyAuthorityStateV1 = serde_json::from_slice(&bytes)?;
+        state.grant.validate()?;
+        Ok(state)
+    }
+
+    fn write_state(&self, state: &FamilyAuthorityStateV1) -> Result<(), PolicyError> {
+        let (temp_name, mut file) = create_unique_temp(&self.root, ".family-authority.tmp")?;
+        file.write_all(&jcs_canonical(state)?)?;
+        file.sync_all()?;
+        rustix::fs::renameat(
+            self.root.as_fd(),
+            &temp_name,
+            self.root.as_fd(),
+            FAMILY_STATE_NAME,
+        )
+        .map_err(std::io::Error::from)?;
+        self.root.sync_all()?;
+        Ok(())
+    }
+}
+
+fn validate_family_request(
+    state: &FamilyAuthorityStateV1,
+    request: &FamilyChildRequestV1,
+    trusted_now: DateTime<Utc>,
+) -> Result<(), PolicyError> {
+    let ceiling = &state.grant.child_run_ceiling;
+    if state.parent_revoked_at.is_some()
+        || trusted_now < ceiling.not_before
+        || trusted_now >= ceiling.expires_at
+        || request.root_operation_id != state.grant.root_operation_id
+        || request.child_run_id == request.parent_operation_id
+        || request.child_run_id == request.root_operation_id
+        || request.depth == 0
+        || request.depth > ceiling.max_depth
+        || !request.requested_budget.is_within(&ceiling.family_budget)
+    {
+        return Err(PolicyError::InvalidLease(
+            "child request violates family authority or attenuation".into(),
+        ));
+    }
+    if request.parent_operation_id == state.grant.root_operation_id {
+        if request.parent_control_permit_id != state.grant.parent_control_permit_id
+            || request.depth != 1
+        {
+            return Err(PolicyError::InvalidLease(
+                "child request does not bind the root parent control grant".into(),
+            ));
+        }
+        return Ok(());
+    }
+    let parent = state
+        .children
+        .get(&request.parent_operation_id)
+        .ok_or_else(|| {
+            PolicyError::InvalidLease("child request parent is not an admitted family child".into())
+        })?;
+    let expected_depth = parent
+        .request
+        .depth
+        .checked_add(1)
+        .ok_or_else(|| PolicyError::InvalidLease("family depth overflow".into()))?;
+    if !matches!(parent.state, FamilyChildPermitStateV1::Issued)
+        || request.parent_control_permit_id != parent.child_control_permit_id
+        || request.depth != expected_depth
+    {
+        return Err(PolicyError::InvalidLease(
+            "child request does not attenuate from its admitted parent child-control permit".into(),
+        ));
+    }
+    Ok(())
+}
+
+fn derive_family_child_permit_id(
+    request: &FamilyChildRequestV1,
+    grant: &FamilyRootGrantV1,
+) -> Result<CurrentPermitId, PolicyError> {
+    let validity = grant
+        .child_run_ceiling
+        .expires_at
+        .signed_duration_since(grant.child_run_ceiling.not_before);
+    let requested_validity_ms = u64::try_from(validity.num_milliseconds())
+        .map_err(|_| PolicyError::InvalidLease("negative family child validity".into()))?;
+    derive_permit_id(&PermitIdentityMaterialV1 {
+        binding_digest: content_digest(request)?,
+        requested_not_before_delay_ms: 0,
+        requested_validity_ms,
+    })
+    .map_err(PolicyError::Contract)
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum PermitTransitionStage {
     TempWrite,

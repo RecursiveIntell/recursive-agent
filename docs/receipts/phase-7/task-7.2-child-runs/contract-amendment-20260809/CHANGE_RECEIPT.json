@@ -1,0 +1,82 @@
+{
+  "schema": "ChangeReceiptV1",
+  "version": 1,
+  "task_id": "20260809T185635Z-phase-7-2-causal-family-child-run-contract-amendment-and-bounded",
+  "goal": "Phase 7.2A: V2 child-operation ingress and family-scoped authority reservation without widening V1 or granting scheduler authority.",
+  "source_identity": {
+    "root": "/home/sikmindz/Coding/recursive-agent",
+    "branch": "main",
+    "head_before_checkpoint": "9388911f103e84da8a24d86ea8880f61ddb87738"
+  },
+  "changed_paths": [
+    "crates/recursive-agent-contracts/src/lib.rs",
+    "crates/recursive-agent-contracts/src/operation.rs",
+    "crates/recursive-agent-contracts/tests/phase2_operation_envelope.rs",
+    "crates/recursive-agent-contracts/tests/phase7_child_operation_contract.rs",
+    "crates/recursive-agent-policy/src/lib.rs",
+    "crates/recursive-agent-policy/tests/phase7_child_family_authority.rs",
+    "docs/receipts/phase-7/task-7.2-child-runs/contract-amendment-20260809/"
+  ],
+  "checks": [
+    {
+      "gate_id": "G-005",
+      "command": "cargo test -p recursive-agent-contracts --tests",
+      "exit_code": 0,
+      "status": "PASS"
+    },
+    {
+      "gate_id": "G-006",
+      "command": "cargo test -p recursive-agent-policy --tests",
+      "exit_code": 0,
+      "status": "PASS"
+    },
+    {
+      "gate_id": "G-007",
+      "command": "cargo clippy -p recursive-agent-contracts -p recursive-agent-policy --all-targets -- -D warnings",
+      "exit_code": 0,
+      "status": "PASS"
+    },
+    {
+      "gate_id": "G-008",
+      "command": "cargo fmt --manifest-path crates/recursive-agent-contracts/Cargo.toml -- --check && cargo fmt --manifest-path crates/recursive-agent-policy/Cargo.toml -- --check",
+      "exit_code": 0,
+      "status": "PASS"
+    },
+    {
+      "gate_id": "G-009",
+      "command": "frozen phase-7.2A bundle: status digest before == after",
+      "exit_code": 0,
+      "status": "PASS"
+    },
+    {
+      "gate_id": "G-010",
+      "command": "Phase 7.2B runner/ledger admission",
+      "status": "BLOCKED",
+      "reason": "current RuntimeService only returns terminal handles and cannot append required parent admission/closure evidence"
+    }
+  ],
+  "commands": [
+    "cargo test -p recursive-agent-contracts --test phase7_child_operation_contract -- --nocapture (RED: V1 ingress incorrectly admitted delegated V2 shape; GREEN after boundary repair)",
+    "cargo test -p recursive-agent-policy --test phase7_child_family_authority -- --nocapture (RED: API missing; GREEN after family store implementation)",
+    "cargo fmt --manifest-path crates/recursive-agent-contracts/Cargo.toml -- --check",
+    "cargo fmt --manifest-path crates/recursive-agent-policy/Cargo.toml -- --check",
+    "cargo test -p recursive-agent-contracts --tests",
+    "cargo test -p recursive-agent-policy --tests",
+    "cargo clippy -p recursive-agent-contracts -p recursive-agent-policy --all-targets -- -D warnings"
+  ],
+  "evidence_state": "verified for Phase 7.2A; blocked/unknown for Phase 7.2B runtime/ledger integration",
+  "non_goals": [
+    "runner/ledger/scheduler implementation",
+    "V1 compatibility fallback",
+    "provider, remote, MCP, CLI, memory, skill, or Libraries changes",
+    "claiming ledger verification from an opaque parent receipt ID"
+  ],
+  "remaining_delta": [
+    "admit a separate V2 live-parent lifecycle before child dispatch",
+    "bind family dispatch checks into effect execution before/after dispatch",
+    "implement parent child-link admission and verified terminal closure receipts",
+    "run runner/ledger targeted tests and final workspace/release gates on a post-redesign frozen source generation"
+  ],
+  "rollback": "Revert only the Phase 7.2A checkpoint commit(s), quarantine/delete any new family-authority runtime roots, and deny V2 child admission. Never rewrite existing V1 receipts, permits, or scheduler projections.",
+  "complete": false
+}

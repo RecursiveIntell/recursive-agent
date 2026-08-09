@@ -80,12 +80,11 @@ fn sample_shell_envelope() -> Result<OperationEnvelopeV1, Box<dyn std::error::Er
 }
 
 #[test]
-fn operation_schema_accepts_only_exact_v1_tag() -> Result<(), Box<dyn std::error::Error>> {
-    let current: OperationSchemaV1 = serde_json::from_str(r#""recursive-agent.operation/v1""#)?;
-    assert_eq!(current, OperationSchemaV1::V1);
-
-    let future = serde_json::from_str::<OperationSchemaV1>(r#""recursive-agent.operation/v2""#);
-    assert!(future.is_err(), "future schema version was accepted");
+fn operation_schema_accepts_only_exact_registered_tags() -> Result<(), Box<dyn std::error::Error>> {
+    let v1: OperationSchemaV1 = serde_json::from_str(r#""recursive-agent.operation/v1""#)?;
+    assert_eq!(v1, OperationSchemaV1::V1);
+    let v2: OperationSchemaV1 = serde_json::from_str(r#""recursive-agent.operation/v2""#)?;
+    assert_eq!(v2, OperationSchemaV1::V2);
 
     let ambiguous = serde_json::from_str::<OperationSchemaV1>(r#""v1""#);
     assert!(ambiguous.is_err(), "ambiguous schema tag was accepted");
@@ -265,7 +264,10 @@ fn operation_envelope_enforces_authority_causality_shape() -> Result<(), Box<dyn
     delegated.actor.origin = AuthorityOriginV1::Delegated;
     delegated.causality.parent_operation_id = Some(parent.clone());
     delegated.causality.root_operation_id = Some(parent);
-    delegated.validate()?;
+    assert!(
+        delegated.validate().is_err(),
+        "V1 ingress admitted delegated child authority"
+    );
     Ok(())
 }
 

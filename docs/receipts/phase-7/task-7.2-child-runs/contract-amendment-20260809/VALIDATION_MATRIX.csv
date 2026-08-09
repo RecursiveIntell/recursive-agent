@@ -1,0 +1,12 @@
+gate_id,claim_or_invariant,command_or_witness,required,status,evidence_ref,notes
+G-000,source identity and owner map reviewed,git status/log + source inspection,true,PASS,PRECHECK.json;OWNER_MAP.yaml,head 9388911 before Phase 7.2A checkpoint
+G-001,current single-run policy rejects cross-run child permits,validate_parent_permits source at policy lib lines 1436-1544,true,PASS,PHASE_CONTRACT.md,old single-run invariant preserved
+G-002,scheduler is not authority truth,scheduler module header and APIs,true,PASS,PHASE_CONTRACT.md,projection only; untouched
+G-003,contracts/policy phase is bounded,PHASE_7_2A_CONTRACTS_POLICY.md,true,PASS,PHASE_7_2A_CONTRACTS_POLICY.md,V1 preserved as direct-root-only; policy family store is separate
+G-004,Agent Graph council receipt,graph_create capacity response,false,BLOCKED,PHASE_CONTRACT.md,live registry capacity 256 exhausted with 259 registered graphs
+G-005,V1 ingress and V2 child contract,cargo test -p recursive-agent-contracts --tests,true,PASS,CHANGE_RECEIPT.json,33 tests pass; RED observed before V1 ingress repair
+G-006,family authority attenuation/reservation,cargo test -p recursive-agent-policy --tests,true,PASS,CHANGE_RECEIPT.json,20 tests pass; concurrency/retry/revocation covered
+G-007,package lint gate,cargo clippy -p recursive-agent-contracts -p recursive-agent-policy --all-targets -- -D warnings,true,PASS,CHANGE_RECEIPT.json,final frozen 7.2A source generation
+G-008,package format gate,cargo fmt --manifest-path package Cargo.toml -- --check,true,PASS,CHANGE_RECEIPT.json,contracts and policy checks pass
+G-009,runner/ledger causal child closure,PHASE_7_2B_BLOCKED.md,true,BLOCKED,PHASE_7_2B_BLOCKED.md,current terminal-only RuntimeHandle cannot satisfy required admission-before-finalization ordering
+G-010,workspace/release certification,workspace/release gate on final source,true,NOT_RUN,PHASE_7_2B_BLOCKED.md,dependent runner/ledger phase is not admitted

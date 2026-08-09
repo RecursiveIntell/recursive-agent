@@ -1,0 +1,22 @@
+schema: OwnerMapV1
+version: 1
+source_root: /home/sikmindz/Coding/recursive-agent
+owners:
+  - surface: operation envelope schema and causal/receipt reference types
+    canonical_owner: crates/recursive-agent-contracts/src/operation.rs and src/lib.rs
+    authority: source
+  - surface: cross-run permit derivation, attenuation, reservation, and revocation
+    canonical_owner: crates/recursive-agent-policy/src/lib.rs
+    authority: source
+  - surface: canonical child execution and closure orchestration
+    canonical_owner: crates/recursive-agent-runner/src/runtime.rs and src/lib.rs
+    authority: source
+  - surface: scheduler status/cancellation projection
+    canonical_owner: crates/recursive-agent-runner/src/scheduler.rs
+    authority: derived_projection_only
+  - surface: receipt-chain artifact persistence and strict verification
+    canonical_owner: crates/recursive-agent-ledger/src/lib.rs
+    authority: source
+  - surface: path dependencies and shared primitives
+    canonical_owner: /home/sikmindz/Coding/Libraries
+    authority: external_forbidden

@@ -13,8 +13,10 @@ pub use event::{
     RuntimeEventSchemaV1, RuntimeEventV1,
 };
 pub use operation::{
-    derive_operation_id, parse_operation_envelope_bytes, ActorAuthorityV1, AuthorityOriginV1,
-    CausalLinkV1, DeclaredEffectsV1, OperationBudgetV1, OperationEnvelopeV1, OperationIngressError,
+    derive_child_operation_id, derive_child_operation_material_digest, derive_operation_id,
+    parse_child_operation_envelope_v2_bytes, parse_operation_envelope_bytes, ActorAuthorityV1,
+    AuthorityOriginV1, CausalLinkV1, ChildOperationEnvelopeV2, ChildRunAuthorityV1,
+    DeclaredEffectsV1, OperationBudgetV1, OperationEnvelopeV1, OperationIngressError,
     OperationSchemaV1, ProvenanceRefV1, ReplayClassV1, ReplayIntentV1, ReplaySpecV1,
 };
 
