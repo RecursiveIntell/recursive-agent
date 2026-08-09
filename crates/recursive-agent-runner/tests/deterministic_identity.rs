@@ -1,11 +1,12 @@
-#![allow(deprecated)]
+mod support;
 
 use recursive_agent_contracts::{
     content_digest, derive_artifact_id, derive_permit_id, ArtifactDescriptorV1,
     AuthorityLineageEntryV1, LineageOrigin, PermitIdentityMaterialV1, ReceiptKindV1,
     ReceiptOutcomeV1, RunSpecV1, StepSpecV1, ToolCallSpecV1,
 };
-use recursive_agent_runner::{run_spec, run_spec_with_clock, Clock};
+use recursive_agent_runner::Clock;
+use support::{run_spec, run_spec_with_clock};
 type TestResult = Result<(), Box<dyn std::error::Error>>;
 
 fn spec(text: &str) -> RunSpecV1 {
@@ -307,8 +308,8 @@ fn runner_clock_owns_lease_time_while_permit_identity_excludes_live_issue_time()
     request.frozen_clock = chrono::DateTime::from_timestamp(100, 0);
     let first_now = chrono::DateTime::from_timestamp(1_800_000_000, 0).ok_or("first clock")?;
     let second_now = first_now + chrono::TimeDelta::seconds(10);
-    let first = run_spec_with_clock(&request, first_root.path(), &FixedClock(first_now))?;
-    let second = run_spec_with_clock(&request, second_root.path(), &FixedClock(second_now))?;
+    let first = run_spec_with_clock(&request, first_root.path(), FixedClock(first_now))?;
+    let second = run_spec_with_clock(&request, second_root.path(), FixedClock(second_now))?;
     let read = |path: &std::path::Path| -> Result<
         Vec<recursive_agent_contracts::ReceiptV1>,
         Box<dyn std::error::Error>,

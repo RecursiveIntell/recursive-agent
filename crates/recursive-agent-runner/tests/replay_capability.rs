@@ -4,11 +4,12 @@
 //! a tampered or unverifiable run reports `Unavailable`. Replay never invokes
 //! tools or providers.
 #![allow(clippy::unwrap_used, clippy::expect_used)]
-#![allow(deprecated)]
+mod support;
 
 use recursive_agent_contracts::{RunSpecV1, RunTerminalStateV1, StepSpecV1, ToolCallSpecV1};
 use recursive_agent_ledger::RunPaths;
-use recursive_agent_runner::{replay, run_spec, ReplayCapability};
+use recursive_agent_runner::{replay, ReplayCapability};
+use support::run_spec;
 
 type TestResult = Result<(), Box<dyn std::error::Error>>;
 

@@ -1,9 +1,9 @@
-#![allow(deprecated)]
+mod support;
 
 use recursive_agent_contracts::{
     derive_run_id, derive_step_id, ReceiptOutcomeV1, RunSpecV1, StepSpecV1, ToolCallSpecV1,
 };
-use recursive_agent_runner::run_spec;
+use support::run_spec;
 type TestResult = Result<(), Box<dyn std::error::Error>>;
 
 #[test]

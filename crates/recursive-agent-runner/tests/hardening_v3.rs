@@ -1,12 +1,11 @@
-#![allow(deprecated)]
+mod support;
 
 use chrono::{DateTime, TimeDelta, Utc};
-use recursive_agent_contracts::{
-    derive_run_id, RunSpecV1, RunTerminalStateV1, StepSpecV1, ToolCallSpecV1,
-};
+use recursive_agent_contracts::{RunSpecV1, RunTerminalStateV1, StepSpecV1, ToolCallSpecV1};
 use recursive_agent_ledger::{verify_expected_run, RunPaths};
-use recursive_agent_runner::{run_spec, run_spec_with_clock, Clock, RunError};
+use recursive_agent_runner::{Clock, RunError};
 use std::sync::atomic::{AtomicUsize, Ordering};
+use support::{run_spec, run_spec_with_clock};
 
 type TestResult = Result<(), Box<dyn std::error::Error>>;
 
@@ -42,10 +41,9 @@ fn shell_run(
 
 fn assert_non_success(spec: &RunSpecV1, expected: RunTerminalStateV1) -> TestResult {
     let root = tempfile::tempdir()?;
-    let run_id = derive_run_id(spec)?;
     let summary = run_spec(spec, root.path())?;
     assert_eq!(summary.terminal_state, expected, "run {}", spec.name);
-    let verified = verify_expected_run(&RunPaths::new(&summary.run_dir), &run_id)?;
+    let verified = verify_expected_run(&RunPaths::new(&summary.run_dir), &summary.run_id)?;
     assert_eq!(verified.terminal_state, expected);
     assert_ne!(verified.terminal_state, RunTerminalStateV1::Succeeded);
     Ok(())
@@ -115,15 +113,18 @@ fn network_true_and_wrong_policy_version_fail_before_process_dispatch() -> TestR
         1_024,
     );
     network.steps[0].call.args["allow_network"] = serde_json::Value::Bool(true);
-    let network_result = run_spec(&network, root.path());
+    let network_error = match run_spec(&network, root.path()) {
+        Ok(_) => return Err("network-enabled run unexpectedly succeeded".into()),
+        Err(error) => error,
+    };
     assert!(
         matches!(
-            network_result,
-            Err(RunError::Policy(
+            network_error.downcast_ref::<RunError>(),
+            Some(RunError::Policy(
                 recursive_agent_policy::PolicyError::NetworkUnavailable
             ))
         ),
-        "unexpected network rejection: {network_result:?}"
+        "unexpected network rejection: {network_error}"
     );
     assert!(!marker.exists());
 
@@ -135,12 +136,19 @@ fn network_true_and_wrong_policy_version_fail_before_process_dispatch() -> TestR
         1_024,
     );
     wrong_version.policy_version = "m0-stale".into();
-    assert!(matches!(
-        run_spec(&wrong_version, root.path()),
-        Err(RunError::Policy(
-            recursive_agent_policy::PolicyError::PolicyVersionMismatch { .. }
-        ))
-    ));
+    let wrong_version_error = match run_spec(&wrong_version, root.path()) {
+        Ok(_) => return Err("stale policy version unexpectedly succeeded".into()),
+        Err(error) => error,
+    };
+    assert!(
+        matches!(
+            wrong_version_error.downcast_ref::<RunError>(),
+            Some(RunError::Policy(
+                recursive_agent_policy::PolicyError::PolicyVersionMismatch { .. }
+            ))
+        ),
+        "unexpected policy-version rejection: {wrong_version_error}"
+    );
     assert!(!marker.exists());
     Ok(())
 }
@@ -234,7 +242,7 @@ fn advancing_and_rollback_clocks_prevent_affected_dispatch() -> TestResult {
         ),
     ] {
         let root = tempfile::tempdir()?;
-        let summary = run_spec_with_clock(&two_echo_steps(), root.path(), &clock)?;
+        let summary = run_spec_with_clock(&two_echo_steps(), root.path(), clock)?;
         assert_eq!(summary.terminal_state, expected);
         let verification = verify_expected_run(&RunPaths::new(&summary.run_dir), &summary.run_id)?;
         assert_eq!(verification.terminal_state, expected);

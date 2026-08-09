@@ -4,11 +4,12 @@
 //! a tampered/unverified parent is a typed error (never a silent resume), and
 //! the parent's evidence is never mutated.
 #![allow(clippy::unwrap_used, clippy::expect_used)]
-#![allow(deprecated)]
+mod support;
 
 use recursive_agent_contracts::{RunSpecV1, RunTerminalStateV1, StepSpecV1, ToolCallSpecV1};
 use recursive_agent_ledger::RunPaths;
-use recursive_agent_runner::{continuation_envelope, resume_from_verified_boundary, run_spec};
+use recursive_agent_runner::{continuation_envelope, resume_from_verified_boundary};
+use support::run_spec;
 
 type TestResult = Result<(), Box<dyn std::error::Error>>;
 

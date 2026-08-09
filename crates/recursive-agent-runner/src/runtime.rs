@@ -6,8 +6,8 @@ use llm_tool_runtime::{
     ToolRuntime,
 };
 use recursive_agent_contracts::{
-    content_digest, derive_operation_id, derive_run_id, ContractError, CurrentRunId,
-    OperationEnvelopeV1, RunTerminalStateV1, RuntimeEventV1,
+    content_digest, derive_operation_id, ContractError, CurrentRunId, OperationEnvelopeV1,
+    RunTerminalStateV1, RuntimeEventV1,
 };
 use recursive_agent_ledger::{
     committed_events_directory_bound, verify_directory_bound, ChainVerification, LedgerError,
@@ -18,8 +18,8 @@ use stack_ids::{AttemptId, TraceCtx, TrialId};
 use thiserror::Error;
 
 use crate::{
-    run_spec_internal_with_run_id, Clock, LegacyToolExecutor, NoopRunnerHook, RunError, RunSummary,
-    RunnerToolExecutor, RunnerToolOutput, RuntimeDependencies,
+    run_spec_internal_with_run_id, NoopRunnerHook, RunError, RunnerToolExecutor, RunnerToolOutput,
+    RuntimeDependencies,
 };
 
 /// Stable handle returned only after the authoritative run has reached a terminal receipt.
@@ -310,28 +310,6 @@ impl RuntimeService {
         *guard = Some(store);
         drop(guard);
         Ok(self)
-    }
-
-    /// Compatibility-only V1 admission for deprecated `RunSpecV1` entrypoints.
-    ///
-    /// This is crate-private so adapters cannot choose the legacy executor or
-    /// bypass the complete dependency set required by [`Self::submit`]. Phase 6
-    /// removes this path with the deprecated wrappers.
-    pub(crate) fn submit_legacy_run_spec(
-        operation: &OperationEnvelopeV1,
-        output_root: &std::path::Path,
-        clock: &dyn Clock,
-    ) -> Result<RunSummary, RunError> {
-        operation.validate()?;
-        let run_id = derive_run_id(&operation.run_spec)?;
-        run_spec_internal_with_run_id(
-            &operation.run_spec,
-            output_root,
-            clock,
-            &NoopRunnerHook,
-            run_id,
-            &LegacyToolExecutor,
-        )
     }
 
     /// Validate and synchronously execute one native V1 operation.

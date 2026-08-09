@@ -1,4 +1,4 @@
-#![allow(deprecated)]
+mod support;
 
 use recursive_agent_contracts::{
     validate_runtime_event_sequence, ReceiptOutcomeV1, RunSpecV1, RuntimeEventKindV1, StepSpecV1,
@@ -7,7 +7,7 @@ use recursive_agent_contracts::{
 use recursive_agent_ledger::{
     committed_events_directory_bound, verified_snapshot_directory_bound, RunPaths,
 };
-use recursive_agent_runner::run_spec;
+use support::run_spec;
 
 fn event_spec() -> Result<RunSpecV1, Box<dyn std::error::Error>> {
     let frozen_clock = chrono::DateTime::from_timestamp(1_700_000_000, 0)

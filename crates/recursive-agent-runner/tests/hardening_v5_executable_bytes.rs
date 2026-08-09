@@ -1,17 +1,17 @@
-#![allow(deprecated)]
+mod support;
 
 use recursive_agent_contracts::{RunSpecV1, RunTerminalStateV1, StepSpecV1, ToolCallSpecV1};
 use recursive_agent_ledger::{open, verified_snapshot_directory_bound, RunPaths};
-use recursive_agent_runner::{run_spec, RunError};
 use recursive_agent_sandbox::{SandboxResult, SandboxSpec};
 use std::os::unix::fs::{MetadataExt, PermissionsExt};
+use support::{run_spec, TestRunSummary};
 
 type TestResult = Result<(), Box<dyn std::error::Error>>;
 
 fn run_shell(
     spec: SandboxSpec,
     out: &std::path::Path,
-) -> Result<recursive_agent_runner::RunSummary, recursive_agent_runner::RunError> {
+) -> Result<TestRunSummary, Box<dyn std::error::Error>> {
     run_spec(
         &RunSpecV1 {
             name: "executable-byte-gate".into(),
@@ -31,9 +31,7 @@ fn run_shell(
     )
 }
 
-fn observation(
-    summary: &recursive_agent_runner::RunSummary,
-) -> Result<SandboxResult, Box<dyn std::error::Error>> {
+fn observation(summary: &TestRunSummary) -> Result<SandboxResult, Box<dyn std::error::Error>> {
     let paths = RunPaths::new(summary.run_dir.clone());
     let snapshot = verified_snapshot_directory_bound(&paths)?;
     let store = open(&paths)?.artifact_store()?;
@@ -153,14 +151,14 @@ fn parent_components_are_rejected_before_run_root_creation() -> TestResult {
         &out_root,
     );
 
+    let Err(error) = result else {
+        return Err("parent-component path unexpectedly reached a terminal run".into());
+    };
     assert!(
-        matches!(
-            result,
-            Err(RunError::Contract(recursive_agent_contracts::ContractError::Malformed(
-                ref message
-            ))) if message == "operation payload failed run-spec semantic validation"
-        ),
-        "unexpected parent-component rejection: {result:?}"
+        error
+            .to_string()
+            .contains("operation payload failed run-spec semantic validation"),
+        "unexpected parent-component rejection: {error}"
     );
     assert!(!out_root.exists());
     Ok(())

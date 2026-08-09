@@ -1,10 +1,10 @@
-#![allow(deprecated)]
+mod support;
 
 use recursive_agent_contracts::{RunSpecV1, RunTerminalStateV1, StepSpecV1, ToolCallSpecV1};
 use recursive_agent_ledger::{open, verified_snapshot_directory_bound, RunPaths};
-use recursive_agent_runner::run_spec;
 use recursive_agent_sandbox::{EnforcementOutcome, SandboxResult, SandboxSpec};
 use std::fmt::{Display, Formatter};
+use support::run_spec;
 
 type TestResult = Result<(), Box<dyn std::error::Error>>;
 

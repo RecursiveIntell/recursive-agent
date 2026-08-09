@@ -6,7 +6,10 @@
 //! or filesystem. They do not block. They do not panic.
 
 use chrono::{DateTime, Utc};
-use recursive_agent_contracts::{ContractError, ToolCallSpecV1};
+use recursive_agent_contracts::ContractError;
+#[cfg(test)]
+use recursive_agent_contracts::ToolCallSpecV1;
+#[cfg(test)]
 use recursive_agent_policy::PermitEvidenceV1;
 use recursive_agent_provider::{ProviderError, ProviderSpecV1};
 use serde::{Deserialize, Serialize};
@@ -180,7 +183,8 @@ fn default_delegate_timeout() -> u64 {
 /// Execute a tool. Returns the JSON body of the result. The runner is
 /// responsible for writing the body to the artifact store and recording
 /// the reference on the receipt.
-pub fn execute(
+#[cfg(test)]
+fn execute(
     call: &ToolCallSpecV1,
     evidence: PermitEvidenceV1,
 ) -> Result<serde_json::Value, ToolError> {

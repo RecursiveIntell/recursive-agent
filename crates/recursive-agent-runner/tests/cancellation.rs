@@ -5,11 +5,12 @@
 //! unavailable result and terminal runs report AlreadyTerminal. No cancellation
 //! receipt is fabricated.
 #![allow(clippy::unwrap_used, clippy::expect_used)]
-#![allow(deprecated)]
+mod support;
 
 use recursive_agent_runner::{
     ProjectedState, RuntimeCancelResultV1, RuntimeServiceError, SchedulerStore,
 };
+use support::run_spec;
 
 fn tmp_store() -> (tempfile::TempDir, SchedulerStore) {
     let tmp = tempfile::tempdir().unwrap();
@@ -76,7 +77,7 @@ fn runtime_cancel_without_scheduler_reports_active_unavailable() {
 #[test]
 fn sandbox_timeout_kills_descendant_process_group() -> Result<(), Box<dyn std::error::Error>> {
     use recursive_agent_contracts::RunSpecV1;
-    use recursive_agent_runner::run_spec;
+
     use recursive_agent_sandbox::SandboxSpec;
 
     let tmp = tempfile::tempdir()?;

@@ -39,7 +39,6 @@ use recursive_agent_policy::{
     DelegationTransitionV1, DurablePermitStore, EffectScopeV1, PermitBindingV1, PermitBudgetV1,
     PermitEvidenceV1, PermitRejectionReasonV1, PermitRevocationReasonV1, PolicyError,
 };
-use recursive_agent_tools::execute as run_tool;
 use thiserror::Error;
 
 #[cfg(test)]
@@ -58,18 +57,20 @@ pub(crate) trait RunnerToolExecutor: Sync {
     ) -> Result<RunnerToolOutput, recursive_agent_tools::ToolError>;
 }
 
-struct LegacyToolExecutor;
+#[cfg(test)]
+struct TestToolExecutor;
 
-impl RunnerToolExecutor for LegacyToolExecutor {
+#[cfg(test)]
+impl RunnerToolExecutor for TestToolExecutor {
     fn execute(
         &self,
         call: &ToolCallSpecV1,
-        evidence: PermitEvidenceV1,
+        _evidence: PermitEvidenceV1,
     ) -> Result<RunnerToolOutput, recursive_agent_tools::ToolError> {
-        Ok(RunnerToolOutput {
-            body: run_tool(call, evidence)?,
-            source_evidence: Vec::new(),
-        })
+        Err(recursive_agent_tools::ToolError::Unavailable(format!(
+            "test-only runner executor does not dispatch {}",
+            call.tool
+        )))
     }
 }
 
@@ -338,40 +339,6 @@ fn secure_open_directory_at(
     )?)
 }
 
-#[deprecated(
-    since = "0.1.0",
-    note = "construct OperationEnvelopeV1 and call RuntimeService::submit; removed in Phase 6"
-)]
-pub fn run_spec(spec: &RunSpecV1, out_root: &Path) -> Result<RunSummary, RunError> {
-    run_spec_via_runtime_service(spec, out_root, &SystemClock)
-}
-
-#[deprecated(
-    since = "0.1.0",
-    note = "inject Clock through RuntimeDependencies and call RuntimeService::submit; removed in Phase 6"
-)]
-pub fn run_spec_with_clock(
-    spec: &RunSpecV1,
-    out_root: &Path,
-    clock: &dyn Clock,
-) -> Result<RunSummary, RunError> {
-    run_spec_via_runtime_service(spec, out_root, clock)
-}
-
-fn run_spec_via_runtime_service(
-    spec: &RunSpecV1,
-    out_root: &Path,
-    clock: &dyn Clock,
-) -> Result<RunSummary, RunError> {
-    let allowlist = Allowlist::default();
-    allowlist.validate_phase_one_boundary(spec)?;
-    for step in &spec.steps {
-        allowlist.authorize(spec, &step.name, &step.call)?;
-    }
-    let operation = legacy_operation_envelope(spec)?;
-    RuntimeService::submit_legacy_run_spec(&operation, out_root, clock)
-}
-
 fn legacy_operation_envelope(spec: &RunSpecV1) -> Result<OperationEnvelopeV1, RunError> {
     let mut read_roots = std::collections::BTreeSet::new();
     let mut write_roots = std::collections::BTreeSet::new();
@@ -434,6 +401,9 @@ fn legacy_operation_envelope(spec: &RunSpecV1) -> Result<OperationEnvelopeV1, Ru
 /// envelope. Adapters (CLI, MCP, IPC) use this so they execute through the
 /// canonical `RuntimeService::submit` rather than a private execution surface.
 pub fn operation_from_run_spec(spec: &RunSpecV1) -> Result<OperationEnvelopeV1, RunError> {
+    // Preserve the legacy ingress contract: policy rejects forbidden effects
+    // before the adapter materializes a native operation envelope.
+    Allowlist::default().validate_phase_one_boundary(spec)?;
     let operation = legacy_operation_envelope(spec)?;
     Ok(operation)
 }
@@ -464,7 +434,7 @@ fn run_spec_internal(
     hook: &dyn RunnerHook,
 ) -> Result<RunSummary, RunError> {
     let run_id = derive_run_id(spec)?;
-    run_spec_internal_with_run_id(spec, out_root, clock, hook, run_id, &LegacyToolExecutor)
+    run_spec_internal_with_run_id(spec, out_root, clock, hook, run_id, &TestToolExecutor)
 }
 
 fn run_spec_internal_with_run_id(
