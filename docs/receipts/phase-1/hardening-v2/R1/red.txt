@@ -1,0 +1,13 @@
+Finding: R1 — trusted sandbox launcher/setup/network proof
+Captured before production-surface modification: 2026-08-05
+Command:
+  rg -n 'pub fn execute_with_(launcher|runtime)|const SETUP_MARKER|--unshare-all|--share-net' crates/recursive-agent-sandbox/src/lib.rs crates/recursive-agent-sandbox/tests/enforcement_truth.rs
+  fail if public launcher/runtime injection or the static marker exists
+Exit: 1 (expected RED)
+Observed:
+  crates/recursive-agent-sandbox/src/lib.rs:19:const SETUP_MARKER: &str = "__RECURSIVE_AGENT_BWRAP_READY_V1__";
+  crates/recursive-agent-sandbox/src/lib.rs:137:pub fn execute_with_launcher(
+  crates/recursive-agent-sandbox/src/lib.rs:145:pub fn execute_with_runtime(
+  crates/recursive-agent-sandbox/src/lib.rs:420:        "--unshare-all".into(),
+  crates/recursive-agent-sandbox/src/lib.rs:449:        argv.push("--share-net".into());
+

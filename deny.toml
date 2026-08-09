@@ -1,0 +1,41 @@
+# deny.toml — Supply-chain audit configuration for recursive-agent
+# Verified against cargo-deny 0.19.8. Run: cargo deny check
+
+[advisories]
+ignore = []
+
+[licenses]
+allow = [
+    "MIT",
+    "Apache-2.0",
+    "BSD-2-Clause",
+    "BSD-3-Clause",
+    "ISC",
+    "Unicode-3.0",
+    "Zlib",
+    "MPL-2.0",
+    "CC0-1.0",
+]
+confidence-threshold = 0.8
+exceptions = []
+
+[licenses.private]
+ignore = false
+registries = []
+
+[bans]
+multiple-versions = "warn"
+# cargo-deny treats local path-only workspace dependencies as wildcards.
+# Phase 11 must either add explicit matching versions to every path dependency
+# or enforce external wildcard denial in the anti-bypass/supply-chain scanner.
+wildcards = "allow"
+highlight = "all"
+deny = []
+skip = []
+skip-tree = []
+
+[sources]
+unknown-registry = "deny"
+unknown-git = "deny"
+allow-registry = ["https://github.com/rust-lang/crates.io-index"]
+allow-git = []

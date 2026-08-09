@@ -1,6 +1,6 @@
 {
   "name": "hello",
-  "policy_version": "m0-1",
+  "policy_version": "m0-2",
   "frozen_clock": "2026-07-14T00:00:00Z",
   "steps": [
     {

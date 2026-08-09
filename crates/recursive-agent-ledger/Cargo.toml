@@ -10,6 +10,7 @@ description = "Append-only receipt chain and content-addressed artifact store"
 
 [dependencies]
 recursive-agent-contracts = { path = "../recursive-agent-contracts" }
+recursive-agent-policy = { path = "../recursive-agent-policy" }
 serde = { workspace = true }
 serde_json = { workspace = true }
 chrono = { workspace = true }
@@ -17,10 +18,11 @@ thiserror = { workspace = true }
 stack-ids = { workspace = true }
 blake3 = { workspace = true }
 hex = { workspace = true }
-uuid = { version = "1", features = ["v4"] }
+rustix = { workspace = true }
 
 [dev-dependencies]
 recursive-agent-contracts = { path = "../recursive-agent-contracts" }
+tempfile = "3"
 
 [lints]
 workspace = true

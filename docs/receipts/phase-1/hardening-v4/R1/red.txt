@@ -1,0 +1,33 @@
+R1 RED evidence captured before the R1 source fix.
+Captured: 2026-08-05 (America/Chicago)
+Repository: /home/sikmindz/Coding/recursive-agent
+
+Command:
+rg -n 'pub struct AuthorizedExecutionContext|pub fn consume_authorized|pub fn execute\(|context: &AuthorizedExecutionContext|Command::new|\.spawn\(' crates/recursive-agent-policy/src/lib.rs crates/recursive-agent-sandbox/src/lib.rs crates/recursive-agent-tools/src/lib.rs
+
+Exit: 0
+Observed:
+crates/recursive-agent-tools/src/lib.rs:174:pub fn execute(
+crates/recursive-agent-policy/src/lib.rs:307:pub struct AuthorizedExecutionContext {
+crates/recursive-agent-policy/src/lib.rs:595:    pub fn consume_authorized(
+crates/recursive-agent-sandbox/src/lib.rs:221:pub fn execute(
+crates/recursive-agent-sandbox/src/lib.rs:224:    context: &AuthorizedExecutionContext,
+crates/recursive-agent-sandbox/src/lib.rs:634:    let child = command.spawn().map_err(|_| SandboxError::SetupFailed {
+crates/recursive-agent-sandbox/src/lib.rs:763:        .spawn()
+crates/recursive-agent-sandbox/src/lib.rs:901:    let mut command = Command::new(format!("/proc/self/fd/{}", bash.file.as_raw_fd()));
+
+RED conclusion:
+The default downstream-public surface exposes a complete mint-and-effect chain:
+DurablePermitStore::consume_authorized publicly creates AuthorizedExecutionContext,
+recursive_agent_sandbox::execute publicly borrows that reusable context, and the OS
+process-launch implementation is compiled into the sandbox crate. Field privacy does
+not prevent repeated calls through the same shared reference.
+
+Focused host check attempted before the fix:
+cargo test -p recursive-agent-sandbox --test enforcement_truth fixed_printf_is_mandatorily_enforced_on_this_host -- --exact --nocapture
+
+Exit: 101
+Result: 0 passed; 1 failed; 11 filtered out. The current managed execution host
+rejected /usr/bin/bwrap as an unsafe/unavailable trusted executable before payload
+dispatch. This host result does not mitigate the public API ownership defect shown
+above; it is retained as exact environment evidence.

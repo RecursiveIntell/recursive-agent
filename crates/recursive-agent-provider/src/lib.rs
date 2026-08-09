@@ -1,222 +1,390 @@
-//! Phase 2 provider integration. Adds a typed, boundary-checked LLM
-//! provider layer behind the existing receipt-bearing `llm` tool.
+//! Secret-free provider contracts for receipt-bearing LLM calls.
 //!
-//! Two adapters are supported:
-//! - **Ollama** (local `/api/generate`)
-//! - **OpenAI-compatible** (`/v1/chat/completions`)
-//!
-//! Every call is shaped by a typed [`ProviderSpecV1`]; the prompt, spec,
-//! and returned text are all bound into the run's receipt chain by the
-//! caller (the `llm` tool in the tools crate). This crate performs no
-//! persistence and no receipt writing — it is a pure request/response
-//! boundary.
+//! Serializable requests contain only opaque credential references. Resolved
+//! secret bytes exist only while constructing the sensitive authorization
+//! header and are never formatted, serialized, or included in provider errors.
 
-use serde::{Deserialize, Serialize};
+use serde::{Deserialize, Deserializer, Serialize};
 use thiserror::Error;
+use url::Url;
 
-/// A typed, serializable description of an LLM provider endpoint.
-///
-/// The `kind` discriminant is explicit so a run spec can be validated
-/// before any network I/O occurs.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(tag = "kind", rename_all = "snake_case")]
+/// A normalized, secret-free HTTP(S) provider origin admitted at ingress.
+/// Invalid URLs cannot be represented by this type.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ValidatedEndpoint(Url);
+
+impl ValidatedEndpoint {
+    pub fn try_new(value: impl AsRef<str>) -> Result<Self, ProviderError> {
+        validate_base_url(value.as_ref()).map(Self)
+    }
+
+    pub fn as_str(&self) -> &str {
+        self.0.as_str()
+    }
+
+    pub fn route_url(&self, route: ProviderRoute) -> Url {
+        endpoint(&self.0, route)
+    }
+}
+
+impl Serialize for ValidatedEndpoint {
+    fn serialize<S: serde::Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
+        serializer.serialize_str(self.as_str())
+    }
+}
+
+impl<'de> Deserialize<'de> for ValidatedEndpoint {
+    fn deserialize<D: Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
+        let value = String::deserialize(deserializer)?;
+        Self::try_new(value).map_err(serde::de::Error::custom)
+    }
+}
+
+impl TryFrom<&str> for ValidatedEndpoint {
+    type Error = ProviderError;
+
+    fn try_from(value: &str) -> Result<Self, Self::Error> {
+        Self::try_new(value)
+    }
+}
+
+impl TryFrom<String> for ValidatedEndpoint {
+    type Error = ProviderError;
+
+    fn try_from(value: String) -> Result<Self, Self::Error> {
+        Self::try_new(value)
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[serde(transparent)]
+pub struct CredentialRef(String);
+
+impl CredentialRef {
+    pub fn try_new(value: impl Into<String>) -> Result<Self, ProviderError> {
+        let value = value.into();
+        let Some(variable) = value.strip_prefix("environment:") else {
+            return Err(ProviderError::InvalidCredentialReference);
+        };
+        if !is_portable_environment_name(variable) {
+            return Err(ProviderError::InvalidCredentialReference);
+        }
+        Ok(Self(value))
+    }
+
+    pub fn as_str(&self) -> &str {
+        &self.0
+    }
+}
+
+impl<'de> Deserialize<'de> for CredentialRef {
+    fn deserialize<D: Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
+        let value = String::deserialize(deserializer)?;
+        Self::try_new(value).map_err(|_| {
+            serde::de::Error::custom(
+                "invalid credential reference; expected environment:PORTABLE_NAME",
+            )
+        })
+    }
+}
+
+fn is_portable_environment_name(value: &str) -> bool {
+    let mut characters = value.chars();
+    let Some(first) = characters.next() else {
+        return false;
+    };
+    (first.is_ascii_alphabetic() || first == '_')
+        && characters.all(|character| character.is_ascii_alphanumeric() || character == '_')
+}
+
+pub struct SecretBytes(Vec<u8>);
+
+impl SecretBytes {
+    pub fn new(bytes: Vec<u8>) -> Self {
+        Self(bytes)
+    }
+}
+
+impl std::fmt::Debug for SecretBytes {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        formatter.write_str("SecretBytes([REDACTED])")
+    }
+}
+
+impl Drop for SecretBytes {
+    fn drop(&mut self) {
+        self.0.fill(0);
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Error)]
+pub enum CredentialResolveError {
+    #[error("credential was not found")]
+    Missing,
+    #[error("credential reference is unsupported")]
+    UnsupportedReference,
+    #[error("credential value is empty or invalid")]
+    InvalidValue,
+}
+
+pub trait CredentialResolver {
+    fn resolve(
+        &self,
+        credential_ref: &CredentialRef,
+    ) -> Result<SecretBytes, CredentialResolveError>;
+}
+
+#[derive(Debug, Clone, Copy, Default)]
+pub struct EnvironmentCredentialResolver;
+
+impl CredentialResolver for EnvironmentCredentialResolver {
+    fn resolve(
+        &self,
+        credential_ref: &CredentialRef,
+    ) -> Result<SecretBytes, CredentialResolveError> {
+        let variable = credential_ref
+            .as_str()
+            .strip_prefix("environment:")
+            .ok_or(CredentialResolveError::UnsupportedReference)?;
+        if variable.trim().is_empty() {
+            return Err(CredentialResolveError::UnsupportedReference);
+        }
+        let value = std::env::var(variable).map_err(|error| match error {
+            std::env::VarError::NotPresent => CredentialResolveError::Missing,
+            std::env::VarError::NotUnicode(_) => CredentialResolveError::InvalidValue,
+        })?;
+        if value.is_empty() {
+            return Err(CredentialResolveError::InvalidValue);
+        }
+        Ok(SecretBytes::new(value.into_bytes()))
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[serde(tag = "kind", rename_all = "snake_case", deny_unknown_fields)]
 pub enum ProviderSpecV1 {
-    /// Local Ollama server. `base_url` should be the server root
-    /// (e.g. `http://127.0.0.1:11434`); the adapter appends `/api/generate`.
-    Ollama { base_url: String, model: String },
-    /// Any OpenAI-compatible chat completions endpoint. `base_url` should
-    /// be the server root (e.g. `https://api.example.com/v1`); the adapter
-    /// appends `/chat/completions`. `api_key` is optional.
-    OpenAiCompatible {
-        base_url: String,
+    Ollama {
+        base_url: ValidatedEndpoint,
         model: String,
-        api_key: Option<String>,
+    },
+    OpenAiCompatible {
+        base_url: ValidatedEndpoint,
+        model: String,
+        credential_ref: CredentialRef,
     },
 }
 
-/// Arguments for a single completion request.
+#[derive(Deserialize)]
+#[serde(tag = "kind", rename_all = "snake_case", deny_unknown_fields)]
+enum ProviderSpecWire {
+    Ollama {
+        base_url: ValidatedEndpoint,
+        model: String,
+    },
+    OpenAiCompatible {
+        base_url: ValidatedEndpoint,
+        model: String,
+        credential_ref: Option<CredentialRef>,
+        api_key: Option<serde_json::Value>,
+    },
+}
+
+impl<'de> Deserialize<'de> for ProviderSpecV1 {
+    fn deserialize<D: Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
+        match ProviderSpecWire::deserialize(deserializer)? {
+            ProviderSpecWire::Ollama { base_url, model } => Ok(Self::Ollama { base_url, model }),
+            ProviderSpecWire::OpenAiCompatible {
+                base_url,
+                model,
+                credential_ref,
+                api_key,
+            } => {
+                if api_key.is_some() {
+                    return Err(serde::de::Error::custom(
+                        "raw provider credentials are forbidden; migrate to credential_ref: environment:NAME",
+                    ));
+                }
+                let credential_ref = credential_ref.ok_or_else(|| {
+                    serde::de::Error::custom(
+                        "missing credential_ref; expected environment:PORTABLE_NAME",
+                    )
+                })?;
+                Ok(Self::OpenAiCompatible {
+                    base_url,
+                    model,
+                    credential_ref,
+                })
+            }
+        }
+    }
+}
+
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct CompletionRequestV1 {
     pub provider: ProviderSpecV1,
     pub prompt: String,
-    /// Optional token ceiling. Ollama maps this to `num_predict`;
-    /// OpenAI-compatible maps it to `max_tokens`.
     pub max_tokens: Option<u32>,
 }
 
-/// The typed, canonical response from a provider.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct CompletionResponseV1 {
-    /// The model identifier that served the request.
     pub model: String,
-    /// The generated text (assistant content).
     pub text: String,
-    /// The full raw JSON body returned by the provider, captured for
-    /// evidence. This is the untrusted response; `text` is the
-    /// JCS-canonical, parsed extraction.
     pub raw: serde_json::Value,
 }
 
-/// Errors surfaced by the provider layer. All are typed; no panic.
 #[derive(Debug, Error)]
 pub enum ProviderError {
-    #[error("unknown provider kind: {0}")]
-    UnknownKind(String),
     #[error("empty base_url for provider")]
     EmptyBaseUrl,
     #[error("empty model for provider")]
     EmptyModel,
-    #[error("http request failed: {0}")]
-    Http(String),
-    #[error("provider returned non-success status {status}: {body}")]
-    HttpStatus { status: u16, body: String },
+    #[error("invalid credential reference")]
+    InvalidCredentialReference,
+    #[error("credential was not found")]
+    MissingCredential,
+    #[error("credential reference is unsupported")]
+    UnsupportedCredentialReference,
+    #[error("credential value is invalid")]
+    InvalidCredential,
+    #[error("provider URL was rejected: {reason}")]
+    InvalidProviderUrl { reason: ProviderUrlRejection },
+    #[error("http request failed during {operation}")]
+    Http { operation: &'static str },
+    #[error("provider returned non-success status {status}")]
+    HttpStatus { status: u16 },
+    #[error("provider execution is unavailable in Phase 1")]
+    Unavailable,
     #[error("malformed provider response: {0}")]
     Malformed(String),
 }
 
-/// Execute a single completion against the configured provider.
-///
-/// This is a blocking call (reqwest blocking client). It performs network
-/// I/O and never panics. On any failure it returns a typed
-/// [`ProviderError`]; the caller is responsible for recording the outcome
-/// on the receipt chain.
-pub fn complete(request: &CompletionRequestV1) -> Result<CompletionResponseV1, ProviderError> {
-    match &request.provider {
-        ProviderSpecV1::Ollama { base_url, model } => complete_ollama(base_url, model, request),
-        ProviderSpecV1::OpenAiCompatible {
-            base_url,
-            model,
-            api_key,
-        } => complete_openai(base_url, model, api_key.as_deref(), request),
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ProviderUrlRejection {
+    Malformed,
+    UnsupportedScheme,
+    MissingAuthority,
+    UserInfoForbidden,
+    QueryForbidden,
+    FragmentForbidden,
+    ControlCharacter,
+    PathForbidden,
+}
+
+impl std::fmt::Display for ProviderUrlRejection {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(formatter, "{self:?}")
     }
 }
 
-fn complete_ollama(
-    base_url: &str,
-    model: &str,
-    request: &CompletionRequestV1,
-) -> Result<CompletionResponseV1, ProviderError> {
-    let base = trim_trailing_slash(base_url)?;
-    let url = format!("{base}/api/generate");
-    let mut body = serde_json::json!({
-        "model": model,
-        "prompt": request.prompt,
-        "stream": false,
-    });
-    if let Some(t) = request.max_tokens {
-        body["options"] = serde_json::json!({ "num_predict": t });
-    }
-    let client = blocking_client()?;
-    let raw: serde_json::Value = client
-        .post(&url)
-        .json(&body)
-        .send()
-        .map_err(|e| ProviderError::Http(e.to_string()))?
-        .error_for_status()
-        .map_err(|e| ProviderError::Http(e.to_string()))?
-        .json()
-        .map_err(|e| ProviderError::Malformed(e.to_string()))?;
-    let text = raw
-        .get("response")
-        .and_then(|v| v.as_str())
-        .map(ToOwned::to_owned)
-        .ok_or_else(|| ProviderError::Malformed("missing 'response' field".into()))?;
-    Ok(CompletionResponseV1 {
-        model: model.to_string(),
-        text,
-        raw,
-    })
-}
-
-fn complete_openai(
-    base_url: &str,
-    model: &str,
-    api_key: Option<&str>,
-    request: &CompletionRequestV1,
-) -> Result<CompletionResponseV1, ProviderError> {
-    let base = trim_trailing_slash(base_url)?;
-    let url = format!("{base}/chat/completions");
-    let mut body = serde_json::json!({
-        "model": model,
-        "messages": [{ "role": "user", "content": request.prompt }],
-        "stream": false,
-    });
-    if let Some(t) = request.max_tokens {
-        body["max_tokens"] = serde_json::json!(t);
-    }
-    let client = blocking_client()?;
-    let mut req = client.post(&url).json(&body);
-    if let Some(key) = api_key {
-        req = req.bearer_auth(key);
-    }
-    let raw: serde_json::Value = req
-        .send()
-        .map_err(|e| ProviderError::Http(e.to_string()))?
-        .error_for_status()
-        .map_err(|e| ProviderError::Http(e.to_string()))?
-        .json()
-        .map_err(|e| ProviderError::Malformed(e.to_string()))?;
-    let text = raw
-        .get("choices")
-        .and_then(|c| c.get(0))
-        .and_then(|c| c.get("message"))
-        .and_then(|m| m.get("content"))
-        .and_then(|v| v.as_str())
-        .map(ToOwned::to_owned)
-        .unwrap_or_default();
-    Ok(CompletionResponseV1 {
-        model: model.to_string(),
-        text,
-        raw,
-    })
-}
-
-fn trim_trailing_slash(s: &str) -> Result<String, ProviderError> {
-    let t = s.trim_end_matches('/');
-    if t.is_empty() {
+fn validate_base_url(value: &str) -> Result<Url, ProviderError> {
+    if value.is_empty() {
         return Err(ProviderError::EmptyBaseUrl);
     }
-    Ok(t.to_string())
+    if value.chars().any(char::is_control) {
+        return Err(ProviderError::InvalidProviderUrl {
+            reason: ProviderUrlRejection::ControlCharacter,
+        });
+    }
+    let mut parsed = Url::parse(value).map_err(|_| ProviderError::InvalidProviderUrl {
+        reason: ProviderUrlRejection::Malformed,
+    })?;
+    if !matches!(parsed.scheme(), "http" | "https") {
+        return Err(ProviderError::InvalidProviderUrl {
+            reason: ProviderUrlRejection::UnsupportedScheme,
+        });
+    }
+    if parsed.cannot_be_a_base() || parsed.host_str().is_none() {
+        return Err(ProviderError::InvalidProviderUrl {
+            reason: ProviderUrlRejection::MissingAuthority,
+        });
+    }
+    if !parsed.username().is_empty() || parsed.password().is_some() {
+        return Err(ProviderError::InvalidProviderUrl {
+            reason: ProviderUrlRejection::UserInfoForbidden,
+        });
+    }
+    if parsed.query().is_some() {
+        return Err(ProviderError::InvalidProviderUrl {
+            reason: ProviderUrlRejection::QueryForbidden,
+        });
+    }
+    if parsed.fragment().is_some() {
+        return Err(ProviderError::InvalidProviderUrl {
+            reason: ProviderUrlRejection::FragmentForbidden,
+        });
+    }
+    if parsed.path() != "/" {
+        return Err(ProviderError::InvalidProviderUrl {
+            reason: ProviderUrlRejection::PathForbidden,
+        });
+    }
+    parsed.set_path("/");
+    Ok(parsed)
 }
 
-fn blocking_client() -> Result<reqwest::blocking::Client, ProviderError> {
-    reqwest::blocking::Client::builder()
-        .timeout(std::time::Duration::from_secs(120))
-        .build()
-        .map_err(|e| ProviderError::Http(e.to_string()))
+#[derive(Debug, Clone, Copy)]
+pub enum ProviderRoute {
+    OllamaGenerate,
+    OpenAiChatCompletions,
+}
+
+fn endpoint(base: &Url, route: ProviderRoute) -> Url {
+    let mut endpoint = base.clone();
+    endpoint.set_path(match route {
+        ProviderRoute::OllamaGenerate => "/api/generate",
+        ProviderRoute::OpenAiChatCompletions => "/v1/chat/completions",
+    });
+    endpoint
 }
 
 #[cfg(test)]
-#[allow(clippy::unwrap_used, clippy::expect_used, clippy::panic)]
 mod tests {
     use super::*;
 
-    #[test]
-    fn ollama_url_has_no_double_slash() {
-        let base = trim_trailing_slash("http://127.0.0.1:11434/").unwrap();
-        assert_eq!(base, "http://127.0.0.1:11434");
-    }
+    type TestResult = Result<(), Box<dyn std::error::Error>>;
 
     #[test]
-    fn openai_url_appends_chat_completions() {
-        let base = trim_trailing_slash("https://api.example.com/v1").unwrap();
-        assert_eq!(base, "https://api.example.com/v1");
+    fn ollama_url_has_no_double_slash() -> TestResult {
+        assert_eq!(
+            validate_base_url("http://127.0.0.1:11434/")?.as_str(),
+            "http://127.0.0.1:11434/"
+        );
+        Ok(())
     }
 
     #[test]
     fn empty_base_rejected() {
-        let err = trim_trailing_slash("///").unwrap_err();
-        assert!(matches!(err, ProviderError::EmptyBaseUrl));
+        assert!(matches!(
+            validate_base_url("///"),
+            Err(ProviderError::InvalidProviderUrl { .. })
+        ));
     }
 
     #[test]
-    fn spec_round_trips_jcs_serialization() {
+    fn ollama_spec_round_trips() -> TestResult {
         let spec = ProviderSpecV1::Ollama {
-            base_url: "http://127.0.0.1:11434".into(),
+            base_url: ValidatedEndpoint::try_new("http://127.0.0.1:11434")?,
             model: "llama3.2:3b".into(),
         };
-        let v = serde_json::to_value(&spec).unwrap();
-        let back: ProviderSpecV1 = serde_json::from_value(v).unwrap();
-        assert_eq!(spec, back);
+        let encoded = serde_json::to_value(&spec)?;
+        assert_eq!(serde_json::from_value::<ProviderSpecV1>(encoded)?, spec);
+        Ok(())
+    }
+
+    #[test]
+    fn fixed_provider_routes_are_appended_to_origin_only() -> TestResult {
+        let endpoint = ValidatedEndpoint::try_new("https://example.test/")?;
+        assert_eq!(
+            endpoint.route_url(ProviderRoute::OllamaGenerate).as_str(),
+            "https://example.test/api/generate"
+        );
+        assert_eq!(
+            endpoint
+                .route_url(ProviderRoute::OpenAiChatCompletions)
+                .as_str(),
+            "https://example.test/v1/chat/completions"
+        );
+        Ok(())
     }
 }

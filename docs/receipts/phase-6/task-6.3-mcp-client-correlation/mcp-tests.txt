@@ -1,0 +1,31 @@
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.04s
+     Running unittests src/lib.rs (target/debug/deps/recursive_agent_mcp-18b26cc2cfe9a9ce)
+
+running 10 tests
+test client::tests::cancellation_race_marks_request_and_late_response_is_rejected ... ok
+test client::tests::duplicate_response_is_rejected ... ok
+test client::tests::malformed_error_envelope_is_rejected ... ok
+test client::tests::matched_response_performs_terminal_cleanup ... ok
+test client::tests::wrong_response_id_is_rejected ... ok
+test client::tests::id_less_response_is_rejected ... ok
+test client::tests::method_mismatch_is_rejected ... ok
+test translate::tests::empty_tool_and_zero_lease_are_rejected ... ok
+test client::tests::in_flight_limit_is_bounded ... ok
+test translate::tests::translation_uses_server_peer_not_caller_and_respects_lease ... ok
+
+test result: ok. 10 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+     Running tests/denylist.rs (target/debug/deps/denylist-9f850a2648d70ff3)
+
+running 2 tests
+test mcp_crate_translates_via_contracts_not_own_execution ... ok
+test mcp_crate_has_no_direct_tool_dispatch_or_run_id_minting ... ok
+
+test result: ok. 2 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+   Doc-tests recursive_agent_mcp
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+

@@ -1,0 +1,7 @@
+error[unexpected-value]: expected '["all", "workspace", "transitive", "none"]'
+  ┌─ /home/sikmindz/Coding/recursive-agent/deny.toml:6:17
+  │
+6 │ unmaintained = "warn"
+  │                 ━━━━ unexpected value
+
+2026-08-05 03:40:03 [ERROR] failed to deserialize config from '/home/sikmindz/Coding/recursive-agent/deny.toml'

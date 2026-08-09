@@ -1,0 +1,8 @@
+RED captured before production changes.
+Command: rg -n 'artifact_refs: Vec<String>|canonicalize|symlink_metadata|fs::read\(|pub fn get\(' crates/recursive-agent-contracts/src/lib.rs crates/recursive-agent-ledger/src/lib.rs
+Exit: 0 (bare references, validate/reopen, and unbounded read matched)
+Observed:
+crates/recursive-agent-contracts/src/lib.rs:295:    pub artifact_refs: Vec<String>,
+crates/recursive-agent-ledger/src/lib.rs:468:        let canonical_path = path.canonicalize()?;
+crates/recursive-agent-ledger/src/lib.rs:475:        let bytes = fs::read(canonical_path)?;
+Strict artifact verification lacked typed descriptors and descriptor-relative bounded reads.

@@ -1,0 +1,21 @@
+Finding: hard-boundary crate-level lint overrides remained in hostile test crates.
+Captured before correction: 2026-08-05T00:19:00-05:00
+
+RED command:
+  rg -n '^#!\[(allow|warn|expect)' crates --glob '*.rs'
+
+RED output:
+  crates/recursive-agent-ledger/tests/lifecycle_validation.rs:1:#![allow(clippy::unwrap_used, clippy::expect_used, clippy::panic)]
+  crates/recursive-agent-ledger/tests/artifact_tamper.rs:1:#![allow(clippy::unwrap_used, clippy::expect_used, clippy::panic)]
+  crates/recursive-agent-ledger/tests/crash_recovery.rs:1:#![allow(clippy::unwrap_used, clippy::expect_used, clippy::panic)]
+  crates/recursive-agent-runner/tests/permit_dispatch.rs:1:#![allow(clippy::unwrap_used, clippy::expect_used, clippy::panic)]
+  crates/recursive-agent-runner/tests/lifecycle_state_machine.rs:1:#![allow(clippy::unwrap_used, clippy::expect_used, clippy::panic)]
+  crates/recursive-agent-runner/tests/deterministic_identity.rs:1:#![allow(clippy::unwrap_used, clippy::expect_used, clippy::panic)]
+  crates/recursive-agent-sandbox/tests/enforcement_truth.rs:1:#![allow(clippy::unwrap_used, clippy::expect_used, clippy::panic)]
+  crates/recursive-agent-policy/tests/permit_lifecycle.rs:1:#![allow(clippy::unwrap_used, clippy::expect_used, clippy::panic)]
+  crates/recursive-agent-provider/tests/secret_contract.rs:1:#![allow(clippy::unwrap_used, clippy::expect_used, clippy::panic)]
+
+Expected RED:
+  Any crate-level lint override violates the hardening boundary even when it is
+  confined to hostile tests. The overrides must be removed, and the tests must
+  pass the inherited workspace deny policy without weakening it.

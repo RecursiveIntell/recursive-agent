@@ -1,0 +1,20 @@
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.05s
+     Running unittests src/lib.rs (target/debug/deps/recursive_agent_runner-2962a6b051dcb0ea)
+
+running 4 tests
+test scheduler::tests::inconsistent_row_is_quarantined ... ok
+test scheduler::tests::lease_conflict_is_rejected ... ok
+test scheduler::tests::admit_is_idempotent_and_persists ... ok
+test scheduler::tests::cancel_and_cursor_are_durable ... ok
+
+test result: ok. 4 passed; 0 failed; 0 ignored; 0 measured; 8 filtered out; finished in 0.00s
+
+     Running tests/restart_recovery.rs (target/debug/deps/restart_recovery-355c25b3423aea70)
+
+running 1 test
+
+running 1 test
+test scheduler_projection_survives_process_restart_without_duplication ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.12s
+

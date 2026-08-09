@@ -1,0 +1,8 @@
+   Compiling recursive-agent-skills v0.1.0 (/home/sikmindz/Coding/recursive-agent/crates/recursive-agent-skills)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.12s
+     Running unittests src/lib.rs (target/debug/deps/recursive_agent_skills-742a5773c98dcbee)
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+

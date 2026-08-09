@@ -1,0 +1,7 @@
+Finished `test` profile [unoptimized + debuginfo] target(s) in 0.06s
+     Running tests/enforcement_truth.rs (target/debug/deps/enforcement_truth-94dfebf0530f2bf9)
+
+running 1 test
+test fixed_printf_is_mandatorily_enforced_on_this_host ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 9 filtered out; finished in 0.01s

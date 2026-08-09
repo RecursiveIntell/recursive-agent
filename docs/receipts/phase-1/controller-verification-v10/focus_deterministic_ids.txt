@@ -1,0 +1,13 @@
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.06s
+     Running tests/deterministic_identity.rs (target/debug/deps/deterministic_identity-eea6fc382fe36333)
+
+running 6 tests
+test process_identity_probe ... ok
+test every_semantic_receipt_field_changes_identity ... ok
+test production_identity_paths_do_not_invoke_uuid_random_or_time ... ok
+test ids_are_stable_across_processes ... ok
+test changed_material_changes_id ... ok
+test runner_clock_owns_lease_time_while_permit_identity_excludes_live_issue_time ... ok
+
+test result: ok. 6 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.14s
+

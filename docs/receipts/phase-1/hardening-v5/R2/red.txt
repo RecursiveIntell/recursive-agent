@@ -1,0 +1,59 @@
+command: cargo test -p recursive-agent-cli --test hardening_v5_ingress -- --nocapture
+exit_code: 101
+output_sha256: a30ec5d67f7524c267bd1faa4894df909d0280d1739d52a4cc8e6d1db9362dc0
+output:
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.06s
+     Running tests/hardening_v5_ingress.rs (target/debug/deps/hardening_v5_ingress-4835fe87631e0acd)
+
+running 6 tests
+
+thread 'unknown_fields_reject_before_run_creation' (261) panicked at crates/recursive-agent-cli/tests/hardening_v5_ingress.rs:38:9:
+assertion `left == right` failed
+  left: Some(0)
+ right: Some(2)
+note: run with `RUST_BACKTRACE=1` environment variable to display a backtrace
+test unknown_fields_reject_before_run_creation ... FAILED
+
+thread 'recursive_duplicate_keys_reject_before_run_creation' (258) panicked at crates/recursive-agent-cli/tests/hardening_v5_ingress.rs:49:5:
+assertion `left == right` failed
+  left: Some(0)
+ right: Some(2)
+test recursive_duplicate_keys_reject_before_run_creation ... FAILED
+
+thread 'rejected_input_never_reaches_shell_dispatch' (259) panicked at crates/recursive-agent-cli/tests/hardening_v5_ingress.rs:175:5:
+assertion `left == right` failed
+  left: Some(0)
+ right: Some(2)
+test rejected_input_never_reaches_shell_dispatch ... FAILED
+
+thread 'oversized_whitespace_and_aggregate_material_reject_at_transport_boundary' (257) panicked at crates/recursive-agent-cli/tests/hardening_v5_ingress.rs:60:5:
+assertion `left == right` failed
+  left: Some(0)
+ right: Some(2)
+test oversized_whitespace_and_aggregate_material_reject_at_transport_boundary ... FAILED
+
+thread 'fifo_device_and_symlink_inputs_are_rejected_without_blocking' (256) panicked at crates/recursive-agent-cli/tests/hardening_v5_ingress.rs:123:5:
+assertion `left == right` failed: FIFO input blocked or entered parsing
+  left: None
+ right: Some(2)
+test fifo_device_and_symlink_inputs_are_rejected_without_blocking ... FAILED
+
+thread 'excess_steps_reject_before_identity_or_dispatch' (255) panicked at crates/recursive-agent-cli/tests/hardening_v5_ingress.rs:93:5:
+assertion `left == right` failed
+  left: Some(0)
+ right: Some(2)
+test excess_steps_reject_before_identity_or_dispatch ... FAILED
+
+failures:
+
+failures:
+    excess_steps_reject_before_identity_or_dispatch
+    fifo_device_and_symlink_inputs_are_rejected_without_blocking
+    oversized_whitespace_and_aggregate_material_reject_at_transport_boundary
+    recursive_duplicate_keys_reject_before_run_creation
+    rejected_input_never_reaches_shell_dispatch
+    unknown_fields_reject_before_run_creation
+
+test result: FAILED. 0 passed; 6 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.40s
+
+error: test failed, to rerun pass `-p recursive-agent-cli --test hardening_v5_ingress`

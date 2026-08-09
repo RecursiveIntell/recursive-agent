@@ -1,0 +1,22 @@
+$ cargo test -p recursive-agent-contracts --test phase2_operation_envelope operation_envelope_rejects_effect_mismatch_and_underdeclaration -- --nocapture
+exit_code: 101
+
+Compiling recursive-agent-contracts v0.1.0 (/home/sikmindz/Coding/recursive-agent/crates/recursive-agent-contracts)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 1.31s
+     Running tests/phase2_operation_envelope.rs (target/debug/deps/phase2_operation_envelope-e90f56f8b91c6a51)
+
+running 1 test
+
+thread 'operation_envelope_rejects_effect_mismatch_and_underdeclaration' (2225616) panicked at crates/recursive-agent-contracts/tests/phase2_operation_envelope.rs:367:9:
+wrong action digest was accepted
+note: run with `RUST_BACKTRACE=1` environment variable to display a backtrace
+test operation_envelope_rejects_effect_mismatch_and_underdeclaration ... FAILED
+
+failures:
+
+failures:
+    operation_envelope_rejects_effect_mismatch_and_underdeclaration
+
+test result: FAILED. 0 passed; 1 failed; 0 ignored; 0 measured; 7 filtered out; finished in 0.00s
+
+error: test failed, to rerun pass `-p recursive-agent-contracts --test phase2_operation_envelope`

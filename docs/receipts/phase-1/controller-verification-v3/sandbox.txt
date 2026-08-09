@@ -1,0 +1,30 @@
+Finished `test` profile [unoptimized + debuginfo] target(s) in 0.07s
+     Running unittests src/lib.rs (target/debug/deps/recursive_agent_sandbox-79137858bb598228)
+
+running 2 tests
+test tests::payload_marker_suffix_cannot_satisfy_setup_proof ... ok
+test tests::fake_launcher_is_rejected_before_payload_dispatch ... ok
+
+test result: ok. 2 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+     Running unittests src/bin/recursive-agent-sandbox-launcher.rs (target/debug/deps/recursive_agent_sandbox_launcher-3d70ec7a7b766a76)
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+     Running tests/enforcement_truth.rs (target/debug/deps/enforcement_truth-94dfebf0530f2bf9)
+
+running 10 tests
+test missing_allow_path_fails_before_launcher ... ok
+test implementation_contains_no_local_unsafe_or_landlock_claim ... ok
+test production_api_is_fixed_and_zero_timeout_fails_before_effect ... ok
+test fixed_printf_is_mandatorily_enforced_on_this_host ... ok
+test inherited_non_cloexec_descriptor_is_not_visible_to_payload ... ok
+test active_mount_source_replacement_never_exposes_attacker_bytes ... ok
+test network_socket_creation_receives_eperm_under_enforcement ... ok
+test filesystem_and_network_attempts_are_denied_or_host_fails_closed ... ok
+test undeclared_read_and_descendant_are_mandatorily_bounded ... ok
+test descendants_output_and_signal_races_are_bounded_or_fail_closed ... ok
+
+test result: ok. 10 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.30s

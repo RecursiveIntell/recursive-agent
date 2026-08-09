@@ -1,0 +1,9 @@
+Unable to open session log file "/home/sikmindz/.cache/starship/session_1387726081318461.log": Os { code: 30, kind: ReadOnlyFilesystem, message: "Read-only file system" }!
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.05s
+     Running unittests src/main.rs (target/debug/deps/ra-7229a462aba6d1be)
+
+running 1 test
+test tests::doctor_reports_exact_phase_one_candidate_surface ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+

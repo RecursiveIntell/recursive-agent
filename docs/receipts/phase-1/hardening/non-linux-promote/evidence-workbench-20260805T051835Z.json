@@ -1,0 +1,28 @@
+{
+  "schema": "AgentEvidenceWorkbenchProofPacketV1",
+  "trace_id": "trace:evidence-workbench:c11a2e0fcc0b4031",
+  "created_at": "2026-08-05T05:18:35.050498+00:00",
+  "claim": "Recursive Agent sandbox compiles on a non-Linux target and its unsupported-platform branch remains fail-closed",
+  "risk_class": "medium",
+  "disposition": "promote",
+  "evidence_refs": [
+    "sha256:060265ba9763c7d6c7338b7f8d3f085ac3c3be09173ea0fcab22244a59b228b8"
+  ],
+  "commands": [
+    {
+      "command": "cargo check -p recursive-agent-sandbox --target x86_64-linux-android --all-targets",
+      "cwd": "/home/sikmindz/Coding/recursive-agent",
+      "started_at": "2026-08-05T05:18:34.952942+00:00",
+      "finished_at": "2026-08-05T05:18:35.046985+00:00",
+      "exit_code": 0,
+      "timed_out": false,
+      "stdout_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "stderr_sha256": "236761b3da3192b57d6f01639297a5bb9a4f9ff45e0d5c01551118903a3c2ba5",
+      "combined_sha256": "060265ba9763c7d6c7338b7f8d3f085ac3c3be09173ea0fcab22244a59b228b8",
+      "stdout_preview": "",
+      "stderr_preview": "warning: unused imports: `Command` and `Stdio`\n  --> crates/recursive-agent-sandbox/src/lib.rs:11:27\n   |\n11 | use std::process::{Child, Command, ExitStatus, Stdio};\n   |                           ^^^^^^^              ^^^^^\n   |\n   = note: `#[warn(unused_imports)]` (part of `#[warn(unused)]`) on by default\n\nwarning: unused variable: `fd_hygiene_launcher`\n   --> crates/recursive-agent-sandbox/src/lib.rs:148:5\n    |\n148 |     fd_hygiene_launcher: Option<&Path>,\n    |     ^^^^^^^^^^^^^^^^^^^ help: if this is intentional, prefix it with an underscore: `_fd_hygiene_launcher`\n    |\n    = note: `#[warn(unused_variables)]` (part of `#[warn(unused)]`) on by default\n\nwarning: unused variable: `start`\n   --> crates/recursive-agent-sandbox/src/lib.rs:150:9\n    |\n150 |     let start = Instant::now();\n    |         ^^^^^ help: if this is intentional, prefix it with an underscore: `_start`\n\nwarning: constant `OUTPUT_LIMIT_BYTES` is never used\n  --> crates/recursive-agent-sandbox/src/lib.rs:17:7\n   |\n17 | const OUTPUT_LIMIT_BYTES: usize = 64 * 1024;\n   |       ^^^^^^^^^^^^^^^^^^\n   |\n   = note: `#[warn(dead_code)]` (part of `#[warn(unused)]`) on by default\n\nwarning: constant `VERSION_OUTPUT_LIMIT` is never used\n  --> crates/recursive-agent-sandbox/src/lib.rs:18:7\n   |\n18 | const VERSION_OUTPUT_LIMIT: usize = 4 * 1024;\n   |       ^^^^^^^^^^^^^^^^^^^^\n\nwarning: constant `SETUP_MARKER` is never used\n  --> crates/recursive-agent-sandbox/src/lib.rs:19:7\n   |\n19 | const SETUP_MARKER: &str = \"__RECURSIVE_AGENT_BWRAP_READY_V1__\";\n   |       ^^^^^^^^^^^^\n\nwarning: fields `command`, `read_roots`, and `write_roots` are never read\n   --> crates/recursive-agent-sandbox/src/lib.rs:113:5\n    |\n112 | struct PreparedSpec {\n    |        ------------ fields in this struct\n113 |     command: PathBuf,\n    |     ^^^^^^^\n114 |     read_roots: Vec<PathBuf>,\n    |     ^^^^^^^^^^\n115 |     write_roots: Vec<PathBuf>,\n    |     ^^^^^^^^^^^\n    |\n    = note: `PreparedSpec` has a derived impl for the trait `Debug`, but this is intentionally ignored during dead code analysis\n\nwarning: struct `BoundedOutput` is never constructed\n   --> crates/recursive-agent-sandbox/src/lib.rs:120:8\n    |\n120 | struct BoundedOutput {\n    |        ^^^^^^^^^^^^^\n\nwarning: struct `ChildOutput` is never constructed\n   --> crates/recursive-agent-sandbox/src/lib.rs:126:8\n    |\n126 | struct ChildOutput {\n    |        ^^^^^^^^^^^\n\nwarning: function `path_to_string` is never used\n   --> crates/recursive-agent-sandbox/src/lib.rs:509:4\n    |\n509 | fn path_to_string(path: &Path) -> Result<String, SandboxError> {\n    |    ^^^^^^^^^^^^^^\n\nwarning: function `remove_setup_marker` is never used\n   --> crates/recursive-agent-sandbox/src/lib.rs:560:4\n    |\n560 | fn remove_setup_marker(bytes: &mut Vec<u8>) -> bool {\n    |    ^^^^^^^^^^^^^^^^^^^\n\nwarning: function `supervise` is never used\n   --> crates/recursive-agent-sandbox/src/lib.rs:572:4\n    |\n572 | fn supervise(\n    |    ^^^^^^^^^\n\nwarning: function `receive_output` is never used\n   --> crates/recursive-agent-sandbox/src/lib.rs:625:4\n    |\n625 | fn receive_output(\n    |    ^^^^^^^^^^^^^^\n\nwarning: function `read_bounded` is never used\n   --> crates/recursive-agent-sandbox/src/lib.rs:642:4\n    |\n642 | fn read_bounded(mut reader: impl Read, limit: usize) -> std::io::Result<BoundedOutput> {\n    |    ^^^^^^^^^^^^\n\nwarning: `recursive-agent-sandbox` (lib) generated 14 warnings (run `cargo fix --lib -p recursive-agent-sandbox` to apply 3 suggestions)\nwarning: `recursive-agent-sandbox` (lib test) generated 14 warnings (14 duplicates)\n    Finished `dev` profile [unoptimized + debuginfo] target(s) in 0.07s\n"
+    }
+  ],
+  "claim_boundary": "Command receipts prove the listed gates ran with the captured exit codes; they do not prove untested behavior.",
+  "proof_packet_sha256": "d0cf402f063be2f3ca5f1a592361f3e5345330111b25a08f40f58b12bc256762"
+}

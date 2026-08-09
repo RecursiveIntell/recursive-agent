@@ -1,0 +1,12 @@
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.05s
+     Running tests/hardening_v6_ingress.rs (target/debug/deps/hardening_v6_ingress-78918419e22f988b)
+
+running 5 tests
+test empty_and_duplicate_step_names_are_rejected ... ok
+test valid_multi_step_sibling_objects_reuse_field_names ... ok
+test time_label_has_an_explicit_byte_ceiling ... ok
+test shell_collections_paths_and_budgets_have_explicit_ceilings ... ok
+test identifiers_and_text_have_explicit_byte_ceilings ... ok
+
+test result: ok. 5 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.01s
+

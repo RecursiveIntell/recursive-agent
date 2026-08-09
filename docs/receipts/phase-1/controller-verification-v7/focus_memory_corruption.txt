@@ -1,0 +1,14 @@
+   Compiling recursive-agent-memory v0.1.0 (/home/sikmindz/Coding/recursive-agent/crates/recursive-agent-memory)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.67s
+     Running unittests src/lib.rs (target/debug/deps/recursive_agent_memory-52d8a020a3930aa5)
+
+running 6 tests
+test tests::get_missing_returns_none ... ok
+test tests::put_and_get ... ok
+test tests::identical_material_is_idempotent_and_content_changes_identity ... ok
+test tests::search_finds_relevant ... ok
+test tests::sqlite_tampering_is_typed_corruption_and_never_omitted ... ok
+test tests::identity_is_stable_across_processes ... ok
+
+test result: ok. 6 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+

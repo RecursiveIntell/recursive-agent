@@ -1,0 +1,20 @@
+Recursive Agent Phase 3 Task 3.1 framing RED v2
+Recorded UTC: 2026-08-05T14:05:59.459422+00:00
+$ cargo test -p recursive-agent-daemon --test framing oversized_declared_length_is_rejected_from_prefix_alone -- --nocapture
+exit_code=101
+Compiling recursive-agent-daemon v0.1.0 (/home/sikmindz/Coding/recursive-agent/crates/recursive-agent-daemon)
+error[E0432]: unresolved import `recursive_agent_daemon::MAX_FRAME_PAYLOAD_BYTES`
+ --> crates/recursive-agent-daemon/tests/framing.rs:1:70
+  |
+1 | use recursive_agent_daemon::{decode_frame_payload, FrameDecodeError, MAX_FRAME_PAYLOAD_BYTES};
+  |                                                                      ^^^^^^^^^^^^^^^^^^^^^^^ no `MAX_FRAME_PAYLOAD_BYTES` in the root
+
+error[E0599]: no variant named `DeclaredLengthTooLarge` found for enum `FrameDecodeError`
+  --> crates/recursive-agent-daemon/tests/framing.rs:22:31
+   |
+22 |         Err(FrameDecodeError::DeclaredLengthTooLarge {
+   |                               ^^^^^^^^^^^^^^^^^^^^^^ variant not found in `FrameDecodeError`
+
+Some errors have detailed explanations: E0432, E0599.
+For more information about an error, try `rustc --explain E0432`.
+error: could not compile `recursive-agent-daemon` (test "framing") due to 2 previous errors

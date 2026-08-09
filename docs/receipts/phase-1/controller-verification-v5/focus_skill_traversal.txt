@@ -1,0 +1,12 @@
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.03s
+     Running unittests src/lib.rs (target/debug/deps/recursive_agent_skills-2be0074663479b8b)
+
+running 5 tests
+test tests::traversal_absolute_and_symlink_ids_are_rejected ... ok
+test tests::missing_required_param_fails ... ok
+test tests::load_skill_from_file ... ok
+test tests::expand_substitutes_params ... ok
+test tests::active_manifest_replacement_never_returns_attacker_bytes ... ok
+
+test result: ok. 5 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.03s
+

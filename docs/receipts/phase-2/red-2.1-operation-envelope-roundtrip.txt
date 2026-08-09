@@ -1,0 +1,26 @@
+$ cargo test -p recursive-agent-contracts --test phase2_operation_envelope -- --nocapture
+exit_code: 101
+
+Compiling recursive-agent-contracts v0.1.0 (/home/sikmindz/Coding/recursive-agent/crates/recursive-agent-contracts)
+error[E0432]: unresolved imports `recursive_agent_contracts::ActorAuthorityV1`, `recursive_agent_contracts::AuthorityOriginV1`, `recursive_agent_contracts::CausalLinkV1`, `recursive_agent_contracts::DeclaredEffectsV1`, `recursive_agent_contracts::OperationBudgetV1`, `recursive_agent_contracts::OperationEnvelopeV1`, `recursive_agent_contracts::ProvenanceRefV1`, `recursive_agent_contracts::ReplayClassV1`, `recursive_agent_contracts::ReplayIntentV1`, `recursive_agent_contracts::ReplaySpecV1`
+ --> crates/recursive-agent-contracts/tests/phase2_operation_envelope.rs:2:21
+  |
+2 |     content_digest, ActorAuthorityV1, AuthorityOriginV1, CausalLinkV1, ContentDigest,
+  |                     ^^^^^^^^^^^^^^^^  ^^^^^^^^^^^^^^^^^  ^^^^^^^^^^^^ no `CausalLinkV1` in the root
+  |                     |                 |
+  |                     |                 no `AuthorityOriginV1` in the root
+  |                     no `ActorAuthorityV1` in the root
+3 |     DeclaredEffectsV1, OperationBudgetV1, OperationEnvelopeV1, OperationSchemaV1, ProvenanceRefV1,
+  |     ^^^^^^^^^^^^^^^^^  ^^^^^^^^^^^^^^^^^  ^^^^^^^^^^^^^^^^^^^                     ^^^^^^^^^^^^^^^ no `ProvenanceRefV1` in the root
+  |     |                  |                  |
+  |     |                  |                  no `OperationEnvelopeV1` in the root
+  |     |                  no `OperationBudgetV1` in the root
+  |     no `DeclaredEffectsV1` in the root
+4 |     ReplayClassV1, ReplayIntentV1, ReplaySpecV1, RunSpecV1, StepSpecV1, ToolCallSpecV1,
+  |     ^^^^^^^^^^^^^  ^^^^^^^^^^^^^^  ^^^^^^^^^^^^ no `ReplaySpecV1` in the root
+  |     |              |
+  |     |              no `ReplayIntentV1` in the root
+  |     no `ReplayClassV1` in the root
+
+For more information about this error, try `rustc --explain E0432`.
+error: could not compile `recursive-agent-contracts` (test "phase2_operation_envelope") due to 1 previous error

@@ -1,0 +1,20 @@
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.05s
+     Running tests/canonical_containment.rs (target/debug/deps/canonical_containment-dbf0afc3870b7bd1)
+
+running 13 tests
+test implementation_contains_no_local_unsafe_or_landlock_claim ... ok
+test runner_private_dispatch_and_zero_timeout_fail_before_effect ... ok
+test missing_allow_path_fails_before_launcher ... ok
+test one_consumed_dispatch_is_not_replayed_on_second_run ... ok
+test fixed_printf_is_mandatorily_enforced_on_this_host ... ok
+test inherited_non_cloexec_descriptor_is_not_visible_to_payload ... ok
+test malicious_sibling_helper_is_never_consulted_by_production_execute ... ok
+test network_socket_creation_receives_eperm_under_enforcement ... ok
+test filesystem_and_network_attempts_are_denied_or_host_fails_closed ... ok
+test operation_root_identity_and_access_mode_change_policy_digest ... ok
+test undeclared_read_and_descendant_are_mandatorily_bounded ... ok
+test active_mount_source_replacement_never_exposes_attacker_bytes ... ok
+test descendants_output_and_signal_races_are_bounded_or_fail_closed ... ok
+
+test result: ok. 13 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 1.14s
+

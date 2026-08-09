@@ -1,0 +1,10 @@
+# Pytest config. The plugin directory name (``hermes-native``) is not a legal
+# Python module name, so pytest must not import the package root as a parent
+# package. ``import-mode = importlib`` lets pytest collect the test module
+# without requiring ``__init__.py`` ancestry, and the test loads the plugin via
+# importlib from its file path.
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+norecursedirs = ["hermes-native", "tests/__pycache__"]
+addopts = ["--import-mode=importlib"]
+pythonpath = ["."]

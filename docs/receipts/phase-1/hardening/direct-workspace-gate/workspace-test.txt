@@ -1,0 +1,49 @@
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.11s
+     Running unittests src/main.rs (target/debug/deps/ra-680ecf392a350943)
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+     Running unittests src/lib.rs (target/debug/deps/recursive_agent_contracts-656408755376ef3b)
+
+running 9 tests
+test tests::content_digest_matches_recursive_jcs ... ok
+test tests::current_id_deserialization_rejects_empty_arbitrary_uuid_and_wrong_domain ... ok
+test tests::current_ids_reject_uuid_and_wrong_family ... ok
+test tests::id_domains_do_not_collide ... ok
+test tests::legacy_reader_is_explicit ... ok
+test tests::jcs_canonical_is_stable_across_reordering ... ok
+test tests::lineage_full_chain_passes ... ok
+test tests::lineage_requires_request_then_effect ... ok
+test tests::terminal_outcomes_match_every_terminal_state ... ok
+
+test result: ok. 9 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+     Running unittests src/lib.rs (target/debug/deps/recursive_agent_daemon-484572921f79fe60)
+
+running 2 tests
+test tests::daemon_accepts_and_runs_echo_spec ... FAILED
+test tests::empty_connection_is_rejected ... FAILED
+
+failures:
+
+---- tests::daemon_accepts_and_runs_echo_spec stdout ----
+
+thread 'tests::daemon_accepts_and_runs_echo_spec' (140) panicked at crates/recursive-agent-daemon/src/lib.rs:119:61:
+connect: Os { code: 1, kind: PermissionDenied, message: "Operation not permitted" }
+
+---- tests::empty_connection_is_rejected stdout ----
+
+thread 'tests::empty_connection_is_rejected' (141) panicked at crates/recursive-agent-daemon/src/lib.rs:156:57:
+called `Result::unwrap()` on an `Err` value: Os { code: 1, kind: PermissionDenied, message: "Operation not permitted" }
+note: run with `RUST_BACKTRACE=1` environment variable to display a backtrace
+
+
+failures:
+    tests::daemon_accepts_and_runs_echo_spec
+    tests::empty_connection_is_rejected
+
+test result: FAILED. 0 passed; 2 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.10s
+
+error: test failed, to rerun pass `-p recursive-agent-daemon --lib`

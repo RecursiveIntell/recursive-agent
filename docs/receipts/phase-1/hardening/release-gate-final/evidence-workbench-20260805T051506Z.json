@@ -1,0 +1,70 @@
+{
+  "schema": "AgentEvidenceWorkbenchProofPacketV1",
+  "trace_id": "trace:evidence-workbench:36d1a09d0d754d94",
+  "created_at": "2026-08-05T05:15:06.753079+00:00",
+  "claim": "Recursive Agent Phase 1 hardening release gates pass; controller promotion remains separate",
+  "risk_class": "medium",
+  "disposition": "reject",
+  "evidence_refs": [
+    "sha256:01ba4719c80b6fe911b091a7c05124b64eeece964e09c058ef8f9805daca546b",
+    "sha256:b4af39a75f4105b567e97a87ec8d03d381537070ef6a9dccff33df9332bd6f11",
+    "sha256:4038463ba6b6f97fb2b28b911d17fa667da4f9d40110b10627529d1d204b8ac3",
+    "sha256:01ba4719c80b6fe911b091a7c05124b64eeece964e09c058ef8f9805daca546b"
+  ],
+  "commands": [
+    {
+      "command": "cargo fmt --all -- --check",
+      "cwd": "/home/sikmindz/Coding/recursive-agent",
+      "started_at": "2026-08-05T05:15:03.910430+00:00",
+      "finished_at": "2026-08-05T05:15:06.267439+00:00",
+      "exit_code": 0,
+      "timed_out": false,
+      "stdout_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "stderr_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "combined_sha256": "01ba4719c80b6fe911b091a7c05124b64eeece964e09c058ef8f9805daca546b",
+      "stdout_preview": "",
+      "stderr_preview": ""
+    },
+    {
+      "command": "cargo clippy --workspace --all-targets -- -D warnings",
+      "cwd": "/home/sikmindz/Coding/recursive-agent",
+      "started_at": "2026-08-05T05:15:06.267492+00:00",
+      "finished_at": "2026-08-05T05:15:06.462627+00:00",
+      "exit_code": 0,
+      "timed_out": false,
+      "stdout_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "stderr_sha256": "fecede7c2157efe2f16c8c8b9dce94b0fb4dd384dca8207046c8bf7636eb0ffe",
+      "combined_sha256": "b4af39a75f4105b567e97a87ec8d03d381537070ef6a9dccff33df9332bd6f11",
+      "stdout_preview": "",
+      "stderr_preview": "    Finished `dev` profile [unoptimized + debuginfo] target(s) in 0.14s\n"
+    },
+    {
+      "command": "cargo test --workspace --all-targets",
+      "cwd": "/home/sikmindz/Coding/recursive-agent",
+      "started_at": "2026-08-05T05:15:06.462671+00:00",
+      "finished_at": "2026-08-05T05:15:06.737034+00:00",
+      "exit_code": 101,
+      "timed_out": false,
+      "stdout_sha256": "4a941fda8db87e1c09bf5538ef0ac5151fc6cb5aa7e936a223936fa326189f16",
+      "stderr_sha256": "46e447a7bd82fae7f84a6ee56756864c6f7808132d0bac95f8a2bb3709c52e2f",
+      "combined_sha256": "4038463ba6b6f97fb2b28b911d17fa667da4f9d40110b10627529d1d204b8ac3",
+      "stdout_preview": "\nrunning 0 tests\n\ntest result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s\n\n\nrunning 9 tests\ntest tests::content_digest_matches_recursive_jcs ... ok\ntest tests::id_domains_do_not_collide ... ok\ntest tests::current_id_deserialization_rejects_empty_arbitrary_uuid_and_wrong_domain ... ok\ntest tests::jcs_canonical_is_stable_across_reordering ... ok\ntest tests::current_ids_reject_uuid_and_wrong_family ... ok\ntest tests::legacy_reader_is_explicit ... ok\ntest tests::terminal_outcomes_match_every_terminal_state ... ok\ntest tests::lineage_requires_request_then_effect ... ok\ntest tests::lineage_full_chain_passes ... ok\n\ntest result: ok. 9 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s\n\n\nrunning 2 tests\ntest tests::empty_connection_is_rejected ... FAILED\ntest tests::daemon_accepts_and_runs_echo_spec ... FAILED\n\nfailures:\n\n---- tests::empty_connection_is_rejected stdout ----\n\nthread 'tests::empty_connection_is_rejected' (195) panicked at crates/recursive-agent-daemon/src/lib.rs:156:57:\ncalled `Result::unwrap()` on an `Err` value: Os { code: 1, kind: PermissionDenied, message: \"Operation not permitted\" }\nnote: run with `RUST_BACKTRACE=1` environment variable to display a backtrace\n\n---- tests::daemon_accepts_and_runs_echo_spec stdout ----\n\nthread 'tests::daemon_accepts_and_runs_echo_spec' (194) panicked at crates/recursive-agent-daemon/src/lib.rs:119:61:\nconnect: Os { code: 1, kind: PermissionDenied, message: \"Operation not permitted\" }\n\n\nfailures:\n    tests::daemon_accepts_and_runs_echo_spec\n    tests::empty_connection_is_rejected\n\ntest result: FAILED. 0 passed; 2 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.10s\n\n",
+      "stderr_preview": "    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.14s\n     Running unittests src/main.rs (target/debug/deps/ra-680ecf392a350943)\n     Running unittests src/lib.rs (target/debug/deps/recursive_agent_contracts-656408755376ef3b)\n     Running unittests src/lib.rs (target/debug/deps/recursive_agent_daemon-484572921f79fe60)\nerror: test failed, to rerun pass `-p recursive-agent-daemon --lib`\n"
+    },
+    {
+      "command": "git diff --check",
+      "cwd": "/home/sikmindz/Coding/recursive-agent",
+      "started_at": "2026-08-05T05:15:06.737074+00:00",
+      "finished_at": "2026-08-05T05:15:06.752004+00:00",
+      "exit_code": 0,
+      "timed_out": false,
+      "stdout_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "stderr_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "combined_sha256": "01ba4719c80b6fe911b091a7c05124b64eeece964e09c058ef8f9805daca546b",
+      "stdout_preview": "",
+      "stderr_preview": ""
+    }
+  ],
+  "claim_boundary": "Command receipts prove the listed gates ran with the captured exit codes; they do not prove untested behavior.",
+  "proof_packet_sha256": "2207c86a7a37d56b9f98f35139514c9a598fdc843c5e4d5ec6165465e55e35df"
+}

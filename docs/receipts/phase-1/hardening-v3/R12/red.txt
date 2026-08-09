@@ -1,0 +1,5 @@
+Phase 1 hardening v3 RED evidence — R12 operator truth and skills
+Observed before production changes on 2026-08-05.
+Commands: sed -n '122,140p' crates/recursive-agent-cli/src/main.rs; sed -n '57,75p' crates/recursive-agent-skills/src/lib.rs
+Exit: 0
+Evidence: doctor claims Phase 3/provider/Landlock; SkillRegistry joins unvalidated name into root, checks path.exists, and reopens with read_to_string, permitting traversal, symlink following, and replacement races.

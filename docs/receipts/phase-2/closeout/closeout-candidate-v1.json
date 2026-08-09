@@ -1,0 +1,95 @@
+{
+  "schema": "recursive-agent.phase-closeout/v1",
+  "task_id": "phase-2-native-contracts-runtime-service",
+  "evidence_cutoff_utc": "2026-08-05T13:40:00Z",
+  "source_owner": "recursive-agent repository working tree",
+  "source_root": "/home/sikmindz/Coding/recursive-agent",
+  "branch": "main",
+  "retained_head": "3805f7abf319e07e47f1c20b862e614c3dad164f",
+  "source_generation": "e193c1238194e4aca58d31946d3b38a23f2255ee4f48e6e0312b5590bb2122ab",
+  "source_manifest": "docs/receipts/phase-2/closeout/source-manifest-v1.sha256",
+  "source_record_count": 76,
+  "scope": [
+    "OperationEnvelopeV1 and strict byte ingress",
+    "receipt-projected RuntimeEventV1 lifecycle",
+    "fail-closed RuntimeDependencies and canonical RuntimeService",
+    "actual non-shell dispatch through admitted llm-tool-runtime",
+    "runner-owned sandbox shell dispatch under consumed permit evidence",
+    "deprecated legacy RunSpec entrypoints quarantined through RuntimeService",
+    "real embedded /usr/bin/printf native vertical with strict verification"
+  ],
+  "non_goals": [
+    "native daemon IPC",
+    "Hermes plugin integration",
+    "durable scheduler or active cancellation",
+    "CLI migration off deprecated wrapper",
+    "MCP activation",
+    "deployment, installation, commit, or publication"
+  ],
+  "changed_paths": [
+    "Cargo.toml",
+    "Cargo.lock",
+    "crates/recursive-agent-contracts/src/operation.rs",
+    "crates/recursive-agent-contracts/src/event.rs",
+    "crates/recursive-agent-ledger/src/lib.rs",
+    "crates/recursive-agent-runner/src/deps.rs",
+    "crates/recursive-agent-runner/src/error.rs",
+    "crates/recursive-agent-runner/src/runtime.rs",
+    "crates/recursive-agent-runner/src/lib.rs",
+    "crates/recursive-agent-runner/src/sandbox_engine.rs",
+    "crates/recursive-agent-runner/tests/native_vertical.rs",
+    "crates/recursive-agent-runner/tests/phase2_runtime_service.rs",
+    "crates/recursive-agent-runner/tests/tool_runtime_boundary.rs",
+    "crates/recursive-agent-tools/src/lib.rs",
+    "Phase 2 contract, ledger, runner, and compatibility test fixtures"
+  ],
+  "controller": {
+    "path": "docs/receipts/phase-2/closeout/controller-v1.txt",
+    "sha256": "b1c09aa8bccc1395f128c6bddf5ae47ab9407334661e03fa29105f845d316884",
+    "gates": 8,
+    "aggregate_status": "GREEN"
+  },
+  "decisive_checks": [
+    {"command": "cargo fmt --all -- --check", "exit_code": 0, "state": "verified"},
+    {"command": "cargo test --workspace --all-targets --all-features", "exit_code": 0, "state": "verified"},
+    {"command": "cargo test --workspace --doc --all-features", "exit_code": 0, "state": "verified"},
+    {"command": "cargo clippy --workspace --all-targets --all-features -- -D warnings", "exit_code": 0, "state": "verified"},
+    {"command": "cargo test -p recursive-agent-runner --test tool_runtime_boundary -- --nocapture", "exit_code": 0, "state": "verified"},
+    {"command": "cargo test -p recursive-agent-runner --test native_vertical -- --nocapture --test-threads=1", "exit_code": 0, "state": "verified"},
+    {"command": "cargo test -p recursive-agent-runner --test native_vertical -- --nocapture", "exit_code": 0, "state": "verified"},
+    {"command": "git diff --check", "exit_code": 0, "state": "verified"},
+    {"command": "sha256sum -c docs/receipts/phase-2/closeout/source-manifest-v1.sha256", "exit_code": 0, "state": "verified"},
+    {"command": "cargo test --manifest-path /home/sikmindz/Coding/Libraries/llm-tool-runtime/Cargo.toml runtime_requires_execution_permit_for_write_tools -- --nocapture", "exit_code": 0, "state": "verified"}
+  ],
+  "artifacts": [
+    {"path": "docs/receipts/phase-2/task-2.5-native-vertical/green-native-vertical.txt", "sha256": "620feb5cc619815310643f78e705e123235f2e47038c99e2c47187103a6566fc", "state": "verified"},
+    {"path": "docs/receipts/phase-2/task-2.4-tool-runtime/green-owner-dispatch.txt", "sha256": "491657cfbbd48f4ad2f342972c2267375a1438c640f474d7273c673c322708f6", "state": "verified"},
+    {"path": "docs/receipts/phase-2/task-2.4-tool-runtime/green-missing-permit-denial.txt", "sha256": "2259f79ef0238b99a47585f1d4a646849da3868448c1dcd2c172aeebf3c5e24b", "state": "verified"},
+    {"path": "docs/receipts/phase-2/closeout/controller-v1.txt", "sha256": "b1c09aa8bccc1395f128c6bddf5ae47ab9407334661e03fa29105f845d316884", "state": "verified"},
+    {"path": "docs/receipts/phase-2/closeout/source-manifest-v1.sha256", "sha256": "e193c1238194e4aca58d31946d3b38a23f2255ee4f48e6e0312b5590bb2122ab", "state": "verified"}
+  ],
+  "evidence_claims": [
+    {"claim": "The embedded native runtime completes and strictly verifies one bounded local action.", "state": "verified"},
+    {"claim": "Non-shell native submission dispatches through the admitted llm-tool-runtime owner.", "state": "verified"},
+    {"claim": "Production direct tool dispatch is quarantined to a named deprecated RuntimeService compatibility path.", "state": "verified"},
+    {"claim": "Hermes or daemon integration works end to end.", "state": "blocked/unknown"}
+  ],
+  "failed_checks": [],
+  "skipped_checks": [
+    {"check": "Phase 11 fuzz execution", "reason": "outside Phase 2; cargo-fuzz remains unavailable"},
+    {"check": "active cancellation", "reason": "intentionally deferred to durable scheduler in Phase 5"}
+  ],
+  "unresolved_delta": [
+    "Independent hostile Phase 2 verdict is pending.",
+    "Deprecated CLI and test wrappers remain until Phase 6 migration.",
+    "No daemon IPC, Hermes integration, durable scheduler, or remote admission exists yet."
+  ],
+  "rollback": [
+    "Revert Phase 2 source changes as a unit while preserving docs/receipts/phase-2 as historical evidence.",
+    "Do not reuse the Phase 2 source generation after any source edit; mint a new manifest and controller.",
+    "If hostile review rejects, quarantine this candidate receipt and repair under a new source generation."
+  ],
+  "next_gate": "Independent hostile Phase 2 admission; only ADMIT/YES permits Phase 3 source edits.",
+  "required_authority": "No external authority required for read-only audit or local source edits; deployment and live integration remain separately approval-gated.",
+  "complete": false
+}

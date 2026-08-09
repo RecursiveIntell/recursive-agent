@@ -1,0 +1,16 @@
+Unable to open session log file "/home/sikmindz/.cache/starship/session_4273227201517879.log": Os { code: 30, kind: ReadOnlyFilesystem, message: "Read-only file system" }!
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.04s
+     Running tests/artifact_tamper.rs (target/debug/deps/artifact_tamper-324ef1598adca94e)
+
+running 8 tests
+test malformed_owner_descriptor_is_rejected ... ok
+test descriptor_length_media_type_and_digest_are_bound ... ok
+test partial_artifact_and_descriptor_metadata_are_rejected ... ok
+test artifact_directory_replacement_does_not_redirect_pinned_store ... ok
+test concurrently_growing_artifact_and_metadata_reads_remain_bounded ... ok
+test symlink_fifo_directory_and_sparse_file_are_rejected_without_hanging ... ok
+test active_replacement_never_returns_unverified_bytes ... ok
+test strict_verify_rejects_missing_truncated_replaced_and_wrong_digest ... ok
+
+test result: ok. 8 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.06s
+

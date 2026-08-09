@@ -1,0 +1,10 @@
+Finding: R5 — stable ledger lock and direct recovery
+Captured before production-surface modification: 2026-08-05
+Command:
+  rg -n '\.ledger\.lock|open_lock|reconcile|pub fn verify\(' crates/recursive-agent-ledger/src/lib.rs
+  fail if the replaceable named lock entry remains serialization authority
+Exit: 1 (expected RED)
+Observed:
+  261 opened `.ledger.lock` by name.
+  481 exposed direct verify without a shared named reconciliation entrypoint.
+

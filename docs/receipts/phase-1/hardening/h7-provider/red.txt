@@ -1,0 +1,11 @@
+RED captured before production changes.
+Command: rg -n 'struct CredentialRef|derive\(.*Deserialize|credential_ref: String|trim_trailing_slash|url::|Url::' crates/recursive-agent-provider/src/lib.rs
+Exit: 0 (permissive secret-bearing ingress/error paths matched; URL parser absent)
+Observed:
+10:#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+12:pub struct CredentialRef(String);
+132:    MissingCredential { credential_ref: String },
+134:    UnsupportedCredentialReference { credential_ref: String },
+136:    InvalidCredential { credential_ref: String },
+329:fn trim_trailing_slash(value: &str) -> Result<String, ProviderError> {
+Credential references accepted arbitrary nonempty strings, errors retained them, and URLs were string-trimmed instead of parsed.

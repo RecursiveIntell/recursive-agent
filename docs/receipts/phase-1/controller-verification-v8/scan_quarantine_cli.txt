@@ -1,0 +1,2 @@
+109:        "available bounded effect: shell (runner-private one-shot dispatch, Bubblewrap + seccomp network EPERM)\n",
+184:        assert!(report.contains("runner-private one-shot dispatch"));

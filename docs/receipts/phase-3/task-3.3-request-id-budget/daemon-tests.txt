@@ -1,0 +1,31 @@
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.07s
+     Running unittests src/lib.rs (target/debug/deps/recursive_agent_daemon-d3f2bb9cf70e8a99)
+
+running 3 tests
+test tests::shared_decoder_rejects_duplicates_and_unknown_fields ... ok
+test tests::shared_decoder_accepts_valid_pure_shape ... ok
+test tests::shared_decoder_preserves_semantic_limit_classes ... ok
+
+test result: ok. 3 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+     Running tests/framing.rs (target/debug/deps/framing-33b9bfb60408ef9c)
+
+running 5 tests
+test exact_frame_returns_only_the_borrowed_payload ... ok
+test oversized_declared_length_is_rejected_from_prefix_alone ... ok
+test partial_prefix_requires_more_without_payload_allocation ... ok
+test trailing_bytes_after_exact_frame_are_rejected ... ok
+test truncated_payload_reports_declared_and_received_lengths ... ok
+
+test result: ok. 5 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+     Running tests/protocol.rs (target/debug/deps/protocol-fb574506d50072e0)
+
+running 4 tests
+test duplicate_keys_in_original_wire_bytes_are_rejected ... ok
+test duplicate_request_ids_are_rejected_per_connection ... ok
+test unsupported_protocol_version_is_typed_and_pre_effect ... ok
+test request_id_registry_has_a_hard_connection_budget ... ok
+
+test result: ok. 4 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.01s
+

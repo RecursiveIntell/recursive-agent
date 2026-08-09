@@ -1,0 +1,5 @@
+Phase 1 hardening v3 RED evidence — R11 lint inheritance
+Observed before production changes on 2026-08-05.
+Command: for f in crates/*/Cargo.toml; do rg -q '^\[lints\]' "$f" || echo "$f"; done
+Exit: 0
+Evidence: recursive-agent-daemon, recursive-agent-mcp, recursive-agent-mcts, and recursive-agent-skills omit [lints] workspace = true. No mechanical workspace manifest audit exists.

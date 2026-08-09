@@ -1,0 +1,15 @@
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.10s
+     Running tests/hardening_v5_ingress.rs (target/debug/deps/hardening_v5_ingress-d020e7616cfdd9d9)
+
+running 8 tests
+test recursive_duplicate_keys_reject_before_run_creation ... ok
+test rejected_input_never_reaches_shell_dispatch ... ok
+test excess_steps_reject_before_identity_or_dispatch ... ok
+test unknown_fields_reject_before_run_creation ... ok
+test fifo_device_and_symlink_inputs_are_rejected_without_blocking ... ok
+test oversized_whitespace_and_aggregate_material_reject_at_transport_boundary ... ok
+test hostile_launcher_environment_cannot_execute_before_sandbox ... ok
+test valid_multi_step_sibling_keys_decode_and_execute ... ok
+
+test result: ok. 8 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.17s
+

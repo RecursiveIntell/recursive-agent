@@ -1,0 +1,7 @@
+17:    make_receipt, open_from_dir_fd, put_string, ArtifactStore, ChainHandle, LedgerError,
+313:    let mut chain = open_from_dir_fd(&paths, &pinned_root.root)?;
+319:    let permit_store = DurablePermitStore::from_run_root_fd(&pinned_root.root)?;
+475:    let snapshot = recursive_agent_ledger::verified_snapshot_expected_run_from_dir_fd(
+1194:        let snapshot = recursive_agent_ledger::verified_snapshot_expected_run_from_dir_fd(
+1204:        let chain = open_from_dir_fd(&paths, &retained_root)?;
+1206:        let permits = DurablePermitStore::from_run_root_fd(&retained_root)?;

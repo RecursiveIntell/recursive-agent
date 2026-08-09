@@ -1,0 +1,1 @@
+{"name":"r3-red-false","policy_version":"m0-2","steps":[{"name":"false","call":{"tool":"shell","args":{"command":"/usr/bin/false","args":[],"allowed_read_paths":[],"allowed_write_paths":[],"allow_network":false,"timeout_ms":2000,"max_output_bytes":1024}}}]}

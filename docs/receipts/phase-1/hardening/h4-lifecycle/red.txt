@@ -1,0 +1,9 @@
+RED captured before production changes.
+Command: rg -n 'terminal_state_from_log|\.lines\(\)|\.last\(\)|ReceiptKindV1::RunFinalized|validate.*transition' crates/recursive-agent-runner/src/lib.rs crates/recursive-agent-ledger/src/lib.rs
+Exit: 0 (last-receipt trust path matched; no ledger transition validator matched)
+Observed:
+crates/recursive-agent-runner/src/lib.rs:86:        let terminal_state = terminal_state_from_log(&paths)?;
+crates/recursive-agent-runner/src/lib.rs:353:fn terminal_state_from_log(paths: &RunPaths) -> Result<RunTerminalStateV1, RunError> {
+crates/recursive-agent-runner/src/lib.rs:356:        .lines()
+crates/recursive-agent-runner/src/lib.rs:357:        .last()
+Offline verification did not enforce run lifecycle semantics.

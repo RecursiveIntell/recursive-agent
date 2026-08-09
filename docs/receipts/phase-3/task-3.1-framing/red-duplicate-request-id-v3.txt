@@ -1,0 +1,20 @@
+Recursive Agent Phase 3 Task 3.1 protocol RED v3
+Recorded UTC: 2026-08-05T14:26:05.777039+00:00
+$ cargo test -p recursive-agent-daemon --test protocol duplicate_request_ids_are_rejected_per_connection -- --nocapture
+exit_code=101
+Compiling recursive-agent-daemon v0.1.0 (/home/sikmindz/Coding/recursive-agent/crates/recursive-agent-daemon)
+error[E0432]: unresolved import `recursive_agent_daemon::ConnectionRequestIds`
+ --> crates/recursive-agent-daemon/tests/protocol.rs:2:27
+  |
+2 |     decode_request_frame, ConnectionRequestIds, IpcDecodeError, IPC_PROTOCOL_VERSION_V1,
+  |                           ^^^^^^^^^^^^^^^^^^^^ no `ConnectionRequestIds` in the root
+
+error[E0599]: no variant named `DuplicateRequestId` found for enum `IpcDecodeError`
+  --> crates/recursive-agent-daemon/tests/protocol.rs:60:29
+   |
+60 |         Err(IpcDecodeError::DuplicateRequestId {
+   |                             ^^^^^^^^^^^^^^^^^^ variant not found in `IpcDecodeError`
+
+Some errors have detailed explanations: E0432, E0599.
+For more information about an error, try `rustc --explain E0432`.
+error: could not compile `recursive-agent-daemon` (test "protocol") due to 2 previous errors

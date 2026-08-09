@@ -1,0 +1,3 @@
+Unable to open session log file "/home/sikmindz/.cache/starship/session_1119589263088888.log": Os { code: 30, kind: ReadOnlyFilesystem, message: "Read-only file system" }!
+125:        "available bounded effect: shell (runner-private one-shot dispatch, Bubblewrap + seccomp network EPERM)\n",
+200:        assert!(report.contains("runner-private one-shot dispatch"));

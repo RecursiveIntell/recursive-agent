@@ -1,0 +1,31 @@
+[package]
+name = "recursive-agent-daemon"
+version = "0.1.0"
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+authors.workspace = true
+publish = false
+
+[dependencies]
+serde.workspace = true
+serde_json.workspace = true
+thiserror.workspace = true
+chrono.workspace = true
+clap = { workspace = true }
+async-trait = "0.1"
+recursive-agent-contracts = { path = "../recursive-agent-contracts" }
+recursive-agent-runner = { path = "../recursive-agent-runner" }
+recursive-agent-ledger = { path = "../recursive-agent-ledger" }
+recursive-agent-tools = { path = "../recursive-agent-tools" }
+llm-tool-runtime = { workspace = true }
+rustix = { workspace = true, features = ["fs", "process"] }
+nix = { version = "0.30.1", features = ["socket"] }
+
+[dev-dependencies]
+tempfile = "3"
+async-trait = "0.1"
+recursive-agent-policy = { path = "../recursive-agent-policy" }
+
+[lints]
+workspace = true

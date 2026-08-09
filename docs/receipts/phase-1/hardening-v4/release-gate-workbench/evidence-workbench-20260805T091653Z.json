@@ -1,0 +1,56 @@
+{
+  "schema": "AgentEvidenceWorkbenchProofPacketV1",
+  "trace_id": "trace:evidence-workbench:495cca2803d24e02",
+  "created_at": "2026-08-05T09:16:53.007615+00:00",
+  "claim": "Phase 1 hardening-v4 candidate gate commands pass; controller hostile admission remains required",
+  "risk_class": "medium",
+  "disposition": "promote",
+  "evidence_refs": [
+    "sha256:01ba4719c80b6fe911b091a7c05124b64eeece964e09c058ef8f9805daca546b",
+    "sha256:e576805fa07d48957770748ede313f98fde851f3ac02831ba93cd4e16bfa38b8",
+    "sha256:d6e18101f10407691288cef5f5599dc3e28aeac657d423ae77ea92ab61113031"
+  ],
+  "commands": [
+    {
+      "command": "cargo fmt --all -- --check",
+      "cwd": "/home/sikmindz/Coding/recursive-agent",
+      "started_at": "2026-08-05T09:16:47.377244+00:00",
+      "finished_at": "2026-08-05T09:16:49.260488+00:00",
+      "exit_code": 0,
+      "timed_out": false,
+      "stdout_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "stderr_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "combined_sha256": "01ba4719c80b6fe911b091a7c05124b64eeece964e09c058ef8f9805daca546b",
+      "stdout_preview": "",
+      "stderr_preview": ""
+    },
+    {
+      "command": "cargo clippy --workspace --all-targets -- -D warnings",
+      "cwd": "/home/sikmindz/Coding/recursive-agent",
+      "started_at": "2026-08-05T09:16:49.260538+00:00",
+      "finished_at": "2026-08-05T09:16:49.396935+00:00",
+      "exit_code": 0,
+      "timed_out": false,
+      "stdout_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "stderr_sha256": "a5f4c585ee974ca44916ac30a98bbc189e067a7e0a6bc6d2e8d6bc525be724af",
+      "combined_sha256": "e576805fa07d48957770748ede313f98fde851f3ac02831ba93cd4e16bfa38b8",
+      "stdout_preview": "",
+      "stderr_preview": "    Finished `dev` profile [unoptimized + debuginfo] target(s) in 0.09s\n"
+    },
+    {
+      "command": "cargo test --workspace --all-targets",
+      "cwd": "/home/sikmindz/Coding/recursive-agent",
+      "started_at": "2026-08-05T09:16:49.396970+00:00",
+      "finished_at": "2026-08-05T09:16:53.006466+00:00",
+      "exit_code": 0,
+      "timed_out": false,
+      "stdout_sha256": "210df2e6659accfdaca973b7c9231a870c41c3f5247ad1ef939dd5fa1b44f59e",
+      "stderr_sha256": "1008cdf521e133eafc9e4d15ff981c0070d7ae69b9e50ff6f01522ab52f6a881",
+      "combined_sha256": "d6e18101f10407691288cef5f5599dc3e28aeac657d423ae77ea92ab61113031",
+      "stdout_preview": "e_payload_dispatch ... ok\ntest pinned_root_tests::symlink_replacement_before_authorization_dispatches_nothing ... ok\ntest pinned_root_tests::directory_replacement_before_authorization_dispatches_nothing ... ok\ntest pinned_root_tests::replacement_after_dispatch_preserves_one_inode_but_cannot_report_success ... ok\n\ntest result: ok. 5 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.07s\n\n\nrunning 13 tests\ntest implementation_contains_no_local_unsafe_or_landlock_claim ... ok\ntest runner_private_dispatch_and_zero_timeout_fail_before_effect ... ok\ntest malicious_sibling_helper_is_never_consulted_by_production_execute ... ok\ntest missing_allow_path_fails_before_launcher ... ok\ntest one_consumed_dispatch_is_not_replayed_on_second_run ... ok\ntest inherited_non_cloexec_descriptor_is_not_visible_to_payload ... ok\ntest fixed_printf_is_mandatorily_enforced_on_this_host ... ok\ntest network_socket_creation_receives_eperm_under_enforcement ... ok\ntest filesystem_and_network_attempts_are_denied_or_host_fails_closed ... ok\ntest operation_root_identity_and_access_mode_change_policy_digest ... ok\ntest undeclared_read_and_descendant_are_mandatorily_bounded ... ok\ntest active_mount_source_replacement_never_exposes_attacker_bytes ... ok\ntest descendants_output_and_signal_races_are_bounded_or_fail_closed ... ok\n\ntest result: ok. 13 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 1.13s\n\n\nrunning 6 tests\ntest process_identity_probe ... ok\ntest every_semantic_receipt_field_changes_identity ... ok\ntest production_identity_paths_do_not_invoke_uuid_random_or_time ... ok\ntest ids_are_stable_across_processes ... ok\ntest changed_material_changes_id ... ok\ntest runner_clock_owns_lease_time_while_permit_identity_excludes_live_issue_time ... ok\n\ntest result: ok. 6 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.09s\n\n\nrunning 4 tests\ntest network_true_and_wrong_policy_version_fail_before_process_dispatch ... ok\ntest verified_replay_snapshot_is_immutable_bounded_and_directory_bound ... ok\ntest advancing_and_rollback_clocks_prevent_affected_dispatch ... ok\ntest false_signal_stdout_stderr_and_timeout_never_complete_successfully ... ok\n\ntest result: ok. 4 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.38s\n\n\nrunning 2 tests\ntest terminal_matrix_rejects_success_for_every_non_success_terminal ... ok\ntest failed_step_dominates_run_terminal_state ... ok\n\ntest result: ok. 2 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.04s\n\n\nrunning 1 test\ntest every_rejected_lease_keeps_dispatch_counter_zero ... ok\n\ntest result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.01s\n\n\nrunning 1 test\ntest tests::plan_validation_is_pure_and_fail_closed ... ok\n\ntest result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s\n\n\nrunning 1 test\ntest downstream_public_api_is_plan_only ... ok\n\ntest result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s\n\n\nrunning 5 tests\ntest tests::traversal_absolute_and_symlink_ids_are_rejected ... ok\ntest tests::load_skill_from_file ... ok\ntest tests::expand_substitutes_params ... ok\ntest tests::missing_required_param_fails ... ok\ntest tests::active_manifest_replacement_never_returns_attacker_bytes ... ok\n\ntest result: ok. 5 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.02s\n\n\nrunning 8 tests\ntest tests::invalid_provider_endpoint_is_rejected_in_tool_args_before_state_exists ... ok\ntest tests::output_budget_is_actually_enforced ... ok\ntest tests::time_now_requires_frozen_clock ... ok\ntest tests::llm_rejects_malformed_args_without_network ... ok\ntest tests::echo_returns_text ... ok\ntest tests::time_now_returns_frozen_timestamp ... ok\ntest tests::unknown_tool_errors ... ok\ntest tests::pure_tool_surface_has_no_wall_clock_or_effect_dispatch ... ok\n\ntest result: ok. 8 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s\n\n",
+      "stderr_preview": "    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.09s\n     Running unittests src/main.rs (target/debug/deps/ra-7229a462aba6d1be)\n     Running tests/direct_crash_verify.rs (target/debug/deps/direct_crash_verify-b051a86bb71d9c52)\n     Running tests/terminal_exit.rs (target/debug/deps/terminal_exit-99cfe6185bceb3ad)\n     Running unittests src/lib.rs (target/debug/deps/recursive_agent_contracts-49336c4a97b218e1)\n     Running tests/phase1_effect_surface.rs (target/debug/deps/phase1_effect_surface-e7177cf6fde320fd)\n     Running tests/workspace_lints.rs (target/debug/deps/workspace_lints-390820135b301ab8)\n     Running unittests src/lib.rs (target/debug/deps/recursive_agent_daemon-619d1c6072edbf5e)\n     Running unittests src/lib.rs (target/debug/deps/recursive_agent_ledger-0b616cf2f690e61d)\n     Running tests/artifact_tamper.rs (target/debug/deps/artifact_tamper-2c6bee8fee23651c)\n     Running tests/crash_recovery.rs (target/debug/deps/crash_recovery-0a409fb6bd8de863)\nError: ChainDivergence { index: 1, reason: \"append predecessor does not match locked current head\" }\n     Running tests/lifecycle_validation.rs (target/debug/deps/lifecycle_validation-25e4656623496ac6)\n     Running unittests src/lib.rs (target/debug/deps/recursive_agent_mcp-c447322e91ec524c)\n     Running unittests src/lib.rs (target/debug/deps/recursive_agent_mcts-958b78c8983fb5ae)\n     Running unittests src/lib.rs (target/debug/deps/recursive_agent_memory-5dc2057faa524b3b)\n     Running unittests src/lib.rs (target/debug/deps/recursive_agent_policy-9eddc4d37d3f34fc)\n     Running tests/permit_lifecycle.rs (target/debug/deps/permit_lifecycle-20f7eddfc34d1e10)\n     Running unittests src/lib.rs (target/debug/deps/recursive_agent_provider-be0e7199c7389d87)\n     Running tests/secret_contract.rs (target/debug/deps/secret_contract-b00dc297bae55386)\n     Running unittests src/lib.rs (target/debug/deps/recursive_agent_runner-a2eadbbf4c46c5ab)\n     Running tests/canonical_containment.rs (target/debug/deps/canonical_containment-1406462725f442fb)\n     Running tests/deterministic_identity.rs (target/debug/deps/deterministic_identity-05494a6c61b750a3)\n     Running tests/hardening_v3.rs (target/debug/deps/hardening_v3-5c7e21abec211fd9)\n     Running tests/lifecycle_state_machine.rs (target/debug/deps/lifecycle_state_machine-dd1d05b09077b78b)\n     Running tests/permit_dispatch.rs (target/debug/deps/permit_dispatch-0f60bfbbda24ec6a)\n     Running unittests src/lib.rs (target/debug/deps/recursive_agent_sandbox-0ad3b8a735c49388)\n     Running tests/public_surface.rs (target/debug/deps/public_surface-062fe46a8c5aa462)\n     Running unittests src/lib.rs (target/debug/deps/recursive_agent_skills-99a00fd848141abf)\n     Running unittests src/lib.rs (target/debug/deps/recursive_agent_tools-83455465a4ae0319)\n"
+    }
+  ],
+  "claim_boundary": "Command receipts prove the listed gates ran with the captured exit codes; they do not prove untested behavior.",
+  "proof_packet_sha256": "bb8f8c3d3a3759bef3c6b3abc496dd3b76fae9d161bf34efd28043d4c3b6ab1d"
+}

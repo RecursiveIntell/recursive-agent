@@ -1,0 +1,68 @@
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.05s
+     Running unittests src/lib.rs (target/debug/deps/recursive_agent_runner-8bf75aa64794c840)
+
+running 5 tests
+test sandbox_engine::tests::payload_marker_suffix_cannot_satisfy_setup_proof ... ok
+test sandbox_engine::tests::fake_launcher_is_rejected_before_payload_dispatch ... ok
+test pinned_root_tests::symlink_replacement_before_authorization_dispatches_nothing ... ok
+test pinned_root_tests::directory_replacement_before_authorization_dispatches_nothing ... ok
+test pinned_root_tests::replacement_after_dispatch_preserves_one_inode_but_cannot_report_success ... ok
+
+test result: ok. 5 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.07s
+
+     Running tests/canonical_containment.rs (target/debug/deps/canonical_containment-dbf0afc3870b7bd1)
+
+running 13 tests
+test implementation_contains_no_local_unsafe_or_landlock_claim ... ok
+test runner_private_dispatch_and_zero_timeout_fail_before_effect ... ok
+test missing_allow_path_fails_before_launcher ... ok
+test malicious_sibling_helper_is_never_consulted_by_production_execute ... ok
+test one_consumed_dispatch_is_not_replayed_on_second_run ... ok
+test inherited_non_cloexec_descriptor_is_not_visible_to_payload ... ok
+test fixed_printf_is_mandatorily_enforced_on_this_host ... ok
+test network_socket_creation_receives_eperm_under_enforcement ... ok
+test filesystem_and_network_attempts_are_denied_or_host_fails_closed ... ok
+test undeclared_read_and_descendant_are_mandatorily_bounded ... ok
+test operation_root_identity_and_access_mode_change_policy_digest ... ok
+test active_mount_source_replacement_never_exposes_attacker_bytes ... ok
+test descendants_output_and_signal_races_are_bounded_or_fail_closed ... ok
+
+test result: ok. 13 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 1.08s
+
+     Running tests/deterministic_identity.rs (target/debug/deps/deterministic_identity-6e6b6f26f066ce83)
+
+running 6 tests
+test process_identity_probe ... ok
+test every_semantic_receipt_field_changes_identity ... ok
+test production_identity_paths_do_not_invoke_uuid_random_or_time ... ok
+test ids_are_stable_across_processes ... ok
+test changed_material_changes_id ... ok
+test runner_clock_owns_lease_time_while_permit_identity_excludes_live_issue_time ... ok
+
+test result: ok. 6 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.09s
+
+     Running tests/hardening_v3.rs (target/debug/deps/hardening_v3-8b8a0481f31b549f)
+
+running 4 tests
+test network_true_and_wrong_policy_version_fail_before_process_dispatch ... ok
+test verified_replay_snapshot_is_immutable_bounded_and_directory_bound ... ok
+test advancing_and_rollback_clocks_prevent_affected_dispatch ... ok
+test false_signal_stdout_stderr_and_timeout_never_complete_successfully ... ok
+
+test result: ok. 4 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.38s
+
+     Running tests/lifecycle_state_machine.rs (target/debug/deps/lifecycle_state_machine-488b228f2387c764)
+
+running 2 tests
+test terminal_matrix_rejects_success_for_every_non_success_terminal ... ok
+test failed_step_dominates_run_terminal_state ... ok
+
+test result: ok. 2 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.04s
+
+     Running tests/permit_dispatch.rs (target/debug/deps/permit_dispatch-e772c91fe7155069)
+
+running 1 test
+test every_rejected_lease_keeps_dispatch_counter_zero ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.01s
+

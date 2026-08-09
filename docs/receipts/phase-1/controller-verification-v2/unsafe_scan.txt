@@ -1,0 +1,4 @@
+$ if rg -n '#!\[allow\(unsafe_code\)\]|unsafe[[:space:]]*\{' crates --glob '*.rs' --glob '!**/tests/**' --glob '!**/target/**'; then exit 1; else exit 0; fi
+exit=0
+
+

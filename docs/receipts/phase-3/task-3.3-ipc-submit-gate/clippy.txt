@@ -1,0 +1,4 @@
+    Checking recursive-agent-contracts v0.1.0 (/home/sikmindz/Coding/recursive-agent/crates/recursive-agent-contracts)
+    Checking recursive-agent-runner v0.1.0 (/home/sikmindz/Coding/recursive-agent/crates/recursive-agent-runner)
+    Checking recursive-agent-cli v0.1.0 (/home/sikmindz/Coding/recursive-agent/crates/recursive-agent-cli)
+    Finished `dev` profile [unoptimized + debuginfo] target(s) in 0.79s

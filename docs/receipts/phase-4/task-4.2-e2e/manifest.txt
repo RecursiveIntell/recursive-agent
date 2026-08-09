@@ -1,0 +1,6 @@
+date: 2026-08-05T23:52:41-05:00
+git_head: 3805f7abf319e07e47f1c20b862e614c3dad164f
+python: Python 3.14.6
+rustc: rustc 1.97.1 (8bab26f4f 2026-07-14)
+python_tests=0
+workspace=0

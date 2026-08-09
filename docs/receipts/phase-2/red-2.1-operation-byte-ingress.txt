@@ -1,0 +1,15 @@
+$ cargo test -p recursive-agent-contracts --test phase2_operation_envelope operation_byte_ingress_rejects_hostile_vectors_before_admission -- --nocapture
+exit_code: 101
+
+Compiling recursive-agent-contracts v0.1.0 (/home/sikmindz/Coding/recursive-agent/crates/recursive-agent-contracts)
+error[E0432]: unresolved imports `recursive_agent_contracts::parse_operation_envelope_bytes`, `recursive_agent_contracts::OperationIngressError`
+ --> crates/recursive-agent-contracts/tests/phase2_operation_envelope.rs:2:42
+  |
+2 |     content_digest, derive_operation_id, parse_operation_envelope_bytes, ActorAuthorityV1,
+  |                                          ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ no `parse_operation_envelope_bytes` in the root
+3 |     AuthorityOriginV1, CausalLinkV1, ContentDigest, DeclaredEffectsV1, OperationBudgetV1,
+4 |     OperationEnvelopeV1, OperationIngressError, OperationSchemaV1, ProvenanceRefV1, ReplayClassV1,
+  |                          ^^^^^^^^^^^^^^^^^^^^^ no `OperationIngressError` in the root
+
+For more information about this error, try `rustc --explain E0432`.
+error: could not compile `recursive-agent-contracts` (test "phase2_operation_envelope") due to 1 previous error

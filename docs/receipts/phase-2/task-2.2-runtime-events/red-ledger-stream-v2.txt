@@ -1,0 +1,17 @@
+$ rustfmt --edition 2021 crates/recursive-agent-ledger/tests/lifecycle_validation.rs
+exit_code: 0
+
+
+
+$ cargo test -p recursive-agent-ledger --test lifecycle_validation concurrent_readers_observe_only_committed_causal_event_prefixes -- --nocapture
+exit_code: 101
+
+Compiling recursive-agent-ledger v0.1.0 (/home/sikmindz/Coding/recursive-agent/crates/recursive-agent-ledger)
+error[E0432]: unresolved import `recursive_agent_ledger::committed_events_directory_bound`
+ --> crates/recursive-agent-ledger/tests/lifecycle_validation.rs:8:28
+  |
+8 |     chain_digest_from_raw, committed_events_directory_bound, make_receipt, open,
+  |                            ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ no `committed_events_directory_bound` in the root
+
+For more information about this error, try `rustc --explain E0432`.
+error: could not compile `recursive-agent-ledger` (test "lifecycle_validation") due to 1 previous error

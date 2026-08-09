@@ -1,0 +1,11 @@
+Finding: R6 — complete material identity boundary
+Captured before production-surface modification: 2026-08-05
+Command:
+  scan memory/contracts/policy/tools for wall-clock memory IDs, generic ID constructors, and enabled memory_put
+Exit: 1 (expected RED)
+Observed:
+  memory emitted `mem:<timestamp>`.
+  derive_step_id accepted `&str`.
+  derive_permit_id accepted arbitrary `T: Serialize`.
+  memory_put remained in the default policy and tool dispatch.
+

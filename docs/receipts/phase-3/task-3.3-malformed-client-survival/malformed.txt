@@ -1,0 +1,11 @@
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.05s
+     Running tests/ipc_runtime.rs (target/debug/deps/ipc_runtime-751e57a308c4b6e2)
+
+running 1 test
+connection error: frame: Malformed
+connection error: io: failed to fill whole buffer
+connection error: frame: Frame(DeclaredLengthTooLarge { declared: 4294967295, max: 1114112 })
+test daemon_survives_malformed_and_oversized_clients ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 3 filtered out; finished in 0.06s
+

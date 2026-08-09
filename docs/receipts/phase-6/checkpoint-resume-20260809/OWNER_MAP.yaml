@@ -1,0 +1,5 @@
+schema: OwnerMapV1
+version: 1
+source_root: /home/sikmindz/Coding/recursive-agent
+owners: []
+# BLOCKED: review and populate before implementation.

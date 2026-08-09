@@ -1,0 +1,9 @@
+RED captured before production changes.
+Command: rg -n 'predecessor\.hex|write_all\(&bytes\)|write_all\(b"\\n"\)|chain\.meta\.tmp|lock' crates/recursive-agent-ledger/src/lib.rs
+Exit: 0 (hostile patterns matched)
+Observed:
+94:    hasher.update(predecessor.hex().as_bytes());
+254:        .join(format!(".chain.meta.tmp.{}", std::process::id()));
+327:        log.write_all(&bytes)?;
+328:        log.write_all(b"\n")?;
+The chain used predecessor hex bytes, split record/newline writes, a process-colliding temp name, and no append lock.

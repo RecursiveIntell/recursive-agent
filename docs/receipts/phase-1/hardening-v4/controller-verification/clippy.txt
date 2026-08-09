@@ -1,0 +1,5 @@
+Unable to open session log file "/home/sikmindz/.cache/starship/session_5290305661005452.log": Os { code: 30, kind: ReadOnlyFilesystem, message: "Read-only file system" }!
+    Checking recursive-agent-runner v0.1.0 (/home/sikmindz/Coding/recursive-agent/crates/recursive-agent-runner)
+    Checking recursive-agent-cli v0.1.0 (/home/sikmindz/Coding/recursive-agent/crates/recursive-agent-cli)
+    Checking recursive-agent-daemon v0.1.0 (/home/sikmindz/Coding/recursive-agent/crates/recursive-agent-daemon)
+    Finished `dev` profile [unoptimized + debuginfo] target(s) in 0.68s

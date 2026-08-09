@@ -1,0 +1,24 @@
+R3 RED evidence captured before the R3 CLI/daemon fix.
+Captured: 2026-08-05 (America/Chicago)
+Repository: /home/sikmindz/Coding/recursive-agent
+
+Fixture:
+docs/receipts/phase-1/hardening-v4/R3/red-false-spec.json
+The sole shell step executes /usr/bin/false through the canonical runner.
+
+Command:
+cargo run -q -p recursive-agent-cli -- run --spec docs/receipts/phase-1/hardening-v4/R3/red-false-spec.json --out /tmp/recursive-agent-r3-red
+
+Exit: 0
+Stdout:
+run_id: v1:recursive-agent/run/v1:det:1f4d46ddfa297c2b866d8d7ab0747901185c140eb20d592df2fba101f9a01de8
+run_dir: /tmp/recursive-agent-r3-red/fffd1a20c24b0dc6001f57915113e895628c54e20a9bcde03c106cbdbd109c62
+chain_length: 9
+chain_head: e4974e6e3f7dd52d7757d532d819c128ffda89b811aa8c9deeae68fe6338a1c2
+
+RED conclusion:
+The real CLI returned process success for a strictly recorded failed operation and
+omitted terminal_state from its output. Static inspection also showed that the daemon
+response contains run_id/run_dir/head/length but no transport_ok, terminal_state, or
+typed operation error, while the active CLI exposes both Serve and McpServe commands
+before their admission phases.

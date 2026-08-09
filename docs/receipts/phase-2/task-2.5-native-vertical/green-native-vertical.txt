@@ -1,0 +1,1274 @@
+Recursive Agent Phase 2 / Task 2.5 native vertical evidence
+Recorded UTC: 2026-08-05T13:27:54.146803+00:00
+Working directory: /home/sikmindz/Coding/recursive-agent
+
+## Gate 1
+$ rustfmt --edition 2021 crates/recursive-agent-runner/tests/native_vertical.rs && cargo test -p recursive-agent-runner --test native_vertical -- --nocapture --test-threads=1
+exit_code=0
+Compiling recursive-agent-runner v0.1.0 (/home/sikmindz/Coding/recursive-agent/crates/recursive-agent-runner)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 2.06s
+     Running tests/native_vertical.rs (target/debug/deps/native_vertical-26a130b073d91240)
+
+running 1 test
+test native_vertical_authenticates_authorizes_sandboxes_executes_streams_persists_and_verifies ... native_vertical_evidence run_id=v1:recursive-agent/run/v1:det:32685aafd504a1928523da022ab319dc5a3fabbcb6ae5fb240f19419948dcac4 run_dir=/tmp/.tmpWzDEis/8367033eafd20e9429f2911bf2bf6182525156206bb9e4554eca2a6924bc2a29 events=[
+    RuntimeEventV1 {
+        schema: V1,
+        run_id: CurrentRunId(
+            KernelRunId(
+                "v1:recursive-agent/run/v1:det:32685aafd504a1928523da022ab319dc5a3fabbcb6ae5fb240f19419948dcac4",
+            ),
+        ),
+        sequence: 0,
+        causal_parent: None,
+        kind: Submitted,
+        evidence_receipt: CurrentReceiptId(
+            ControlReceiptId(
+                "v1:recursive-agent/receipt/v1:det:d2c77f24eaa2800fe29ebe2f222737d3b5fa0ef4c25c42b80037909e0c133c9f",
+            ),
+        ),
+    },
+    RuntimeEventV1 {
+        schema: V1,
+        run_id: CurrentRunId(
+            KernelRunId(
+                "v1:recursive-agent/run/v1:det:32685aafd504a1928523da022ab319dc5a3fabbcb6ae5fb240f19419948dcac4",
+            ),
+        ),
+        sequence: 1,
+        causal_parent: Some(
+            CurrentReceiptId(
+                ControlReceiptId(
+                    "v1:recursive-agent/receipt/v1:det:d2c77f24eaa2800fe29ebe2f222737d3b5fa0ef4c25c42b80037909e0c133c9f",
+                ),
+            ),
+        ),
+        kind: Started {
+            step_id: CurrentStepId(
+                EffectIntentId(
+                    "v1:recursive-agent/step/v1:det:bf1f9e448900bf7e229472df94a1ab3472eea9f8715486d000d98e8e1b64043c",
+                ),
+            ),
+        },
+        evidence_receipt: CurrentReceiptId(
+            ControlReceiptId(
+                "v1:recursive-agent/receipt/v1:det:ad3eb2f15b497ef7d822424a030e612fc8e439e6d85a299195f5b49324ca6d76",
+            ),
+        ),
+    },
+    RuntimeEventV1 {
+        schema: V1,
+        run_id: CurrentRunId(
+            KernelRunId(
+                "v1:recursive-agent/run/v1:det:32685aafd504a1928523da022ab319dc5a3fabbcb6ae5fb240f19419948dcac4",
+            ),
+        ),
+        sequence: 2,
+        causal_parent: Some(
+            CurrentReceiptId(
+                ControlReceiptId(
+                    "v1:recursive-agent/receipt/v1:det:ad3eb2f15b497ef7d822424a030e612fc8e439e6d85a299195f5b49324ca6d76",
+                ),
+            ),
+        ),
+        kind: AuthorizationIssued {
+            step_id: CurrentStepId(
+                EffectIntentId(
+                    "v1:recursive-agent/step/v1:det:bf1f9e448900bf7e229472df94a1ab3472eea9f8715486d000d98e8e1b64043c",
+                ),
+            ),
+        },
+        evidence_receipt: CurrentReceiptId(
+            ControlReceiptId(
+                "v1:recursive-agent/receipt/v1:det:ef45a856d7b3c13193242e90bb00ec92bc2da61373a45358cc687ce2ceb38c97",
+            ),
+        ),
+    },
+    RuntimeEventV1 {
+        schema: V1,
+        run_id: CurrentRunId(
+            KernelRunId(
+                "v1:recursive-agent/run/v1:det:32685aafd504a1928523da022ab319dc5a3fabbcb6ae5fb240f19419948dcac4",
+            ),
+        ),
+        sequence: 3,
+        causal_parent: Some(
+            CurrentReceiptId(
+                ControlReceiptId(
+                    "v1:recursive-agent/receipt/v1:det:ef45a856d7b3c13193242e90bb00ec92bc2da61373a45358cc687ce2ceb38c97",
+                ),
+            ),
+        ),
+        kind: Started {
+            step_id: CurrentStepId(
+                EffectIntentId(
+                    "v1:recursive-agent/step/v1:det:864370d3a745e95249401acb100cff06a1343a1462124f862c3e1680d64dedfc",
+                ),
+            ),
+        },
+        evidence_receipt: CurrentReceiptId(
+            ControlReceiptId(
+                "v1:recursive-agent/receipt/v1:det:d49d108cfc58ab114c2f70388f95ffd70cc238d4adbb2612250cbe8384f59aef",
+            ),
+        ),
+    },
+    RuntimeEventV1 {
+        schema: V1,
+        run_id: CurrentRunId(
+            KernelRunId(
+                "v1:recursive-agent/run/v1:det:32685aafd504a1928523da022ab319dc5a3fabbcb6ae5fb240f19419948dcac4",
+            ),
+        ),
+        sequence: 4,
+        causal_parent: Some(
+            CurrentReceiptId(
+                ControlReceiptId(
+                    "v1:recursive-agent/receipt/v1:det:d49d108cfc58ab114c2f70388f95ffd70cc238d4adbb2612250cbe8384f59aef",
+                ),
+            ),
+        ),
+        kind: AuthorizationIssued {
+            step_id: CurrentStepId(
+                EffectIntentId(
+                    "v1:recursive-agent/step/v1:det:864370d3a745e95249401acb100cff06a1343a1462124f862c3e1680d64dedfc",
+                ),
+            ),
+        },
+        evidence_receipt: CurrentReceiptId(
+            ControlReceiptId(
+                "v1:recursive-agent/receipt/v1:det:910d8f5897b114e36e969b38f8807396d5adc484384391d1c46285b1307a31bf",
+            ),
+        ),
+    },
+    RuntimeEventV1 {
+        schema: V1,
+        run_id: CurrentRunId(
+            KernelRunId(
+                "v1:recursive-agent/run/v1:det:32685aafd504a1928523da022ab319dc5a3fabbcb6ae5fb240f19419948dcac4",
+            ),
+        ),
+        sequence: 5,
+        causal_parent: Some(
+            CurrentReceiptId(
+                ControlReceiptId(
+                    "v1:recursive-agent/receipt/v1:det:910d8f5897b114e36e969b38f8807396d5adc484384391d1c46285b1307a31bf",
+                ),
+            ),
+        ),
+        kind: Authorized {
+            step_id: CurrentStepId(
+                EffectIntentId(
+                    "v1:recursive-agent/step/v1:det:864370d3a745e95249401acb100cff06a1343a1462124f862c3e1680d64dedfc",
+                ),
+            ),
+        },
+        evidence_receipt: CurrentReceiptId(
+            ControlReceiptId(
+                "v1:recursive-agent/receipt/v1:det:f08e5ab0680aa86a119dba83f749fe1d2f2fe446a8ab2cb356d35e2e0f1be73b",
+            ),
+        ),
+    },
+    RuntimeEventV1 {
+        schema: V1,
+        run_id: CurrentRunId(
+            KernelRunId(
+                "v1:recursive-agent/run/v1:det:32685aafd504a1928523da022ab319dc5a3fabbcb6ae5fb240f19419948dcac4",
+            ),
+        ),
+        sequence: 6,
+        causal_parent: Some(
+            CurrentReceiptId(
+                ControlReceiptId(
+                    "v1:recursive-agent/receipt/v1:det:f08e5ab0680aa86a119dba83f749fe1d2f2fe446a8ab2cb356d35e2e0f1be73b",
+                ),
+            ),
+        ),
+        kind: OutputCommitted {
+            step_id: CurrentStepId(
+                EffectIntentId(
+                    "v1:recursive-agent/step/v1:det:864370d3a745e95249401acb100cff06a1343a1462124f862c3e1680d64dedfc",
+                ),
+            ),
+            artifacts: [
+                ArtifactDescriptorV1 {
+                    owner_id: CurrentArtifactId(
+                        ArtifactId(
+                            "v1:recursive-agent/artifact/v1:det:40b7793a1347bd6047a19d892ebf8cd9c8baa5c813a5ada745bef116fd42b59b",
+                        ),
+                    ),
+                    digest: ContentDigest(
+                        "40b7793a1347bd6047a19d892ebf8cd9c8baa5c813a5ada745bef116fd42b59b",
+                    ),
+                    byte_length: 4425,
+                    media_type: "application/json",
+                    encoding: Some(
+                        "utf-8",
+                    ),
+                },
+            ],
+        },
+        evidence_receipt: CurrentReceiptId(
+            ControlReceiptId(
+                "v1:recursive-agent/receipt/v1:det:c9b4bc512fa07175873bc8aad5c0cbef048647f1f80da2a7d36fe758c03d8c62",
+            ),
+        ),
+    },
+    RuntimeEventV1 {
+        schema: V1,
+        run_id: CurrentRunId(
+            KernelRunId(
+                "v1:recursive-agent/run/v1:det:32685aafd504a1928523da022ab319dc5a3fabbcb6ae5fb240f19419948dcac4",
+            ),
+        ),
+        sequence: 7,
+        causal_parent: Some(
+            CurrentReceiptId(
+                ControlReceiptId(
+                    "v1:recursive-agent/receipt/v1:det:c9b4bc512fa07175873bc8aad5c0cbef048647f1f80da2a7d36fe758c03d8c62",
+                ),
+            ),
+        ),
+        kind: StepCompleted {
+            step_id: CurrentStepId(
+                EffectIntentId(
+                    "v1:recursive-agent/step/v1:det:864370d3a745e95249401acb100cff06a1343a1462124f862c3e1680d64dedfc",
+                ),
+            ),
+            artifacts: [
+                ArtifactDescriptorV1 {
+                    owner_id: CurrentArtifactId(
+                        ArtifactId(
+                            "v1:recursive-agent/artifact/v1:det:40b7793a1347bd6047a19d892ebf8cd9c8baa5c813a5ada745bef116fd42b59b",
+                        ),
+                    ),
+                    digest: ContentDigest(
+                        "40b7793a1347bd6047a19d892ebf8cd9c8baa5c813a5ada745bef116fd42b59b",
+                    ),
+                    byte_length: 4425,
+                    media_type: "application/json",
+                    encoding: Some(
+                        "utf-8",
+                    ),
+                },
+            ],
+        },
+        evidence_receipt: CurrentReceiptId(
+            ControlReceiptId(
+                "v1:recursive-agent/receipt/v1:det:1ea4b0ffda09580dd97f9f35ff3227a1061129355711bcbc1f07982bda2b8e68",
+            ),
+        ),
+    },
+    RuntimeEventV1 {
+        schema: V1,
+        run_id: CurrentRunId(
+            KernelRunId(
+                "v1:recursive-agent/run/v1:det:32685aafd504a1928523da022ab319dc5a3fabbcb6ae5fb240f19419948dcac4",
+            ),
+        ),
+        sequence: 8,
+        causal_parent: Some(
+            CurrentReceiptId(
+                ControlReceiptId(
+                    "v1:recursive-agent/receipt/v1:det:1ea4b0ffda09580dd97f9f35ff3227a1061129355711bcbc1f07982bda2b8e68",
+                ),
+            ),
+        ),
+        kind: AuthorizationRevoked {
+            step_id: CurrentStepId(
+                EffectIntentId(
+                    "v1:recursive-agent/step/v1:det:bf1f9e448900bf7e229472df94a1ab3472eea9f8715486d000d98e8e1b64043c",
+                ),
+            ),
+        },
+        evidence_receipt: CurrentReceiptId(
+            ControlReceiptId(
+                "v1:recursive-agent/receipt/v1:det:dcac2a74b7bd60276bc2a154134c3693c7a6fa6fc6969471a5ea9a76bcf8e31d",
+            ),
+        ),
+    },
+    RuntimeEventV1 {
+        schema: V1,
+        run_id: CurrentRunId(
+            KernelRunId(
+                "v1:recursive-agent/run/v1:det:32685aafd504a1928523da022ab319dc5a3fabbcb6ae5fb240f19419948dcac4",
+            ),
+        ),
+        sequence: 9,
+        causal_parent: Some(
+            CurrentReceiptId(
+                ControlReceiptId(
+                    "v1:recursive-agent/receipt/v1:det:dcac2a74b7bd60276bc2a154134c3693c7a6fa6fc6969471a5ea9a76bcf8e31d",
+                ),
+            ),
+        ),
+        kind: Completed {
+            outcome: Ok,
+        },
+        evidence_receipt: CurrentReceiptId(
+            ControlReceiptId(
+                "v1:recursive-agent/receipt/v1:det:371a3905a7d25b38f474d6755e05c13642caa7f068320616e8e49cf9a22f5af6",
+            ),
+        ),
+    },
+] artifact=ArtifactDescriptorV1 {
+    owner_id: CurrentArtifactId(
+        ArtifactId(
+            "v1:recursive-agent/artifact/v1:det:40b7793a1347bd6047a19d892ebf8cd9c8baa5c813a5ada745bef116fd42b59b",
+        ),
+    ),
+    digest: ContentDigest(
+        "40b7793a1347bd6047a19d892ebf8cd9c8baa5c813a5ada745bef116fd42b59b",
+    ),
+    byte_length: 4425,
+    media_type: "application/json",
+    encoding: Some(
+        "utf-8",
+    ),
+} enforcement=EnforcementRecord {
+    mechanism: Bubblewrap,
+    outcome: Enforced,
+    policy_digest: "2da2cf72baeeb9aa41889b3bfb2f9c1aa164073cddea24e156c5f55238819f74",
+    launcher_path: "/usr/bin/bwrap",
+    launcher_version: Some(
+        "bubblewrap 0.11.0",
+    ),
+    bash_trampoline_path: Some(
+        "/usr/bin/bash",
+    ),
+    launcher_argv: [
+        "--unshare-all",
+        "--share-net",
+        "--die-with-parent",
+        "--new-session",
+        "--clearenv",
+        "--setenv",
+        "PATH",
+        "/usr/bin",
+        "--tmpfs",
+        "/",
+        "--dir",
+        "/proc",
+        "--dev",
+        "/dev",
+        "--tmpfs",
+        "/tmp",
+        "--symlink",
+        "usr/bin",
+        "/bin",
+        "--symlink",
+        "usr/lib",
+        "/lib",
+        "--symlink",
+        "usr/lib64",
+        "/lib64",
+        "--dir",
+        "/usr/bin",
+        "--ro-bind-fd",
+        "5",
+        "/usr",
+        "--ro-bind-fd",
+        "3",
+        "/etc/ld.so.cache",
+        "--ro-bind-fd",
+        "4",
+        "/usr/bin/printf",
+        "--ro-bind-fd",
+        "8",
+        "/usr/bin/bash",
+        "--seccomp",
+        "13",
+        "--",
+        "/usr/bin/bash",
+        "-c",
+        "printf '%s\\n' \"$1\" >&2; shift; exec \"$@\"",
+        "recursive-agent-sandbox-init",
+        "recursive-agent-setup-v2:04bd622adaade4b3888fcadfee4a36f71a2f5c8dc22d7f0b2603b6f3f431d873",
+        "/usr/bin/printf",
+        "native-vertical-ok",
+    ],
+    private_pid_namespace: true,
+    parent_death_control: true,
+    network_isolated: true,
+    network_mechanism: Some(
+        "shared_host_network_seccomp_socket_denial",
+    ),
+    seccomp_policy_digest: Some(
+        "d1981e3b788298b8abef6e91bc8d78957d002ba8f08eee880cb7470a14d9aff8",
+    ),
+    denied_network_syscalls: [
+        "socket",
+        "socketpair",
+        "connect",
+        "bind",
+        "listen",
+        "accept",
+        "accept4",
+        "sendto",
+        "sendmsg",
+        "sendmmsg",
+        "recvfrom",
+        "recvmsg",
+        "recvmmsg",
+        "shutdown",
+        "getsockname",
+        "getpeername",
+        "setsockopt",
+        "getsockopt",
+        "socketcall",
+        "io_uring_setup",
+    ],
+    effective_operation_roots: [],
+    effective_runtime_read_roots: [
+        "/usr",
+        "/etc/ld.so.cache",
+    ],
+    trusted_executables: [
+        ExecutableAuthorityV1 {
+            role: "bubblewrap",
+            path: "/usr/bin/bwrap",
+            descriptor_identity: "5983e543de2a859a3b9983af29a0ed21c65a320ab6823febf25f344ee08456fc",
+            byte_digest: ContentDigest(
+                "37c08af5252932c2f9b8c1b5bf340709a681a6b901f91ef2e0e756d648dc9b66",
+            ),
+            byte_length: 86720,
+            owner: 0,
+            mode: 33261,
+            read_only_filesystem: false,
+        },
+        ExecutableAuthorityV1 {
+            role: "bash_trampoline",
+            path: "/usr/bin/bash",
+            descriptor_identity: "7abf1f80587d75bfd0c654773d082300d3f514c303b8aba9ac6efee9e5476595",
+            byte_digest: ContentDigest(
+                "ceee9180722ced56e249379c3101fb47fd17119e1362fc2ef5e42bcb3cd04bfc",
+            ),
+            byte_length: 1502072,
+            owner: 0,
+            mode: 33261,
+            read_only_filesystem: false,
+        },
+        ExecutableAuthorityV1 {
+            role: "command",
+            path: "/usr/bin/printf",
+            descriptor_identity: "6cac6df1a65102855afad168b6477dc44959d71140847d725708f2dd5717b9ab",
+            byte_digest: ContentDigest(
+                "d24b3f4fd602f5e59d45278d029315a99a67c8ad7969d4034f1e40b0697b6705",
+            ),
+            byte_length: 61392,
+            owner: 0,
+            mode: 33261,
+            read_only_filesystem: false,
+        },
+    ],
+    authorization: ***
+        AuthorizedContextEvidenceV1 {
+            permit_id: CurrentPermitId(
+                ExecutionPermitId(
+                    "v1:recursive-agent/permit/v1:det:e08873e3462141f54dcd8472b821b9da1447aa163c11c311caeb41fb5345997c",
+                ),
+            ),
+            binding_digest: ContentDigest(
+                "9a61043dfa6cb7e1b808da1e831f3822a71bc3473ce1b348992ccffc631ed4e9",
+            ),
+            actor: ActorPrincipalV1(
+                "recursive-agent",
+            ),
+            run_id: CurrentRunId(
+                KernelRunId(
+                    "v1:recursive-agent/run/v1:det:32685aafd504a1928523da022ab319dc5a3fabbcb6ae5fb240f19419948dcac4",
+                ),
+            ),
+            step_id: CurrentStepId(
+                EffectIntentId(
+                    "v1:recursive-agent/step/v1:det:864370d3a745e95249401acb100cff06a1343a1462124f862c3e1680d64dedfc",
+                ),
+            ),
+            tool: "shell",
+            effect_digest: ContentDigest(
+                "01c6cbc8c0b44aa10d9328c1f2cd6359682762d5636f952004c792b2956cd12f",
+            ),
+            budget: PermitBudgetV1 {
+                max_wall_time_ms: 2000,
+                max_output_bytes: 131072,
+                max_artifact_bytes: 16777216,
+            },
+            parent_permit_id: Some(
+                CurrentPermitId(
+                    ExecutionPermitId(
+                        "v1:recursive-agent/permit/v1:det:0241142405ac5e6b104d017f8f7e42f5bbbc688b28131d397ff3776d0b5778d4",
+                    ),
+                ),
+            ),
+            executable_authority: [
+                ExecutableAuthorityV1 {
+                    role: "bubblewrap",
+                    path: "/usr/bin/bwrap",
+                    descriptor_identity: "5983e543de2a859a3b9983af29a0ed21c65a320ab6823febf25f344ee08456fc",
+                    byte_digest: ContentDigest(
+                        "37c08af5252932c2f9b8c1b5bf340709a681a6b901f91ef2e0e756d648dc9b66",
+                    ),
+                    byte_length: 86720,
+                    owner: 0,
+                    mode: 33261,
+                    read_only_filesystem: false,
+                },
+                ExecutableAuthorityV1 {
+                    role: "bash_trampoline",
+                    path: "/usr/bin/bash",
+                    descriptor_identity: "7abf1f80587d75bfd0c654773d082300d3f514c303b8aba9ac6efee9e5476595",
+                    byte_digest: ContentDigest(
+                        "ceee9180722ced56e249379c3101fb47fd17119e1362fc2ef5e42bcb3cd04bfc",
+                    ),
+                    byte_length: 1502072,
+                    owner: 0,
+                    mode: 33261,
+                    read_only_filesystem: false,
+                },
+                ExecutableAuthorityV1 {
+                    role: "command",
+                    path: "/usr/bin/printf",
+                    descriptor_identity: "6cac6df1a65102855afad168b6477dc44959d71140847d725708f2dd5717b9ab",
+                    byte_digest: ContentDigest(
+                        "d24b3f4fd602f5e59d45278d029315a99a67c8ad7969d4034f1e40b0697b6705",
+                    ),
+                    byte_length: 61392,
+                    owner: 0,
+                    mode: 33261,
+                    read_only_filesystem: false,
+                },
+            ],
+        },
+    ),
+    setup_proof_digest: Some(
+        "761357a3c01f5c06c9aec6524237ad8cb6160b21ee2116bfc2510df66127270a",
+    ),
+    setup_proof_verified: true,
+    reason_code: None,
+} verification=ChainVerification {
+    ok: true,
+    current_strict_success: true,
+    length: 10,
+    final_head: "9bbc0b7614855d4968f83784201d9640894ef98fee8005232019bc79bc3054ae",
+    verified_artifacts: 5,
+    terminal_state: Succeeded,
+    verified_run_id: Some(
+        CurrentRunId(
+            KernelRunId(
+                "v1:recursive-agent/run/v1:det:32685aafd504a1928523da022ab319dc5a3fabbcb6ae5fb240f19419948dcac4",
+            ),
+        ),
+    ),
+    first_divergence: None,
+}
+ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.25s
+
+## Gate 2
+$ cargo test -p recursive-agent-runner --test native_vertical -- --nocapture
+exit_code=0
+Finished `test` profile [unoptimized + debuginfo] target(s) in 0.14s
+     Running tests/native_vertical.rs (target/debug/deps/native_vertical-26a130b073d91240)
+
+running 1 test
+native_vertical_evidence run_id=v1:recursive-agent/run/v1:det:32685aafd504a1928523da022ab319dc5a3fabbcb6ae5fb240f19419948dcac4 run_dir=/tmp/.tmpHT5ZRa/8367033eafd20e9429f2911bf2bf6182525156206bb9e4554eca2a6924bc2a29 events=[
+    RuntimeEventV1 {
+        schema: V1,
+        run_id: CurrentRunId(
+            KernelRunId(
+                "v1:recursive-agent/run/v1:det:32685aafd504a1928523da022ab319dc5a3fabbcb6ae5fb240f19419948dcac4",
+            ),
+        ),
+        sequence: 0,
+        causal_parent: None,
+        kind: Submitted,
+        evidence_receipt: CurrentReceiptId(
+            ControlReceiptId(
+                "v1:recursive-agent/receipt/v1:det:d2c77f24eaa2800fe29ebe2f222737d3b5fa0ef4c25c42b80037909e0c133c9f",
+            ),
+        ),
+    },
+    RuntimeEventV1 {
+        schema: V1,
+        run_id: CurrentRunId(
+            KernelRunId(
+                "v1:recursive-agent/run/v1:det:32685aafd504a1928523da022ab319dc5a3fabbcb6ae5fb240f19419948dcac4",
+            ),
+        ),
+        sequence: 1,
+        causal_parent: Some(
+            CurrentReceiptId(
+                ControlReceiptId(
+                    "v1:recursive-agent/receipt/v1:det:d2c77f24eaa2800fe29ebe2f222737d3b5fa0ef4c25c42b80037909e0c133c9f",
+                ),
+            ),
+        ),
+        kind: Started {
+            step_id: CurrentStepId(
+                EffectIntentId(
+                    "v1:recursive-agent/step/v1:det:bf1f9e448900bf7e229472df94a1ab3472eea9f8715486d000d98e8e1b64043c",
+                ),
+            ),
+        },
+        evidence_receipt: CurrentReceiptId(
+            ControlReceiptId(
+                "v1:recursive-agent/receipt/v1:det:bbc70ab9c8dbd8de5d961f91039141fe182c186043b5fb56e5fa2cedcee91bbe",
+            ),
+        ),
+    },
+    RuntimeEventV1 {
+        schema: V1,
+        run_id: CurrentRunId(
+            KernelRunId(
+                "v1:recursive-agent/run/v1:det:32685aafd504a1928523da022ab319dc5a3fabbcb6ae5fb240f19419948dcac4",
+            ),
+        ),
+        sequence: 2,
+        causal_parent: Some(
+            CurrentReceiptId(
+                ControlReceiptId(
+                    "v1:recursive-agent/receipt/v1:det:bbc70ab9c8dbd8de5d961f91039141fe182c186043b5fb56e5fa2cedcee91bbe",
+                ),
+            ),
+        ),
+        kind: AuthorizationIssued {
+            step_id: CurrentStepId(
+                EffectIntentId(
+                    "v1:recursive-agent/step/v1:det:bf1f9e448900bf7e229472df94a1ab3472eea9f8715486d000d98e8e1b64043c",
+                ),
+            ),
+        },
+        evidence_receipt: CurrentReceiptId(
+            ControlReceiptId(
+                "v1:recursive-agent/receipt/v1:det:8117df9b88ebc792e448c2a60b337675b904df0815b7c5baff5b077487f6db39",
+            ),
+        ),
+    },
+    RuntimeEventV1 {
+        schema: V1,
+        run_id: CurrentRunId(
+            KernelRunId(
+                "v1:recursive-agent/run/v1:det:32685aafd504a1928523da022ab319dc5a3fabbcb6ae5fb240f19419948dcac4",
+            ),
+        ),
+        sequence: 3,
+        causal_parent: Some(
+            CurrentReceiptId(
+                ControlReceiptId(
+                    "v1:recursive-agent/receipt/v1:det:8117df9b88ebc792e448c2a60b337675b904df0815b7c5baff5b077487f6db39",
+                ),
+            ),
+        ),
+        kind: Started {
+            step_id: CurrentStepId(
+                EffectIntentId(
+                    "v1:recursive-agent/step/v1:det:864370d3a745e95249401acb100cff06a1343a1462124f862c3e1680d64dedfc",
+                ),
+            ),
+        },
+        evidence_receipt: CurrentReceiptId(
+            ControlReceiptId(
+                "v1:recursive-agent/receipt/v1:det:c92bd4cb407f254c30482875300147a7561f3f969e5807361b253c10254bf15f",
+            ),
+        ),
+    },
+    RuntimeEventV1 {
+        schema: V1,
+        run_id: CurrentRunId(
+            KernelRunId(
+                "v1:recursive-agent/run/v1:det:32685aafd504a1928523da022ab319dc5a3fabbcb6ae5fb240f19419948dcac4",
+            ),
+        ),
+        sequence: 4,
+        causal_parent: Some(
+            CurrentReceiptId(
+                ControlReceiptId(
+                    "v1:recursive-agent/receipt/v1:det:c92bd4cb407f254c30482875300147a7561f3f969e5807361b253c10254bf15f",
+                ),
+            ),
+        ),
+        kind: AuthorizationIssued {
+            step_id: CurrentStepId(
+                EffectIntentId(
+                    "v1:recursive-agent/step/v1:det:864370d3a745e95249401acb100cff06a1343a1462124f862c3e1680d64dedfc",
+                ),
+            ),
+        },
+        evidence_receipt: CurrentReceiptId(
+            ControlReceiptId(
+                "v1:recursive-agent/receipt/v1:det:50b05055daf1703678ecf13ff13b9d0bd93d7ff643fcc3b6e84cde97164370ed",
+            ),
+        ),
+    },
+    RuntimeEventV1 {
+        schema: V1,
+        run_id: CurrentRunId(
+            KernelRunId(
+                "v1:recursive-agent/run/v1:det:32685aafd504a1928523da022ab319dc5a3fabbcb6ae5fb240f19419948dcac4",
+            ),
+        ),
+        sequence: 5,
+        causal_parent: Some(
+            CurrentReceiptId(
+                ControlReceiptId(
+                    "v1:recursive-agent/receipt/v1:det:50b05055daf1703678ecf13ff13b9d0bd93d7ff643fcc3b6e84cde97164370ed",
+                ),
+            ),
+        ),
+        kind: Authorized {
+            step_id: CurrentStepId(
+                EffectIntentId(
+                    "v1:recursive-agent/step/v1:det:864370d3a745e95249401acb100cff06a1343a1462124f862c3e1680d64dedfc",
+                ),
+            ),
+        },
+        evidence_receipt: CurrentReceiptId(
+            ControlReceiptId(
+                "v1:recursive-agent/receipt/v1:det:d92986a6c83ce7c97cda01ee2fa31f0a9fadc4de6ff3a369ebdf7162b33e629f",
+            ),
+        ),
+    },
+    RuntimeEventV1 {
+        schema: V1,
+        run_id: CurrentRunId(
+            KernelRunId(
+                "v1:recursive-agent/run/v1:det:32685aafd504a1928523da022ab319dc5a3fabbcb6ae5fb240f19419948dcac4",
+            ),
+        ),
+        sequence: 6,
+        causal_parent: Some(
+            CurrentReceiptId(
+                ControlReceiptId(
+                    "v1:recursive-agent/receipt/v1:det:d92986a6c83ce7c97cda01ee2fa31f0a9fadc4de6ff3a369ebdf7162b33e629f",
+                ),
+            ),
+        ),
+        kind: OutputCommitted {
+            step_id: CurrentStepId(
+                EffectIntentId(
+                    "v1:recursive-agent/step/v1:det:864370d3a745e95249401acb100cff06a1343a1462124f862c3e1680d64dedfc",
+                ),
+            ),
+            artifacts: [
+                ArtifactDescriptorV1 {
+                    owner_id: CurrentArtifactId(
+                        ArtifactId(
+                            "v1:recursive-agent/artifact/v1:det:26563fbb480fcb1c9c5f2da296f594e504fe4de322d03a38b8eca0d02f067799",
+                        ),
+                    ),
+                    digest: ContentDigest(
+                        "26563fbb480fcb1c9c5f2da296f594e504fe4de322d03a38b8eca0d02f067799",
+                    ),
+                    byte_length: 4425,
+                    media_type: "application/json",
+                    encoding: Some(
+                        "utf-8",
+                    ),
+                },
+            ],
+        },
+        evidence_receipt: CurrentReceiptId(
+            ControlReceiptId(
+                "v1:recursive-agent/receipt/v1:det:8967e138f55bad651437acce53ea67bfd13066e6d334abedf1a5dcc80bcbe91b",
+            ),
+        ),
+    },
+    RuntimeEventV1 {
+        schema: V1,
+        run_id: CurrentRunId(
+            KernelRunId(
+                "v1:recursive-agent/run/v1:det:32685aafd504a1928523da022ab319dc5a3fabbcb6ae5fb240f19419948dcac4",
+            ),
+        ),
+        sequence: 7,
+        causal_parent: Some(
+            CurrentReceiptId(
+                ControlReceiptId(
+                    "v1:recursive-agent/receipt/v1:det:8967e138f55bad651437acce53ea67bfd13066e6d334abedf1a5dcc80bcbe91b",
+                ),
+            ),
+        ),
+        kind: StepCompleted {
+            step_id: CurrentStepId(
+                EffectIntentId(
+                    "v1:recursive-agent/step/v1:det:864370d3a745e95249401acb100cff06a1343a1462124f862c3e1680d64dedfc",
+                ),
+            ),
+            artifacts: [
+                ArtifactDescriptorV1 {
+                    owner_id: CurrentArtifactId(
+                        ArtifactId(
+                            "v1:recursive-agent/artifact/v1:det:26563fbb480fcb1c9c5f2da296f594e504fe4de322d03a38b8eca0d02f067799",
+                        ),
+                    ),
+                    digest: ContentDigest(
+                        "26563fbb480fcb1c9c5f2da296f594e504fe4de322d03a38b8eca0d02f067799",
+                    ),
+                    byte_length: 4425,
+                    media_type: "application/json",
+                    encoding: Some(
+                        "utf-8",
+                    ),
+                },
+            ],
+        },
+        evidence_receipt: CurrentReceiptId(
+            ControlReceiptId(
+                "v1:recursive-agent/receipt/v1:det:3e312fc005216965cf61344d0d016734d27a4b80848eac7cd8a42074a36ddd7b",
+            ),
+        ),
+    },
+    RuntimeEventV1 {
+        schema: V1,
+        run_id: CurrentRunId(
+            KernelRunId(
+                "v1:recursive-agent/run/v1:det:32685aafd504a1928523da022ab319dc5a3fabbcb6ae5fb240f19419948dcac4",
+            ),
+        ),
+        sequence: 8,
+        causal_parent: Some(
+            CurrentReceiptId(
+                ControlReceiptId(
+                    "v1:recursive-agent/receipt/v1:det:3e312fc005216965cf61344d0d016734d27a4b80848eac7cd8a42074a36ddd7b",
+                ),
+            ),
+        ),
+        kind: AuthorizationRevoked {
+            step_id: CurrentStepId(
+                EffectIntentId(
+                    "v1:recursive-agent/step/v1:det:bf1f9e448900bf7e229472df94a1ab3472eea9f8715486d000d98e8e1b64043c",
+                ),
+            ),
+        },
+        evidence_receipt: CurrentReceiptId(
+            ControlReceiptId(
+                "v1:recursive-agent/receipt/v1:det:5c55bb1c1492d201ea42a0c82d8d128e680c2d1223340e7468806a90474db45d",
+            ),
+        ),
+    },
+    RuntimeEventV1 {
+        schema: V1,
+        run_id: CurrentRunId(
+            KernelRunId(
+                "v1:recursive-agent/run/v1:det:32685aafd504a1928523da022ab319dc5a3fabbcb6ae5fb240f19419948dcac4",
+            ),
+        ),
+        sequence: 9,
+        causal_parent: Some(
+            CurrentReceiptId(
+                ControlReceiptId(
+                    "v1:recursive-agent/receipt/v1:det:5c55bb1c1492d201ea42a0c82d8d128e680c2d1223340e7468806a90474db45d",
+                ),
+            ),
+        ),
+        kind: Completed {
+            outcome: Ok,
+        },
+        evidence_receipt: CurrentReceiptId(
+            ControlReceiptId(
+                "v1:recursive-agent/receipt/v1:det:7db0c8d2f3a72250c5ccd6e394fd7b7e4a8dca075d54c39daac557ef8bbd6358",
+            ),
+        ),
+    },
+] artifact=ArtifactDescriptorV1 {
+    owner_id: CurrentArtifactId(
+        ArtifactId(
+            "v1:recursive-agent/artifact/v1:det:26563fbb480fcb1c9c5f2da296f594e504fe4de322d03a38b8eca0d02f067799",
+        ),
+    ),
+    digest: ContentDigest(
+        "26563fbb480fcb1c9c5f2da296f594e504fe4de322d03a38b8eca0d02f067799",
+    ),
+    byte_length: 4425,
+    media_type: "application/json",
+    encoding: Some(
+        "utf-8",
+    ),
+} enforcement=EnforcementRecord {
+    mechanism: Bubblewrap,
+    outcome: Enforced,
+    policy_digest: "9e50cfe75d718bfd1d0e8f4a3fcd3c5b4f81863af345b331225d2aaaa72001fd",
+    launcher_path: "/usr/bin/bwrap",
+    launcher_version: Some(
+        "bubblewrap 0.11.0",
+    ),
+    bash_trampoline_path: Some(
+        "/usr/bin/bash",
+    ),
+    launcher_argv: [
+        "--unshare-all",
+        "--share-net",
+        "--die-with-parent",
+        "--new-session",
+        "--clearenv",
+        "--setenv",
+        "PATH",
+        "/usr/bin",
+        "--tmpfs",
+        "/",
+        "--dir",
+        "/proc",
+        "--dev",
+        "/dev",
+        "--tmpfs",
+        "/tmp",
+        "--symlink",
+        "usr/bin",
+        "/bin",
+        "--symlink",
+        "usr/lib",
+        "/lib",
+        "--symlink",
+        "usr/lib64",
+        "/lib64",
+        "--dir",
+        "/usr/bin",
+        "--ro-bind-fd",
+        "5",
+        "/usr",
+        "--ro-bind-fd",
+        "3",
+        "/etc/ld.so.cache",
+        "--ro-bind-fd",
+        "4",
+        "/usr/bin/printf",
+        "--ro-bind-fd",
+        "8",
+        "/usr/bin/bash",
+        "--seccomp",
+        "13",
+        "--",
+        "/usr/bin/bash",
+        "-c",
+        "printf '%s\\n' \"$1\" >&2; shift; exec \"$@\"",
+        "recursive-agent-sandbox-init",
+        "recursive-agent-setup-v2:94b02e8dd9dd26a6393bf7a20dfe030d9e8428e09e691f3520c22ea85ab77948",
+        "/usr/bin/printf",
+        "native-vertical-ok",
+    ],
+    private_pid_namespace: true,
+    parent_death_control: true,
+    network_isolated: true,
+    network_mechanism: Some(
+        "shared_host_network_seccomp_socket_denial",
+    ),
+    seccomp_policy_digest: Some(
+        "d1981e3b788298b8abef6e91bc8d78957d002ba8f08eee880cb7470a14d9aff8",
+    ),
+    denied_network_syscalls: [
+        "socket",
+        "socketpair",
+        "connect",
+        "bind",
+        "listen",
+        "accept",
+        "accept4",
+        "sendto",
+        "sendmsg",
+        "sendmmsg",
+        "recvfrom",
+        "recvmsg",
+        "recvmmsg",
+        "shutdown",
+        "getsockname",
+        "getpeername",
+        "setsockopt",
+        "getsockopt",
+        "socketcall",
+        "io_uring_setup",
+    ],
+    effective_operation_roots: [],
+    effective_runtime_read_roots: [
+        "/usr",
+        "/etc/ld.so.cache",
+    ],
+    trusted_executables: [
+        ExecutableAuthorityV1 {
+            role: "bubblewrap",
+            path: "/usr/bin/bwrap",
+            descriptor_identity: "5983e543de2a859a3b9983af29a0ed21c65a320ab6823febf25f344ee08456fc",
+            byte_digest: ContentDigest(
+                "37c08af5252932c2f9b8c1b5bf340709a681a6b901f91ef2e0e756d648dc9b66",
+            ),
+            byte_length: 86720,
+            owner: 0,
+            mode: 33261,
+            read_only_filesystem: false,
+        },
+        ExecutableAuthorityV1 {
+            role: "bash_trampoline",
+            path: "/usr/bin/bash",
+            descriptor_identity: "7abf1f80587d75bfd0c654773d082300d3f514c303b8aba9ac6efee9e5476595",
+            byte_digest: ContentDigest(
+                "ceee9180722ced56e249379c3101fb47fd17119e1362fc2ef5e42bcb3cd04bfc",
+            ),
+            byte_length: 1502072,
+            owner: 0,
+            mode: 33261,
+            read_only_filesystem: false,
+        },
+        ExecutableAuthorityV1 {
+            role: "command",
+            path: "/usr/bin/printf",
+            descriptor_identity: "6cac6df1a65102855afad168b6477dc44959d71140847d725708f2dd5717b9ab",
+            byte_digest: ContentDigest(
+                "d24b3f4fd602f5e59d45278d029315a99a67c8ad7969d4034f1e40b0697b6705",
+            ),
+            byte_length: 61392,
+            owner: 0,
+            mode: 33261,
+            read_only_filesystem: false,
+        },
+    ],
+    authorization: ***
+        AuthorizedContextEvidenceV1 {
+            permit_id: CurrentPermitId(
+                ExecutionPermitId(
+                    "v1:recursive-agent/permit/v1:det:e08873e3462141f54dcd8472b821b9da1447aa163c11c311caeb41fb5345997c",
+                ),
+            ),
+            binding_digest: ContentDigest(
+                "9a61043dfa6cb7e1b808da1e831f3822a71bc3473ce1b348992ccffc631ed4e9",
+            ),
+            actor: ActorPrincipalV1(
+                "recursive-agent",
+            ),
+            run_id: CurrentRunId(
+                KernelRunId(
+                    "v1:recursive-agent/run/v1:det:32685aafd504a1928523da022ab319dc5a3fabbcb6ae5fb240f19419948dcac4",
+                ),
+            ),
+            step_id: CurrentStepId(
+                EffectIntentId(
+                    "v1:recursive-agent/step/v1:det:864370d3a745e95249401acb100cff06a1343a1462124f862c3e1680d64dedfc",
+                ),
+            ),
+            tool: "shell",
+            effect_digest: ContentDigest(
+                "01c6cbc8c0b44aa10d9328c1f2cd6359682762d5636f952004c792b2956cd12f",
+            ),
+            budget: PermitBudgetV1 {
+                max_wall_time_ms: 2000,
+                max_output_bytes: 131072,
+                max_artifact_bytes: 16777216,
+            },
+            parent_permit_id: Some(
+                CurrentPermitId(
+                    ExecutionPermitId(
+                        "v1:recursive-agent/permit/v1:det:0241142405ac5e6b104d017f8f7e42f5bbbc688b28131d397ff3776d0b5778d4",
+                    ),
+                ),
+            ),
+            executable_authority: [
+                ExecutableAuthorityV1 {
+                    role: "bubblewrap",
+                    path: "/usr/bin/bwrap",
+                    descriptor_identity: "5983e543de2a859a3b9983af29a0ed21c65a320ab6823febf25f344ee08456fc",
+                    byte_digest: ContentDigest(
+                        "37c08af5252932c2f9b8c1b5bf340709a681a6b901f91ef2e0e756d648dc9b66",
+                    ),
+                    byte_length: 86720,
+                    owner: 0,
+                    mode: 33261,
+                    read_only_filesystem: false,
+                },
+                ExecutableAuthorityV1 {
+                    role: "bash_trampoline",
+                    path: "/usr/bin/bash",
+                    descriptor_identity: "7abf1f80587d75bfd0c654773d082300d3f514c303b8aba9ac6efee9e5476595",
+                    byte_digest: ContentDigest(
+                        "ceee9180722ced56e249379c3101fb47fd17119e1362fc2ef5e42bcb3cd04bfc",
+                    ),
+                    byte_length: 1502072,
+                    owner: 0,
+                    mode: 33261,
+                    read_only_filesystem: false,
+                },
+                ExecutableAuthorityV1 {
+                    role: "command",
+                    path: "/usr/bin/printf",
+                    descriptor_identity: "6cac6df1a65102855afad168b6477dc44959d71140847d725708f2dd5717b9ab",
+                    byte_digest: ContentDigest(
+                        "d24b3f4fd602f5e59d45278d029315a99a67c8ad7969d4034f1e40b0697b6705",
+                    ),
+                    byte_length: 61392,
+                    owner: 0,
+                    mode: 33261,
+                    read_only_filesystem: false,
+                },
+            ],
+        },
+    ),
+    setup_proof_digest: Some(
+        "5f53e5275c9f8a6ff1e7810ed1dd6a72f2685cdf8c8eb856856ba1c3cec231f8",
+    ),
+    setup_proof_verified: true,
+    reason_code: None,
+} verification=ChainVerification {
+    ok: true,
+    current_strict_success: true,
+    length: 10,
+    final_head: "aa409ace0c04c7df79e6565bb66f1b2fbe0cb2d3477687d62ce3f82a0b74d321",
+    verified_artifacts: 5,
+    terminal_state: Succeeded,
+    verified_run_id: Some(
+        CurrentRunId(
+            KernelRunId(
+                "v1:recursive-agent/run/v1:det:32685aafd504a1928523da022ab319dc5a3fabbcb6ae5fb240f19419948dcac4",
+            ),
+        ),
+    ),
+    first_divergence: None,
+}
+test native_vertical_authenticates_authorizes_sandboxes_executes_streams_persists_and_verifies ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.22s
+
+## Gate 3
+$ cargo test -p recursive-agent-runner --test tool_runtime_boundary -- --nocapture
+exit_code=0
+Compiling recursive-agent-runner v0.1.0 (/home/sikmindz/Coding/recursive-agent/crates/recursive-agent-runner)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.32s
+     Running tests/tool_runtime_boundary.rs (target/debug/deps/tool_runtime_boundary-6fb62360b35ac08c)
+
+running 1 test
+test production_direct_tool_dispatch_is_quarantined_to_the_named_legacy_runner_executor ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.03s
+
+## Gate 4
+$ cargo test -p recursive-agent-runner --all-targets --all-features
+exit_code=0
+Compiling recursive-agent-runner v0.1.0 (/home/sikmindz/Coding/recursive-agent/crates/recursive-agent-runner)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 3.94s
+     Running unittests src/lib.rs (target/debug/deps/recursive_agent_runner-2962a6b051dcb0ea)
+
+running 8 tests
+test sandbox_engine::tests::payload_marker_suffix_cannot_satisfy_setup_proof ... ok
+test sandbox_engine::tests::fake_launcher_is_rejected_before_payload_dispatch ... ok
+test pinned_root_tests::directory_replacement_before_authorization_dispatches_nothing ... ok
+test pinned_root_tests::symlink_replacement_before_authorization_dispatches_nothing ... ok
+test sandbox_engine::tests::authority_descriptors_remain_cloexec_and_do_not_leak_to_siblings ... ok
+test pinned_root_tests::replacement_after_dispatch_preserves_one_inode_but_cannot_report_success ... ok
+test sandbox_engine::tests::child_guard_kills_and_reaps_on_early_return ... ok
+test sandbox_engine::tests::post_spawn_parent_revocation_kills_and_reaps_before_effect ... ok
+
+test result: ok. 8 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.38s
+
+     Running tests/canonical_containment.rs (target/debug/deps/canonical_containment-e951db9ff9ca9b61)
+
+running 13 tests
+test runner_private_dispatch_and_zero_timeout_fail_before_effect ... ok
+test missing_allow_path_fails_before_launcher ... ok
+test implementation_contains_no_local_unsafe_or_landlock_claim ... ok
+test malicious_sibling_helper_is_never_consulted_by_production_execute ... ok
+test fixed_printf_is_mandatorily_enforced_on_this_host ... ok
+test inherited_non_cloexec_descriptor_is_not_visible_to_payload ... ok
+test one_consumed_dispatch_is_not_replayed_on_second_run ... ok
+test network_socket_creation_receives_eperm_under_enforcement ... ok
+test undeclared_read_and_descendant_are_mandatorily_bounded ... ok
+test operation_root_identity_and_access_mode_change_policy_digest ... ok
+test filesystem_and_network_attempts_are_denied_or_host_fails_closed ... ok
+test active_mount_source_replacement_never_exposes_attacker_bytes ... ok
+test descendants_output_and_signal_races_are_bounded_or_fail_closed ... ok
+
+test result: ok. 13 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 1.70s
+
+     Running tests/deterministic_identity.rs (target/debug/deps/deterministic_identity-2a02612de7356ed4)
+
+running 6 tests
+test process_identity_probe ... ok
+test every_semantic_receipt_field_changes_identity ... ok
+test production_identity_paths_do_not_invoke_uuid_random_or_time ... ok
+test ids_are_stable_across_processes ... ok
+test runner_clock_owns_lease_time_while_permit_identity_excludes_live_issue_time ... ok
+test changed_material_changes_id ... ok
+
+test result: ok. 6 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.16s
+
+     Running tests/hardening_v3.rs (target/debug/deps/hardening_v3-2bfc6421e491bf50)
+
+running 4 tests
+test network_true_and_wrong_policy_version_fail_before_process_dispatch ... ok
+test verified_replay_snapshot_is_immutable_bounded_and_directory_bound ... ok
+test advancing_and_rollback_clocks_prevent_affected_dispatch ... ok
+test false_signal_stdout_stderr_and_timeout_never_complete_successfully ... ok
+
+test result: ok. 4 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.76s
+
+     Running tests/hardening_v5_executable_bytes.rs (target/debug/deps/hardening_v5_executable_bytes-b51381003bdeafe8)
+
+running 4 tests
+test same_inode_and_writable_hard_link_are_not_byte_authority ... ok
+test user_owned_rewritable_executable_is_denied_with_zero_starts ... ok
+test parent_components_are_rejected_before_run_root_creation ... ok
+test trusted_printf_evidence_contains_exact_command_bash_and_bwrap_digests ... ok
+
+test result: ok. 4 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.15s
+
+     Running tests/lifecycle_state_machine.rs (target/debug/deps/lifecycle_state_machine-6de1e3e402496c22)
+
+running 2 tests
+test terminal_matrix_rejects_success_for_every_non_success_terminal ... ok
+test failed_step_dominates_run_terminal_state ... ok
+
+test result: ok. 2 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.08s
+
+     Running tests/native_vertical.rs (target/debug/deps/native_vertical-26a130b073d91240)
+
+running 1 test
+test native_vertical_authenticates_authorizes_sandboxes_executes_streams_persists_and_verifies ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.33s
+
+     Running tests/permit_dispatch.rs (target/debug/deps/permit_dispatch-4ed0e164a4d2f69b)
+
+running 1 test
+test every_rejected_lease_keeps_dispatch_counter_zero ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.01s
+
+     Running tests/phase2_committed_events.rs (target/debug/deps/phase2_committed_events-958bd679c290c1ff)
+
+running 1 test
+test runner_event_semantics_are_deterministic_and_each_transcript_is_exactly_receipt_backed ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.20s
+
+     Running tests/phase2_runtime_service.rs (target/debug/deps/phase2_runtime_service-b06494fc189198f5)
+
+running 8 tests
+test runtime_dependencies_preserve_every_explicit_owner ... ok
+test runtime_dependencies_fail_closed_when_any_owner_is_missing ... ok
+test runtime_service_rejects_unknown_tools_before_creating_output_root ... ok
+test runtime_service_submit_uses_operation_identity_for_the_authoritative_run ... ok
+test runtime_service_commits_output_from_the_admitted_tool_runtime ... ok
+test runtime_service_reads_status_events_and_verification_from_committed_evidence ... ok
+test admitted_tool_dispatch_preserves_cross_run_event_semantics ... ok
+test runtime_service_rejects_concurrent_duplicate_execution ... ok
+
+test result: ok. 8 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.65s
+
+     Running tests/tool_runtime_boundary.rs (target/debug/deps/tool_runtime_boundary-6fb62360b35ac08c)
+
+running 1 test
+test production_direct_tool_dispatch_is_quarantined_to_the_named_legacy_runner_executor ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.02s
+
+## Gate 5
+$ cargo clippy -p recursive-agent-runner --all-targets --all-features -- -D warnings
+exit_code=0
+Checking recursive-agent-runner v0.1.0 (/home/sikmindz/Coding/recursive-agent/crates/recursive-agent-runner)
+    Finished `dev` profile [unoptimized + debuginfo] target(s) in 1.86s
+
+## Gate 6
+$ cargo fmt --all -- --check
+exit_code=0
+
+
+## Gate 7
+$ git diff --check
+exit_code=0
+
+
+aggregate_status=GREEN

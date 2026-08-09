@@ -1,0 +1,4 @@
+$ if rg -n '^#!\[(allow|warn|expect)' crates --glob '*.rs' --glob '!**/target/**'; then exit 1; else exit 0; fi
+exit=0
+
+

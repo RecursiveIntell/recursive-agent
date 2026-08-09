@@ -1,0 +1,21 @@
+{
+  "schema": "agent-graph-mcp-receipt-v2",
+  "run_id": "run-19fd16caacb-6",
+  "trace": "trace-19fd16caacb-6",
+  "graph_id": "recursive-agent-cross-phase-parallelization-council",
+  "graph_version": "sha256:024f8060745cdb30dfaf0db96c9a28b361d9f7cfb686d60aac021875102813af",
+  "provider": "https://api.deepseek.com/v1",
+  "configured_models": ["deepseek-chat", "deepseek-chat", "deepseek-chat", "deepseek-chat", "deepseek-chat"],
+  "budget_counters": {"llm_calls": 5, "nodes": 7, "wall_clock_ms": 33648},
+  "budgets": {"max_llm_calls": 5, "max_nodes": 12, "max_wall_clock_ms": 480000},
+  "input_digest": "sha256:24380fbb590af30ece3b7e4b2183ba5630b4ddcfe86c6b2a33775119c0f713cf",
+  "output_digest": "sha256:5d391eead848009b34b61296c5d8d207564a3f85853a785b8c3dd3b046f8f3ae",
+  "terminal_value_digest": "sha256:070686bd5bc08c82a0a6e96cbeb610ad15de4ddc34c2ff346fe70cb7cb6882b5",
+  "persistence_status": "durable_terminal",
+  "storage_class_observed_by_receipt_call": "volatile_live",
+  "evidence_authority": "structural_unverified",
+  "dependency_envelopes_complete": false,
+  "replay_capability": "integrity_only",
+  "receipt_digest": null,
+  "controller_note": "Locally retained transcription of graph_run_receipt. Advisory sequencing only; source audits decide actual parallel work."
+}

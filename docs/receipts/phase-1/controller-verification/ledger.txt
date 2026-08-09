@@ -1,0 +1,30 @@
+Finished `test` profile [unoptimized + debuginfo] target(s) in 0.06s
+     Running unittests src/lib.rs (target/debug/deps/recursive_agent_ledger-ce68f2cfc0451f2e)
+
+running 3 tests
+test tests::genesis_is_deterministic ... ok
+test tests::open_initializes_chain ... ok
+test tests::chain_round_trip_and_verify ... ok
+
+test result: ok. 3 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+     Running tests/artifact_tamper.rs (target/debug/deps/artifact_tamper-070db00fb241f183)
+
+running 3 tests
+test symlink_swapped_and_missing_artifacts_are_rejected ... ok
+test tampered_artifact_is_rejected ... ok
+test strict_verify_rehashes_every_referenced_artifact ... ok
+
+test result: ok. 3 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+     Running tests/crash_recovery.rs (target/debug/deps/crash_recovery-05a4867b6630d81d)
+
+running 6 tests
+test truncated_tail_is_rejected_or_recovered_without_false_success ... ok
+test metadata_ahead_of_log_is_corruption ... ok
+test reopen_verification_preserves_creation_time ... ok
+test wrong_metadata_head_and_genesis_are_corruption ... ok
+test log_ahead_of_metadata_recovers ... ok
+test malformed_interior_and_duplicate_receipts_are_rejected ... ok
+
+test result: ok. 6 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s

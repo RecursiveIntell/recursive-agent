@@ -1,0 +1,23 @@
+command: cargo test -p recursive-agent-contracts --test hardening_v5_quarantine -- --nocapture
+exit_code: 101
+output_sha256: 6e98273a0aa140c8d6716f4b63efb346c2a4b94d009baf3376643fc033927ead
+output:
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.04s
+     Running tests/hardening_v5_quarantine.rs (target/debug/deps/hardening_v5_quarantine-b49dd659ac822b1a)
+
+running 2 tests
+
+thread 'default_phase_one_sources_expose_no_later_phase_execution_adapter' (328) panicked at crates/recursive-agent-contracts/tests/hardening_v5_quarantine.rs:11:5:
+assertion failed: !mcp_lib.contains("pub mod server")
+note: run with `RUST_BACKTRACE=1` environment variable to display a backtrace
+test default_phase_one_sources_expose_no_later_phase_execution_adapter ... FAILED
+test cli_operator_surface_remains_exactly_phase_one ... ok
+
+failures:
+
+failures:
+    default_phase_one_sources_expose_no_later_phase_execution_adapter
+
+test result: FAILED. 1 passed; 1 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+error: test failed, to rerun pass `-p recursive-agent-contracts --test hardening_v5_quarantine`

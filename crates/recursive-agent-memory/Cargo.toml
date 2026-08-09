@@ -1,0 +1,23 @@
+[package]
+name = "recursive-agent-memory"
+version = "0.1.0"
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+authors.workspace = true
+publish = false
+
+[dependencies]
+serde.workspace = true
+serde_json.workspace = true
+thiserror.workspace = true
+chrono.workspace = true
+recursive-agent-contracts = { path = "../recursive-agent-contracts" }
+stack-ids.workspace = true
+rusqlite = { version = "0.31", features = ["bundled"] }
+
+[dev-dependencies]
+tempfile = "3"
+
+[lints]
+workspace = true

@@ -1,0 +1,1 @@
+error: --runtime ipc requires a ra-daemon socket and is wired in a later Phase 6 task; use embedded

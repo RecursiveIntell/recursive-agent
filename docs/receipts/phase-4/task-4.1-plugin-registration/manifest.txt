@@ -1,0 +1,5 @@
+date: 2026-08-05T23:33:51-05:00
+git_head: 3805f7abf319e07e47f1c20b862e614c3dad164f
+python: Python 3.14.6
+pytest: pytest 9.0.2
+pytest=0

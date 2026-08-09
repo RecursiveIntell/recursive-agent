@@ -1,0 +1,99 @@
+{
+  "branch": "main",
+  "captured_at_utc": "2026-08-05T03:40:03.311976+00:00",
+  "complete": false,
+  "gates": [
+    {
+      "command": "cargo fmt --all -- --check",
+      "exit_code": 0,
+      "id": "fmt",
+      "output_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "command": "cargo test --workspace --all-targets",
+      "exit_code": 0,
+      "id": "tests",
+      "output_sha256": "f11256eb782426f10c2a6d1af1a0131225669edbb702a1aab0c9d380b249f14b"
+    },
+    {
+      "command": "cargo clippy --workspace --all-targets -- -D warnings",
+      "exit_code": 0,
+      "id": "clippy",
+      "output_sha256": "e51078582eb3983a6dd06f9cb3acaf1f9173b8fa91208f65fa6d49208671ad1e"
+    },
+    {
+      "command": "cargo deny check",
+      "exit_code": 1,
+      "id": "deny",
+      "output_sha256": "5048f3717db74c016fd14f9f8729eac879ae8ec72e8ad9f6c4e51c3fb3ff3fb4"
+    },
+    {
+      "command": "cargo fuzz --version",
+      "exit_code": 101,
+      "id": "fuzz_version",
+      "output_sha256": "994e9d5abbf6bb71c8c88b8815752061dd2dec6bd6ea656fe2d727a03e0dba54"
+    }
+  ],
+  "head": "3805f7abf319e07e47f1c20b862e614c3dad164f",
+  "known_expected_blockers": [
+    "cargo deny configuration",
+    "cargo fuzz unavailable"
+  ],
+  "no_commit_no_push": true,
+  "preexisting_dirty_status": [
+    "M Cargo.lock",
+    " M Cargo.toml",
+    " M crates/recursive-agent-cli/Cargo.toml",
+    " M crates/recursive-agent-cli/src/main.rs",
+    " M crates/recursive-agent-policy/src/lib.rs",
+    " M crates/recursive-agent-tools/Cargo.toml",
+    " M crates/recursive-agent-tools/src/lib.rs",
+    "?? .hermes/",
+    "?? crates/recursive-agent-daemon/",
+    "?? crates/recursive-agent-mcp/",
+    "?? crates/recursive-agent-mcts/",
+    "?? crates/recursive-agent-memory/",
+    "?? crates/recursive-agent-skills/",
+    "?? deny.toml",
+    "?? fuzz/"
+  ],
+  "root": "/home/sikmindz/Coding/recursive-agent",
+  "schema": "recursive-agent-baseline-v1",
+  "source_generation_stable_during_gates": true,
+  "tracked_diff_bytes": 29194,
+  "tracked_diff_sha256": "b727b80f1638cc98ddc9f23ac6b0053cbbe166620c7cba00487dd0caedde686f",
+  "untracked_archive_created": true,
+  "untracked_archive_exit_code": 0,
+  "untracked_path_count": 18,
+  "untracked_paths_sha256": "64f9cf64159df186e447a8317bace3ea9aa561508f7be4241fd1b3fa74962183",
+  "versions": {
+    "cargo": {
+      "exit_code": 0,
+      "output": "cargo 1.97.1 (c980f4866 2026-06-30)"
+    },
+    "cargo_deny": {
+      "exit_code": 0,
+      "output": "cargo-deny 0.19.8"
+    },
+    "cargo_fuzz": {
+      "exit_code": 101,
+      "output": "error: no such command: `fuzz`\n\nhelp: a command with a similar name exists: `fix`\n\nhelp: view all installed commands with `cargo --list`\nhelp: find a package to install `fuzz` with `cargo search cargo-fuzz`"
+    },
+    "claude": {
+      "exit_code": 0,
+      "output": "2.1.207 (Claude Code)"
+    },
+    "codex": {
+      "exit_code": 0,
+      "output": "codex-cli 0.146.0"
+    },
+    "python3": {
+      "exit_code": 0,
+      "output": "Python 3.14.6"
+    },
+    "rustc": {
+      "exit_code": 0,
+      "output": "rustc 1.97.1 (8bab26f4f 2026-07-14)"
+    }
+  }
+}

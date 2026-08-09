@@ -1,0 +1,16 @@
+   Compiling recursive-agent-sandbox v0.1.0 (/home/sikmindz/Coding/recursive-agent/crates/recursive-agent-sandbox)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.59s
+     Running unittests src/lib.rs (target/debug/deps/recursive_agent_sandbox-badd5ab3414b66cc)
+
+running 1 test
+test tests::plan_validation_is_pure_and_fail_closed ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+     Running tests/public_surface.rs (target/debug/deps/public_surface-e4183b9371cd0ddd)
+
+running 1 test
+test downstream_public_api_is_plan_only ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+

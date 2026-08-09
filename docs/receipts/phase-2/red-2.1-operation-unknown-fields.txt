@@ -1,0 +1,22 @@
+$ cargo test -p recursive-agent-contracts --test phase2_operation_envelope operation_envelope_rejects_unknown_closed_fields -- --nocapture
+exit_code: 101
+
+Compiling recursive-agent-contracts v0.1.0 (/home/sikmindz/Coding/recursive-agent/crates/recursive-agent-contracts)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.85s
+     Running tests/phase2_operation_envelope.rs (target/debug/deps/phase2_operation_envelope-e90f56f8b91c6a51)
+
+running 1 test
+
+thread 'operation_envelope_rejects_unknown_closed_fields' (2210838) panicked at crates/recursive-agent-contracts/tests/phase2_operation_envelope.rs:107:9:
+unknown field at envelope was accepted
+note: run with `RUST_BACKTRACE=1` environment variable to display a backtrace
+test operation_envelope_rejects_unknown_closed_fields ... FAILED
+
+failures:
+
+failures:
+    operation_envelope_rejects_unknown_closed_fields
+
+test result: FAILED. 0 passed; 1 failed; 0 ignored; 0 measured; 2 filtered out; finished in 0.00s
+
+error: test failed, to rerun pass `-p recursive-agent-contracts --test phase2_operation_envelope`

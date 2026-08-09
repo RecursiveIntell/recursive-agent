@@ -1,0 +1,11 @@
+Finished `test` profile [unoptimized + debuginfo] target(s) in 0.07s
+     Running unittests src/lib.rs (target/debug/deps/recursive_agent_memory-d879706075d82a3e)
+
+running 5 tests
+test tests::get_missing_returns_none ... ok
+test tests::put_and_get ... ok
+test tests::identical_material_is_idempotent_and_content_changes_identity ... ok
+test tests::search_finds_relevant ... ok
+test tests::identity_is_stable_across_processes ... ok
+
+test result: ok. 5 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s

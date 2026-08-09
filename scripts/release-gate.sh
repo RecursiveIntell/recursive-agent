@@ -36,9 +36,22 @@ echo "::endgroup::"
 echo "::group::ra run fixtures/hello-run.json"
 RUN_OUT=$(cargo run -q -p recursive-agent-cli -- run --spec fixtures/hello-run.json)
 echo "$RUN_OUT" | tee "$LOG_DIR/ra-run.log"
-RUN_DIR=$(echo "$RUN_OUT" | awk '/^run_dir:/ {print $2}')
+RUN_DIR=$(printf '%s' "$RUN_OUT" | python3 -c '
+import json
+import sys
+
+try:
+    payload = json.load(sys.stdin)
+except json.JSONDecodeError as exc:
+    raise SystemExit(f"FAIL: ra run emitted invalid JSON: {exc}")
+
+run_dir = payload.get("run_dir")
+if not isinstance(run_dir, str) or not run_dir:
+    raise SystemExit("FAIL: ra run JSON omitted a non-empty run_dir")
+print(run_dir)
+')
 if [ -z "${RUN_DIR:-}" ]; then
-    echo "FAIL: could not parse run_dir from ra run output" >&2
+    echo "FAIL: could not parse run_dir from ra run JSON" >&2
     exit 1
 fi
 echo "::endgroup::"

@@ -1,0 +1,5 @@
+Phase 1 hardening v3 RED evidence — R5 fresh clock and monotonic deadline
+Observed before production changes on 2026-08-05.
+Command: rg -n 'let trusted_now = clock.now|trusted_now,' crates/recursive-agent-runner/src/lib.rs
+Exit: 0
+Evidence: run_spec_with_clock samples Clock once, passes the same DateTime through lifecycle issue, each step issue/consume, revoke, and all terminal receipts; active execution has only AuthorizedExecutionContext::started elapsed budget and no persisted-wall/runner-monotonic combined deadline.

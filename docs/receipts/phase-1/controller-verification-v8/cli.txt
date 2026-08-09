@@ -1,0 +1,35 @@
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.07s
+     Running unittests src/main.rs (target/debug/deps/ra-42532ad93c49e9aa)
+
+running 1 test
+test tests::doctor_reports_exact_phase_one_candidate_surface ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+     Running tests/direct_crash_verify.rs (target/debug/deps/direct_crash_verify-53b3bace0f04268b)
+
+running 1 test
+test ra_verify_directly_reconciles_stale_metadata_projection ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.08s
+
+     Running tests/hardening_v5_ingress.rs (target/debug/deps/hardening_v5_ingress-f74614ba2ecac76e)
+
+running 6 tests
+test recursive_duplicate_keys_reject_before_run_creation ... ok
+test excess_steps_reject_before_identity_or_dispatch ... ok
+test rejected_input_never_reaches_shell_dispatch ... ok
+test unknown_fields_reject_before_run_creation ... ok
+test fifo_device_and_symlink_inputs_are_rejected_without_blocking ... ok
+test oversized_whitespace_and_aggregate_material_reject_at_transport_boundary ... ok
+
+test result: ok. 6 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.05s
+
+     Running tests/terminal_exit.rs (target/debug/deps/terminal_exit-4432e4ce1b687ec9)
+
+running 2 tests
+test phase_one_cli_exposes_no_unadmitted_serve_commands ... ok
+test real_cli_non_success_matrix_exits_nonzero_and_retains_strict_runs ... ok
+
+test result: ok. 2 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.52s
+

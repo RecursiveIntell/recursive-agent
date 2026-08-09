@@ -1,0 +1,35 @@
+$ rustfmt --edition 2021 crates/recursive-agent-contracts/tests/phase2_runtime_events.rs
+exit_code: 0
+
+
+
+$ cargo test -p recursive-agent-contracts --test phase2_runtime_events -- --nocapture
+exit_code: 101
+
+Compiling recursive-agent-contracts v0.1.0 (/home/sikmindz/Coding/recursive-agent/crates/recursive-agent-contracts)
+error[E0432]: unresolved imports `recursive_agent_contracts::project_runtime_events`, `recursive_agent_contracts::validate_runtime_event_sequence`, `recursive_agent_contracts::RuntimeEventKindV1`
+ --> crates/recursive-agent-contracts/tests/phase2_runtime_events.rs:3:71
+  |
+3 |     content_digest, derive_receipt_id, derive_run_id, derive_step_id, project_runtime_events,
+  |                                                                       ^^^^^^^^^^^^^^^^^^^^^^ no `project_runtime_events` in the root
+4 |     validate_receipt_sequence, validate_runtime_event_sequence, AuthorityLineageEntryV1,
+  |                                ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ no `validate_runtime_event_sequence` in the root
+...
+7 |     RuntimeEventKindV1, StepSpecV1, ToolCallSpecV1,
+  |     ^^^^^^^^^^^^^^^^^^ no `RuntimeEventKindV1` in the root
+  |
+help: a similar name exists in the module
+  |
+4 -     validate_receipt_sequence, validate_runtime_event_sequence, AuthorityLineageEntryV1,
+4 +     validate_receipt_sequence, validate_receipt_sequence, AuthorityLineageEntryV1,
+  |
+
+error[E0425]: cannot find type `RuntimeEventV1` in crate `recursive_agent_contracts`
+   --> crates/recursive-agent-contracts/tests/phase2_runtime_events.rs:187:61
+    |
+187 |         serde_json::from_value::<recursive_agent_contracts::RuntimeEventV1>(missing_receipt_field)
+    |                                                             ^^^^^^^^^^^^^^ not found in `recursive_agent_contracts`
+
+Some errors have detailed explanations: E0425, E0432.
+For more information about an error, try `rustc --explain E0425`.
+error: could not compile `recursive-agent-contracts` (test "phase2_runtime_events") due to 2 previous errors

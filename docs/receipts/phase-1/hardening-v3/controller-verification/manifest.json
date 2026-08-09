@@ -1,0 +1,49 @@
+{
+  "schema": "recursive-agent/phase-1-hardening-v3-controller-candidate/v1",
+  "recorded_date": "2026-08-05",
+  "disposition": "controller hostile review required",
+  "phase_status": "rejected_pending_hostile_review",
+  "repository": "/home/sikmindz/Coding/recursive-agent",
+  "branch": "main",
+  "head": "3805f7abf319e07e47f1c20b862e614c3dad164f",
+  "source_tree_digest": {
+    "algorithm": "sha256",
+    "value": "7203d08baccaf226d56c9a889146153228484d8dfb7f5ac2f8fc57e0c55ca3df",
+    "construction": "sha256 of the sorted per-file sha256 records for Cargo.toml, Cargo.lock, and every regular file below crates/"
+  },
+  "tracked_binary_diff_digest": {
+    "algorithm": "sha256",
+    "value": "b7b3387c85450ef999099a9e1e21b16443d93e63e001ff38445fe1846a4091df",
+    "scope": "git diff --binary -- Cargo.toml Cargo.lock crates"
+  },
+  "environment": {
+    "architecture": "x86_64",
+    "rustc": "1.97.1 (8bab26f4f 2026-07-14)",
+    "cargo": "1.97.1 (c980f4866 2026-06-30)",
+    "bubblewrap": "0.11.0",
+    "libseccomp": "2.6.0"
+  },
+  "required_matrix": [
+    { "command": "cargo fmt --all -- --check", "exit": 0, "result": "clean (pre-matrix)" },
+    { "command": "cargo test -p recursive-agent-contracts --all-targets", "exit": 0, "passed": 11, "failed": 0 },
+    { "command": "cargo test -p recursive-agent-policy --all-targets", "exit": 0, "passed": 7, "failed": 0 },
+    { "command": "cargo test -p recursive-agent-ledger --all-targets", "exit": 0, "passed": 24, "failed": 0 },
+    { "command": "cargo test -p recursive-agent-sandbox --all-targets", "exit": 0, "passed": 14, "failed": 0 },
+    { "command": "cargo test -p recursive-agent-provider --all-targets", "exit": 0, "passed": 11, "failed": 0 },
+    { "command": "cargo test -p recursive-agent-runner --all-targets", "exit": 0, "passed": 13, "failed": 0 },
+    { "command": "cargo test -p recursive-agent-memory --all-targets", "exit": 0, "passed": 6, "failed": 0 },
+    { "command": "cargo test -p recursive-agent-tools --all-targets", "exit": 0, "passed": 8, "failed": 0 },
+    { "command": "cargo test -p recursive-agent-daemon --all-targets", "exit": 0, "passed": 2, "failed": 0 },
+    { "command": "cargo test -p recursive-agent-mcp --all-targets", "exit": 0, "passed": 0, "failed": 0 },
+    { "command": "cargo test -p recursive-agent-skills --all-targets", "exit": 0, "passed": 5, "failed": 0 },
+    { "command": "cargo test -p recursive-agent-mcts --all-targets", "exit": 0, "passed": 2, "failed": 0 },
+    { "command": "cargo test --workspace --all-targets", "exit": 0, "passed": 105, "failed": 0 },
+    { "command": "cargo clippy --workspace --all-targets -- -D warnings", "exit": 0, "result": "clean" },
+    { "command": "cargo fmt --all -- --check", "exit": 0, "result": "clean (post-matrix)" },
+    { "command": "git diff --check", "exit": 0, "result": "clean" }
+  ],
+  "notes": [
+    "The ledger process-race regression intentionally executes one losing child whose inner harness prints FAILED; the enclosing test and cargo command exit 0 after proving exactly one predecessor owner.",
+    "All evidence is candidate evidence only and does not admit Phase 1 or advance Phase 2."
+  ]
+}

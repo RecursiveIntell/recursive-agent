@@ -1,0 +1,13 @@
+5:#[cfg(test)]
+9:#[cfg(test)]
+158:#[cfg(test)]
+163:#[cfg(test)]
+259:#[cfg(test)]
+299:#[cfg(test)]
+300:mod tests {
+360:            let output = std::process::Command::new(&executable)
+426:pub(super) fn execute(
+1275:    let pid = spawn::posix_spawn(path.as_c_str(), &actions, &attributes, &args, &env)
+1687:            let probe = Command::new("/usr/bin/bash")
+1717:        let child = Command::new("/usr/bin/bash")
+1727:            .spawn()?;

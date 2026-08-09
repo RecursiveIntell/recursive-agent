@@ -1,0 +1,8 @@
+Finished `test` profile [unoptimized + debuginfo] target(s) in 0.12s
+     Running unittests src/lib.rs (target/debug/deps/recursive_agent_daemon-aae0797674622b02)
+
+running 2 tests
+test tests::empty_connection_is_rejected ... ok
+test tests::daemon_accepts_and_runs_echo_spec ... ok
+
+test result: ok. 2 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.30s

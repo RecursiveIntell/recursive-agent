@@ -1,0 +1,38 @@
+$ rustfmt --edition 2021 crates/recursive-agent-ledger/tests/lifecycle_validation.rs
+exit_code: 0
+
+
+
+$ cargo test -p recursive-agent-ledger --test lifecycle_validation concurrent_readers_observe_only_committed_causal_event_prefixes -- --nocapture
+exit_code: 101
+
+Compiling recursive-agent-policy v0.1.0 (/home/sikmindz/Coding/recursive-agent/crates/recursive-agent-policy)
+   Compiling recursive-agent-ledger v0.1.0 (/home/sikmindz/Coding/recursive-agent/crates/recursive-agent-ledger)
+error[E0432]: unresolved import `recursive_agent_ledger::committed_events_directory_bound`
+ --> crates/recursive-agent-ledger/tests/lifecycle_validation.rs:8:28
+  |
+8 |     chain_digest_from_raw, committed_events_directory_bound, make_receipt, open,
+  |                            ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ no `committed_events_directory_bound` in the root
+
+error[E0277]: `?` couldn't convert the error: `dyn std::error::Error + Send + Sync: Sized` is not satisfied
+    --> crates/recursive-agent-ledger/tests/lifecycle_validation.rs:1083:87
+     |
+1023 |   fn concurrent_readers_observe_only_committed_causal_event_prefixes() -> TestResult {
+     |                                                                           ---------- required `dyn std::error::Error + Send + Sync: Sized` because of this
+...
+1081 |       let maximum = reader
+     |  ___________________-
+1082 | |         .join()
+1083 | |         .map_err(|_| std::io::Error::other("committed-event reader thread panicked"))??;
+     | |                                                                                      -^ doesn't have a size known at compile-time
+     | |______________________________________________________________________________________|
+     |                                                                                        this can't be annotated with `?` because it has type `Result<_, Box<dyn std::error::Error + Send + Sync>>`
+     |
+     = help: the trait `Sized` is not implemented for `dyn std::error::Error + Send + Sync`
+     = note: the question mark operation (`?`) implicitly performs a conversion on the error value using the `From` trait
+     = note: required for `Box<dyn std::error::Error + Send + Sync>` to implement `std::error::Error`
+     = note: required for `Box<dyn std::error::Error>` to implement `From<Box<dyn std::error::Error + Send + Sync>>`
+
+Some errors have detailed explanations: E0277, E0432.
+For more information about an error, try `rustc --explain E0277`.
+error: could not compile `recursive-agent-ledger` (test "lifecycle_validation") due to 2 previous errors

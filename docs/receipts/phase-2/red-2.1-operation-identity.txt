@@ -1,0 +1,18 @@
+$ cargo test -p recursive-agent-contracts --test phase2_operation_envelope operation_identity_is_deterministic_and_binds_all_semantic_surfaces -- --nocapture
+exit_code: 101
+
+Compiling recursive-agent-contracts v0.1.0 (/home/sikmindz/Coding/recursive-agent/crates/recursive-agent-contracts)
+error[E0432]: unresolved import `recursive_agent_contracts::derive_operation_id`
+ --> crates/recursive-agent-contracts/tests/phase2_operation_envelope.rs:2:21
+  |
+2 |     content_digest, derive_operation_id, ActorAuthorityV1, AuthorityOriginV1, CausalLinkV1,
+  |                     ^^^^^^^^^^^^^^^^^^^ no `derive_operation_id` in the root
+  |
+help: a similar name exists in the module
+  |
+2 -     content_digest, derive_operation_id, ActorAuthorityV1, AuthorityOriginV1, CausalLinkV1,
+2 +     content_digest, derive_permit_id, ActorAuthorityV1, AuthorityOriginV1, CausalLinkV1,
+  |
+
+For more information about this error, try `rustc --explain E0432`.
+error: could not compile `recursive-agent-contracts` (test "phase2_operation_envelope") due to 1 previous error

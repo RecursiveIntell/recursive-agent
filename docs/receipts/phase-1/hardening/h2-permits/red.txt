@@ -1,0 +1,13 @@
+RED captured before production changes.
+Command: sed -n '/pub struct PermitBindingV1 {/,/^}/p' crates/recursive-agent-policy/src/lib.rs && rg -n 'revoke|expires|not_before|actor|budget|parent' crates/recursive-agent-policy/src/lib.rs
+Exit: 1 (required lease fields/transitions absent)
+Observed:
+pub struct PermitBindingV1 {
+    pub run_id: String,
+    pub step_id: String,
+    pub tool: String,
+    pub args_digest: String,
+    pub effect_scope: String,
+    pub policy_version: String,
+}
+No actor, action digest, typed budget, parent, not-before, expiry, or revocation implementation matched.

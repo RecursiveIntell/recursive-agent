@@ -1,0 +1,5 @@
+Phase 1 hardening v3 RED evidence — R8 replay snapshot
+Observed before production changes on 2026-08-05.
+Command: sed -n '620,665p' crates/recursive-agent-runner/src/lib.rs
+Exit: 0
+Evidence: replay calls verify_directory_bound, releases ledger verification scope, then reopens receipts.ndjson with unbounded std::fs::read_to_string and projects those separately read bytes.

@@ -1,0 +1,25 @@
+Recursive Agent Phase 3 Task 3.1 framing RED v4
+Recorded UTC: 2026-08-05T14:09:52.373612+00:00
+$ cargo test -p recursive-agent-daemon --test framing exact_frame_returns_only_the_borrowed_payload -- --nocapture
+exit_code=101
+Compiling recursive-agent-daemon v0.1.0 (/home/sikmindz/Coding/recursive-agent/crates/recursive-agent-daemon)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.37s
+     Running tests/framing.rs (target/debug/deps/framing-33b9bfb60408ef9c)
+
+running 1 test
+
+thread 'exact_frame_returns_only_the_borrowed_payload' (2409792) panicked at crates/recursive-agent-daemon/tests/framing.rs:50:5:
+assertion `left == right` failed
+  left: Err(PayloadAdmissionUnavailable)
+ right: Ok([97, 98, 99])
+note: run with `RUST_BACKTRACE=1` environment variable to display a backtrace
+test exact_frame_returns_only_the_borrowed_payload ... FAILED
+
+failures:
+
+failures:
+    exact_frame_returns_only_the_borrowed_payload
+
+test result: FAILED. 0 passed; 1 failed; 0 ignored; 0 measured; 3 filtered out; finished in 0.00s
+
+error: test failed, to rerun pass `-p recursive-agent-daemon --test framing`

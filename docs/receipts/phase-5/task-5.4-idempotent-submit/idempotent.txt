@@ -1,0 +1,10 @@
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.06s
+     Running tests/idempotent_submit.rs (target/debug/deps/idempotent_submit-615c3fbfc690c5bf)
+
+running 3 tests
+test without_scheduler_idempotent_submit_is_unavailable ... ok
+test exact_duplicate_returns_prior_handle_without_reexecution ... ok
+test same_key_different_operation_is_a_typed_conflict ... ok
+
+test result: ok. 3 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.06s
+

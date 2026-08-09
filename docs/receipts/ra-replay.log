@@ -1,13 +1,28 @@
 replay: ok
-length: 6
-final_head: c9b83dffca2ec1f2ffca4d6fef6af4de2b64c699c5d5900dffe365c342ee5266
-steps: 6
-  step step:graph-start kind=RunStarted outcome=Ok artifacts=0
-  step step:step:387bd1d4-06d2-499e-955a-9fbbb11c92d1 kind=StepStarted outcome=Ok artifacts=0
-  step step:step:387bd1d4-06d2-499e-955a-9fbbb11c92d1 kind=StepCompleted outcome=Ok artifacts=1
-  step step:step:4dfc0f1f-02e8-459e-b0f5-310096785090 kind=StepStarted outcome=Ok artifacts=0
-  step step:step:4dfc0f1f-02e8-459e-b0f5-310096785090 kind=StepCompleted outcome=Ok artifacts=1
-  step step:graph-end kind=RunFinalized outcome=Ok artifacts=0
-artifacts: 2
-  blake3:23aa347f0a7e0663c8d0445bee7f80954feedb90f91c702151bdfb0d3ba22506
-  blake3:48acb353e100ddf67c3cf5902adbaaef4b5dadd09f8856d7b57af12b3fad0d27
+length: 15
+final_head: 1ac71d7a5a8b4ae566bb4c6bac4e73ec3ae5b67152b337d3a5562faf0a554f37
+steps: 15
+  step v1:recursive-agent/step/v1:det:ce661dd2c57171ec209a6df09d2db3fc27010ca0510f480f53a0764627358cb3 kind=RunStarted outcome=Ok artifacts=0
+  step v1:recursive-agent/step/v1:det:ce661dd2c57171ec209a6df09d2db3fc27010ca0510f480f53a0764627358cb3 kind=StepStarted outcome=Ok artifacts=0
+  step v1:recursive-agent/step/v1:det:ce661dd2c57171ec209a6df09d2db3fc27010ca0510f480f53a0764627358cb3 kind=PermitIssued outcome=Ok artifacts=1
+  step v1:recursive-agent/step/v1:det:797ec8cfff209280b42342bf62a9144e51b0b8b57d37704ffacacc6d02dfe0aa kind=StepStarted outcome=Ok artifacts=0
+  step v1:recursive-agent/step/v1:det:797ec8cfff209280b42342bf62a9144e51b0b8b57d37704ffacacc6d02dfe0aa kind=PermitIssued outcome=Ok artifacts=1
+  step v1:recursive-agent/step/v1:det:797ec8cfff209280b42342bf62a9144e51b0b8b57d37704ffacacc6d02dfe0aa kind=PermitConsumed outcome=Ok artifacts=1
+  step v1:recursive-agent/step/v1:det:797ec8cfff209280b42342bf62a9144e51b0b8b57d37704ffacacc6d02dfe0aa kind=ArtifactStored outcome=Ok artifacts=1
+  step v1:recursive-agent/step/v1:det:797ec8cfff209280b42342bf62a9144e51b0b8b57d37704ffacacc6d02dfe0aa kind=StepCompleted outcome=Ok artifacts=1
+  step v1:recursive-agent/step/v1:det:7272e29196c3e7080f4d91aa188436d64fb8996636ae6d6f8e2867a55b5d7a25 kind=StepStarted outcome=Ok artifacts=0
+  step v1:recursive-agent/step/v1:det:7272e29196c3e7080f4d91aa188436d64fb8996636ae6d6f8e2867a55b5d7a25 kind=PermitIssued outcome=Ok artifacts=1
+  step v1:recursive-agent/step/v1:det:7272e29196c3e7080f4d91aa188436d64fb8996636ae6d6f8e2867a55b5d7a25 kind=PermitConsumed outcome=Ok artifacts=1
+  step v1:recursive-agent/step/v1:det:7272e29196c3e7080f4d91aa188436d64fb8996636ae6d6f8e2867a55b5d7a25 kind=ArtifactStored outcome=Ok artifacts=1
+  step v1:recursive-agent/step/v1:det:7272e29196c3e7080f4d91aa188436d64fb8996636ae6d6f8e2867a55b5d7a25 kind=StepCompleted outcome=Ok artifacts=1
+  step v1:recursive-agent/step/v1:det:ce661dd2c57171ec209a6df09d2db3fc27010ca0510f480f53a0764627358cb3 kind=PermitRevoked outcome=Ok artifacts=1
+  step v1:recursive-agent/step/v1:det:ce661dd2c57171ec209a6df09d2db3fc27010ca0510f480f53a0764627358cb3 kind=RunFinalized outcome=Ok artifacts=0
+artifacts: 8
+  v1:recursive-agent/artifact/v1:det:a61f5bf06aa1bfbf9f6030c26ed52f937339f394dc3443989034b236ee8cd134
+  v1:recursive-agent/artifact/v1:det:621143602d6bbb0f1c32d04007466e38a8c6684766b53f5595dd7b0c4a2a6891
+  v1:recursive-agent/artifact/v1:det:59193a25a19814e0bd1b8229f501f5ec8185de12ea585e8939c576a0cff727d2
+  v1:recursive-agent/artifact/v1:det:23aa347f0a7e0663c8d0445bee7f80954feedb90f91c702151bdfb0d3ba22506
+  v1:recursive-agent/artifact/v1:det:142b633a2a39abdf317f9e5774df15651c3055d592987097377b33975ec4b08f
+  v1:recursive-agent/artifact/v1:det:30170bca2b6bd2b234693002793f8d256add32a007c2be6f504e816d0dd7dc8c
+  v1:recursive-agent/artifact/v1:det:beb3db89f6c015f73547cf929a496e81d50cf339026ff1247dc0577cabc4497f
+  v1:recursive-agent/artifact/v1:det:08e9f5c1357770dcceaeaa2582679b9350acb3bf0db94278eca9d7eced523ed9

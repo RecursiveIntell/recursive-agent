@@ -1,0 +1,5 @@
+Phase 1 hardening v3 RED evidence — R9 memory boundary
+Observed before production changes on 2026-08-05.
+Command: rg -n 'pub id: String|filter_map\(|CREATE TABLE|SELECT id' crates/recursive-agent-memory/src/lib.rs
+Exit: 0
+Evidence: MemoryEntry.id is String; provenance is not stored; get/search do not recompute identity; search uses filter_map(|r| r.ok()) and silently omits corrupt rows.

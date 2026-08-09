@@ -1,0 +1,8 @@
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.06s
+     Running tests/adapter_parity.rs (target/debug/deps/adapter_parity-8f292f0602a1f118)
+
+running 1 test
+test embedded_and_daemon_ipc_surfaces_produce_identical_normalized_invariants ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.13s
+

@@ -1,0 +1,1 @@
+Unable to open session log file "/home/sikmindz/.cache/starship/session_1901333701838724.log": Os { code: 30, kind: ReadOnlyFilesystem, message: "Read-only file system" }!

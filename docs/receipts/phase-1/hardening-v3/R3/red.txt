@@ -1,0 +1,5 @@
+Phase 1 hardening v3 RED evidence — R3 independent effect bypasses
+Observed before production changes on 2026-08-05.
+Commands: rg -n 'pub fn execute\(|pub fn complete|pub struct McpClient|pub struct MemoryStore' crates
+Exit: 0
+Evidence: sandbox execute accepts only &SandboxSpec; provider exports complete and complete_with_resolver; MCP exports client::McpClient::connect arbitrary process spawn; memory exports MemoryStore::open/put/get/search. Bare downstream effect APIs remain reachable.

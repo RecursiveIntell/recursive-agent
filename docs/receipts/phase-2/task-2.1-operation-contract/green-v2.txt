@@ -1,0 +1,118 @@
+$ rustfmt --edition 2021 crates/recursive-agent-contracts/src/lib.rs crates/recursive-agent-contracts/src/operation.rs crates/recursive-agent-contracts/tests/phase2_operation_envelope.rs
+exit_code: 0
+
+
+
+$ cargo test -p recursive-agent-contracts --test phase2_operation_envelope operation_v1_canonical_fixed_vector_is_stable -- --nocapture
+exit_code: 0
+
+Compiling recursive-agent-contracts v0.1.0 (/home/sikmindz/Coding/recursive-agent/crates/recursive-agent-contracts)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.90s
+     Running tests/phase2_operation_envelope.rs (target/debug/deps/phase2_operation_envelope-e90f56f8b91c6a51)
+
+running 1 test
+test operation_v1_canonical_fixed_vector_is_stable ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 10 filtered out; finished in 0.00s
+
+$ cargo test -p recursive-agent-contracts --all-targets --all-features
+exit_code: 0
+
+Finished `test` profile [unoptimized + debuginfo] target(s) in 0.07s
+     Running unittests src/lib.rs (target/debug/deps/recursive_agent_contracts-cc1469b857d8bcec)
+
+running 9 tests
+test tests::content_digest_matches_recursive_jcs ... ok
+test tests::current_ids_reject_uuid_and_wrong_family ... ok
+test tests::legacy_reader_is_explicit ... ok
+test tests::id_domains_do_not_collide ... ok
+test tests::lineage_requires_request_then_effect ... ok
+test tests::current_id_deserialization_rejects_empty_arbitrary_uuid_and_wrong_domain ... ok
+test tests::jcs_canonical_is_stable_across_reordering ... ok
+test tests::terminal_outcomes_match_every_terminal_state ... ok
+test tests::lineage_full_chain_passes ... ok
+
+test result: ok. 9 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+     Running tests/hardening_v5_quarantine.rs (target/debug/deps/hardening_v5_quarantine-74fe0ef062a425b1)
+
+running 2 tests
+test default_phase_one_sources_expose_no_later_phase_execution_adapter ... ok
+test cli_operator_surface_remains_exactly_phase_one ... ok
+
+test result: ok. 2 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+     Running tests/hardening_v6_ingress.rs (target/debug/deps/hardening_v6_ingress-78918419e22f988b)
+
+running 5 tests
+test empty_and_duplicate_step_names_are_rejected ... ok
+test valid_multi_step_sibling_objects_reuse_field_names ... ok
+test time_label_has_an_explicit_byte_ceiling ... ok
+test shell_collections_paths_and_budgets_have_explicit_ceilings ... ok
+test identifiers_and_text_have_explicit_byte_ceilings ... ok
+
+test result: ok. 5 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.01s
+
+     Running tests/phase1_effect_surface.rs (target/debug/deps/phase1_effect_surface-cddaf80cb62252bc)
+
+running 1 test
+test default_production_surface_has_no_bare_effect_entrypoint ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.01s
+
+     Running tests/phase2_operation_envelope.rs (target/debug/deps/phase2_operation_envelope-e90f56f8b91c6a51)
+
+running 11 tests
+test complete_operation_envelope_round_trips_without_a_second_run_model ... ok
+test operation_schema_accepts_only_exact_v1_tag ... ok
+test operation_envelope_enforces_authority_causality_shape ... ok
+test operation_envelope_rejects_unknown_closed_fields ... ok
+test operation_envelope_enforces_replay_classification ... ok
+test operation_envelope_rejects_invalid_operation_budgets ... ok
+test operation_envelope_rejects_invalid_actor_and_provenance_metadata ... ok
+test operation_identity_is_deterministic_and_binds_all_semantic_surfaces ... ok
+test operation_v1_canonical_fixed_vector_is_stable ... ok
+test operation_envelope_rejects_effect_mismatch_and_underdeclaration ... ok
+test operation_byte_ingress_rejects_hostile_vectors_before_admission ... ok
+
+test result: ok. 11 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+     Running tests/workspace_lints.rs (target/debug/deps/workspace_lints-87292d9a0c06c47f)
+
+running 1 test
+test every_workspace_member_inherits_lints_exactly_once ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+$ cargo clippy -p recursive-agent-contracts --all-targets --all-features -- -D warnings
+exit_code: 0
+
+Checking recursive-agent-contracts v0.1.0 (/home/sikmindz/Coding/recursive-agent/crates/recursive-agent-contracts)
+    Finished `dev` profile [unoptimized + debuginfo] target(s) in 0.25s
+
+$ cargo fmt --all -- --check
+exit_code: 0
+
+
+
+$ git diff --check
+exit_code: 0
+
+
+
+$ rustc --version && cargo --version && git rev-parse HEAD && git diff --binary | sha256sum
+exit_code: 0
+
+rustc 1.97.1 (8bab26f4f 2026-07-14)
+cargo 1.97.1 (c980f4866 2026-06-30)
+3805f7abf319e07e47f1c20b862e614c3dad164f
+ce750e753376dd333e8e06d2ad69165d7713ead7a66698c548b962d1820cf111  -
+
+$ sha256sum crates/recursive-agent-contracts/src/operation.rs crates/recursive-agent-contracts/src/lib.rs crates/recursive-agent-contracts/tests/phase2_operation_envelope.rs docs/receipts/phase-2/task-2.1-operation-contract/operation-v1.vector.json docs/receipts/phase-2/task-2.1-operation-contract/operation-v1.schema.json
+exit_code: 0
+
+7e9754a3af5579e8180ab66a70c674c39c3a762eafdfc20a0845ebf5023637f2  crates/recursive-agent-contracts/src/operation.rs
+d4a13dc620519d3537aa78a7061f22630f8af3d78529fa5fb6a900a869ee10b0  crates/recursive-agent-contracts/src/lib.rs
+4b2fccbac8a43da748739b9aea8a561a40c04ee7f38dbfd985e64bdaaf1518db  crates/recursive-agent-contracts/tests/phase2_operation_envelope.rs
+f856abe2ecb7739fa00b194df52bed65acb266456f65a7f8771a2e5202966b4e  docs/receipts/phase-2/task-2.1-operation-contract/operation-v1.vector.json
+51a5ebf3cb50053c73f8abe088c5a340c61dac5855728a6a47b780fea9907056  docs/receipts/phase-2/task-2.1-operation-contract/operation-v1.schema.json

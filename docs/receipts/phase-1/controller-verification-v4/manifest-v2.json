@@ -1,0 +1,293 @@
+{
+  "all_effective_gates_passed": true,
+  "complete": true,
+  "false_positive": {
+    "name": "scan_provider_routes",
+    "reason": "The original regex matched secure normalization to root and fixed enum-controlled routes; it did not find arbitrary path retention."
+  },
+  "generated_at": "2026-08-05T08:09:54.228280+00:00",
+  "results": [
+    {
+      "command": "cargo fmt --all -- --check",
+      "exit_code": 0,
+      "name": "fmt_pre",
+      "output_bytes": 0,
+      "output_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "tail": ""
+    },
+    {
+      "command": "cargo test -p recursive-agent-contracts --all-targets",
+      "exit_code": 0,
+      "name": "contracts",
+      "output_bytes": 1351,
+      "output_sha256": "71de77f96af076c55b6483c53f92b39d551814bef708e1cc1fb1050af4807da0",
+      "tail": "test tests::jcs_canonical_is_stable_across_reordering ... ok\ntest tests::lineage_requires_request_then_effect ... ok\ntest tests::lineage_full_chain_passes ... ok\ntest tests::terminal_outcomes_match_every_terminal_state ... ok\n\ntest result: ok. 9 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s\n\n     Running tests/phase1_effect_surface.rs (target/debug/deps/phase1_effect_surface-bb68388aa358a5ec)\n\nrunning 1 test\ntest default_production_surface_has_no_bare_effect_entrypoint ... ok\n\ntest result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s\n\n     Running tests/workspace_lints.rs (target/debug/deps/workspace_lints-3096495350ed6466)\n\nrunning 1 test\ntest every_workspace_member_inherits_lints_exactly_once ... ok\n\ntest result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s"
+    },
+    {
+      "command": "cargo test -p recursive-agent-policy --all-targets",
+      "exit_code": 0,
+      "name": "policy",
+      "output_bytes": 869,
+      "output_sha256": "a096a87b57d0a1937656b031740588288b4db83c60ab9ba8317f4565f0f112c6",
+      "tail": "Finished `test` profile [unoptimized + debuginfo] target(s) in 0.05s\n     Running unittests src/lib.rs (target/debug/deps/recursive_agent_policy-a2f839bfb831c456)\n\nrunning 0 tests\n\ntest result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s\n\n     Running tests/permit_lifecycle.rs (target/debug/deps/permit_lifecycle-2b77fa535f4c4f60)\n\nrunning 7 tests\ntest unissued_parent_lease_is_rejected ... ok\ntest permit_state_symlink_swap_is_rejected ... ok\ntest root_is_pinned_and_symlink_roots_are_rejected ... ok\ntest revoked_parent_cannot_authorize_child_dispatch ... ok\ntest concurrent_and_restart_double_spend_are_rejected ... ok\ntest wrong_binding_expiry_and_revocation_are_typed ... ok\ntest crash_points_reconcile_to_issued_or_consumed ... ok\n\ntest result: ok. 7 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.01s"
+    },
+    {
+      "command": "cargo test -p recursive-agent-ledger --all-targets",
+      "exit_code": 0,
+      "name": "ledger",
+      "output_bytes": 3090,
+      "output_sha256": "ed6b1070f8690b488b200231716b581aa26f1331ad253978b27760baa4856f25",
+      "tail": "test result: FAILED. 0 passed; 1 failed; 0 ignored; 0 measured; 8 filtered out; finished in 0.00s\n\ntest two_process_append_race_has_one_predecessor_owner ... ok\ntest append_failpoints_reopen_to_previous_or_new_chain ... ok\ntest process_kill_failpoint_matrix_recovers_previous_or_new_chain ... ok\n\ntest result: ok. 9 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.99s\n\n     Running tests/lifecycle_validation.rs (target/debug/deps/lifecycle_validation-a18316ff48082edf)\n\nrunning 7 tests\ntest canonical_failed_then_success_chain_fails_offline_verification ... ok\ntest impossible_authorization_and_outcome_sequences_are_rejected ... ok\ntest expected_run_binding_rejects_whole_chain_transplant ... ok\ntest duplicate_final_post_terminal_final_without_start_and_mixed_runs_fail_append ... ok\ntest strict_lifecycle_rejects_missing_or_mismatched_permit_and_artifact_evidence ... ok\ntest every_public_strict_api_rejects_a_transplanted_chain ... ok\ntest every_failure_terminal_dominates_successful_finalization ... ok\n\ntest result: ok. 7 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.08s"
+    },
+    {
+      "command": "cargo test -p recursive-agent-sandbox --all-targets",
+      "exit_code": 0,
+      "name": "sandbox",
+      "output_bytes": 1462,
+      "output_sha256": "d13e9852679b58b05250e0513c9c137b2f81f2bec2b5edf356b37f485a492f25",
+      "tail": "\ntest result: ok. 2 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s\n\n     Running tests/enforcement_truth.rs (target/debug/deps/enforcement_truth-f3575ab5cbb28a9c)\n\nrunning 12 tests\ntest missing_allow_path_fails_before_launcher ... ok\ntest implementation_contains_no_local_unsafe_or_landlock_claim ... ok\ntest production_api_is_fixed_and_zero_timeout_fails_before_effect ... ok\ntest fixed_printf_is_mandatorily_enforced_on_this_host ... ok\ntest malicious_sibling_helper_is_never_consulted_by_production_execute ... ok\ntest inherited_non_cloexec_descriptor_is_not_visible_to_payload ... ok\ntest network_socket_creation_receives_eperm_under_enforcement ... ok\ntest active_mount_source_replacement_never_exposes_attacker_bytes ... ok\ntest operation_root_identity_and_access_mode_change_policy_digest ... ok\ntest filesystem_and_network_attempts_are_denied_or_host_fails_closed ... ok\ntest undeclared_read_and_descendant_are_mandatorily_bounded ... ok\ntest descendants_output_and_signal_races_are_bounded_or_fail_closed ... ok\n\ntest result: ok. 12 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.38s"
+    },
+    {
+      "command": "cargo test -p recursive-agent-provider --all-targets",
+      "exit_code": 0,
+      "name": "provider",
+      "output_bytes": 1198,
+      "output_sha256": "fb0d3b847b3a308aec38c4bb888f62463e5baabdf35f7cfe0347167e228ffc71",
+      "tail": "running 4 tests\ntest tests::empty_base_rejected ... ok\ntest tests::fixed_provider_routes_are_appended_to_origin_only ... ok\ntest tests::ollama_url_has_no_double_slash ... ok\ntest tests::ollama_spec_round_trips ... ok\n\ntest result: ok. 4 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s\n\n     Running tests/secret_contract.rs (target/debug/deps/secret_contract-c9bdec057a270b75)\n\nrunning 7 tests\ntest debug_output_redacts_secret_material ... ok\ntest provider_execution_is_typed_unavailable_without_resolving_credentials ... ok\ntest provider_spec_serialization_contains_no_secret ... ok\ntest unavailable_invocation_and_debug_paths_cannot_retain_sentinel ... ok\ntest raw_secret_reference_and_raw_key_migration_errors_never_echo_input ... ok\ntest validated_endpoint_debug_and_serialization_are_normalized_and_secret_free ... ok\ntest url_userinfo_query_fragment_scheme_and_control_are_rejected_before_resolver ... ok\n\ntest result: ok. 7 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s"
+    },
+    {
+      "command": "cargo test -p recursive-agent-runner --all-targets",
+      "exit_code": 0,
+      "name": "runner",
+      "output_bytes": 1943,
+      "output_sha256": "0a75df2380db2664c6eb4af70441ccb347950a7b58a1f3177f09cac53a77c97c",
+      "tail": "test verified_replay_snapshot_is_immutable_bounded_and_directory_bound ... ok\ntest advancing_and_rollback_clocks_prevent_affected_dispatch ... ok\ntest false_signal_stdout_stderr_and_timeout_never_complete_successfully ... ok\n\ntest result: ok. 4 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.29s\n\n     Running tests/lifecycle_state_machine.rs (target/debug/deps/lifecycle_state_machine-13ad697bce8bb712)\n\nrunning 2 tests\ntest terminal_matrix_rejects_success_for_every_non_success_terminal ... ok\ntest failed_step_dominates_run_terminal_state ... ok\n\ntest result: ok. 2 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.02s\n\n     Running tests/permit_dispatch.rs (target/debug/deps/permit_dispatch-a46a4ef0909a77fd)\n\nrunning 1 test\ntest every_rejected_lease_keeps_dispatch_counter_zero ... ok\n\ntest result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.01s"
+    },
+    {
+      "command": "cargo test -p recursive-agent-memory --all-targets",
+      "exit_code": 0,
+      "name": "memory",
+      "output_bytes": 600,
+      "output_sha256": "33795d6a3389533c260434837e6f493f8f89b616c03184a1979ee13606bb7d4d",
+      "tail": "Finished `test` profile [unoptimized + debuginfo] target(s) in 0.06s\n     Running unittests src/lib.rs (target/debug/deps/recursive_agent_memory-d879706075d82a3e)\n\nrunning 6 tests\ntest tests::get_missing_returns_none ... ok\ntest tests::put_and_get ... ok\ntest tests::identical_material_is_idempotent_and_content_changes_identity ... ok\ntest tests::search_finds_relevant ... ok\ntest tests::sqlite_tampering_is_typed_corruption_and_never_omitted ... ok\ntest tests::identity_is_stable_across_processes ... ok\n\ntest result: ok. 6 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s"
+    },
+    {
+      "command": "cargo test -p recursive-agent-tools --all-targets",
+      "exit_code": 0,
+      "name": "tools",
+      "output_bytes": 725,
+      "output_sha256": "bcb9e90412faf19c3478b46369e0b096194b181fd70f8b373669ef412c5a0cad",
+      "tail": "Finished `test` profile [unoptimized + debuginfo] target(s) in 0.06s\n     Running unittests src/lib.rs (target/debug/deps/recursive_agent_tools-8649f34cce1e023f)\n\nrunning 8 tests\ntest tests::invalid_provider_endpoint_is_rejected_in_tool_args_before_state_exists ... ok\ntest tests::llm_rejects_malformed_args_without_network ... ok\ntest tests::output_budget_is_actually_enforced ... ok\ntest tests::time_now_returns_frozen_timestamp ... ok\ntest tests::unknown_tool_errors ... ok\ntest tests::echo_returns_text ... ok\ntest tests::time_now_requires_frozen_clock ... ok\ntest tests::actual_elapsed_time_is_enforced_before_dispatch ... ok\n\ntest result: ok. 8 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.01s"
+    },
+    {
+      "command": "cargo test -p recursive-agent-daemon --all-targets",
+      "exit_code": 0,
+      "name": "daemon",
+      "output_bytes": 387,
+      "output_sha256": "dbe7f146c66a5496cbb57893fcc9d44fb51d0cc7999a1937b81d6d2c766469af",
+      "tail": "Finished `test` profile [unoptimized + debuginfo] target(s) in 0.06s\n     Running unittests src/lib.rs (target/debug/deps/recursive_agent_daemon-fb8f0e75d576f5fe)\n\nrunning 2 tests\ntest tests::connection_handler_accepts_and_runs_echo_spec ... ok\ntest tests::empty_connection_is_rejected ... ok\n\ntest result: ok. 2 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.03s"
+    },
+    {
+      "command": "cargo test -p recursive-agent-mcp --all-targets",
+      "exit_code": 0,
+      "name": "mcp",
+      "output_bytes": 271,
+      "output_sha256": "b45000a5951f31162abeb24f9e88204e6c035248b8c932086727c6bb06ee9ee0",
+      "tail": "Finished `test` profile [unoptimized + debuginfo] target(s) in 0.04s\n     Running unittests src/lib.rs (target/debug/deps/recursive_agent_mcp-8b13ffe62101f02a)\n\nrunning 0 tests\n\ntest result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s"
+    },
+    {
+      "command": "cargo test -p recursive-agent-skills --all-targets",
+      "exit_code": 0,
+      "name": "skills",
+      "output_bytes": 550,
+      "output_sha256": "2cac72a579842fdb6deedd53405ab6edc93cc67e59274b6587fc358b72de8178",
+      "tail": "Finished `test` profile [unoptimized + debuginfo] target(s) in 0.03s\n     Running unittests src/lib.rs (target/debug/deps/recursive_agent_skills-2be0074663479b8b)\n\nrunning 5 tests\ntest tests::traversal_absolute_and_symlink_ids_are_rejected ... ok\ntest tests::expand_substitutes_params ... ok\ntest tests::load_skill_from_file ... ok\ntest tests::missing_required_param_fails ... ok\ntest tests::active_manifest_replacement_never_returns_attacker_bytes ... ok\n\ntest result: ok. 5 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.02s"
+    },
+    {
+      "command": "cargo test -p recursive-agent-mcts --all-targets",
+      "exit_code": 0,
+      "name": "mcts",
+      "output_bytes": 349,
+      "output_sha256": "dcbe11cd5375fd3dcbae044f7eea7f05b0bc1c1e481488e5621f3bb2022cf174",
+      "tail": "Finished `test` profile [unoptimized + debuginfo] target(s) in 0.04s\n     Running unittests src/lib.rs (target/debug/deps/recursive_agent_mcts-9c34ccbb163db26c)\n\nrunning 2 tests\ntest tests::empty_tools_fails ... ok\ntest tests::search_with_one_tool ... ok\n\ntest result: ok. 2 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s"
+    },
+    {
+      "command": "cargo test -p recursive-agent-cli --all-targets",
+      "exit_code": 0,
+      "name": "cli",
+      "output_bytes": 601,
+      "output_sha256": "9f3b490df4a4a1b9a95fb194ef07289c0472adf976bb83b0f25167f4c9d97fbd",
+      "tail": "Finished `test` profile [unoptimized + debuginfo] target(s) in 0.07s\n     Running unittests src/main.rs (target/debug/deps/ra-47fcfa27cac88b50)\n\nrunning 1 test\ntest tests::doctor_reports_exact_phase_one_candidate_surface ... ok\n\ntest result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s\n\n     Running tests/direct_crash_verify.rs (target/debug/deps/direct_crash_verify-eeb54ff5c5d5cb17)\n\nrunning 1 test\ntest ra_verify_directly_reconciles_stale_metadata_projection ... ok\n\ntest result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.03s"
+    },
+    {
+      "command": "cargo test -p recursive-agent-sandbox --test enforcement_truth -- --nocapture",
+      "exit_code": 0,
+      "name": "focus_sandbox",
+      "output_bytes": 1117,
+      "output_sha256": "503d71c0300ef6d59878e9332ca9601e0f29953be36ca9c20cbf6bfa8dd6c8da",
+      "tail": "Finished `test` profile [unoptimized + debuginfo] target(s) in 0.05s\n     Running tests/enforcement_truth.rs (target/debug/deps/enforcement_truth-f3575ab5cbb28a9c)\n\nrunning 12 tests\ntest implementation_contains_no_local_unsafe_or_landlock_claim ... ok\ntest production_api_is_fixed_and_zero_timeout_fails_before_effect ... ok\ntest missing_allow_path_fails_before_launcher ... ok\ntest malicious_sibling_helper_is_never_consulted_by_production_execute ... ok\ntest fixed_printf_is_mandatorily_enforced_on_this_host ... ok\ntest inherited_non_cloexec_descriptor_is_not_visible_to_payload ... ok\ntest network_socket_creation_receives_eperm_under_enforcement ... ok\ntest operation_root_identity_and_access_mode_change_policy_digest ... ok\ntest active_mount_source_replacement_never_exposes_attacker_bytes ... ok\ntest filesystem_and_network_attempts_are_denied_or_host_fails_closed ... ok\ntest undeclared_read_and_descendant_are_mandatorily_bounded ... ok\ntest descendants_output_and_signal_races_are_bounded_or_fail_closed ... ok\n\ntest result: ok. 12 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.37s"
+    },
+    {
+      "command": "cargo test -p recursive-agent-runner --test hardening_v3 -- --nocapture",
+      "exit_code": 0,
+      "name": "focus_runner",
+      "output_bytes": 569,
+      "output_sha256": "39164139335b72389c24831058c16b9bbfb039f3f227452580dd8d6940bbd19a",
+      "tail": "Finished `test` profile [unoptimized + debuginfo] target(s) in 0.05s\n     Running tests/hardening_v3.rs (target/debug/deps/hardening_v3-b8799de0134a0c91)\n\nrunning 4 tests\ntest network_true_and_wrong_policy_version_fail_before_process_dispatch ... ok\ntest verified_replay_snapshot_is_immutable_bounded_and_directory_bound ... ok\ntest advancing_and_rollback_clocks_prevent_affected_dispatch ... ok\ntest false_signal_stdout_stderr_and_timeout_never_complete_successfully ... ok\n\ntest result: ok. 4 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.29s"
+    },
+    {
+      "command": "cargo test -p recursive-agent-contracts --test phase1_effect_surface -- --nocapture",
+      "exit_code": 0,
+      "name": "focus_effect_surface",
+      "output_bytes": 351,
+      "output_sha256": "23e3cd913d5e9ac9cdf791d7d0fb4486176e3a67eb89abfe4167175addf6b744",
+      "tail": "Finished `test` profile [unoptimized + debuginfo] target(s) in 0.04s\n     Running tests/phase1_effect_surface.rs (target/debug/deps/phase1_effect_surface-bb68388aa358a5ec)\n\nrunning 1 test\ntest default_production_surface_has_no_bare_effect_entrypoint ... ok\n\ntest result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s"
+    },
+    {
+      "command": "cargo test -p recursive-agent-contracts --test workspace_lints -- --nocapture",
+      "exit_code": 0,
+      "name": "focus_workspace_lints",
+      "output_bytes": 333,
+      "output_sha256": "0a7f3b1d03e711aaed56b6f704909ff7c076ac37d7599566f425ed6b1b287dfc",
+      "tail": "Finished `test` profile [unoptimized + debuginfo] target(s) in 0.04s\n     Running tests/workspace_lints.rs (target/debug/deps/workspace_lints-3096495350ed6466)\n\nrunning 1 test\ntest every_workspace_member_inherits_lints_exactly_once ... ok\n\ntest result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s"
+    },
+    {
+      "command": "cargo test -p recursive-agent-ledger --test lifecycle_validation -- --nocapture",
+      "exit_code": 0,
+      "name": "focus_lifecycle",
+      "output_bytes": 803,
+      "output_sha256": "464bbb444b047cb28bf0c8d0184e28ca0d48637c1c277d5697a2ac3af8b7019a",
+      "tail": "Finished `test` profile [unoptimized + debuginfo] target(s) in 0.04s\n     Running tests/lifecycle_validation.rs (target/debug/deps/lifecycle_validation-a18316ff48082edf)\n\nrunning 7 tests\ntest canonical_failed_then_success_chain_fails_offline_verification ... ok\ntest impossible_authorization_and_outcome_sequences_are_rejected ... ok\ntest expected_run_binding_rejects_whole_chain_transplant ... ok\ntest duplicate_final_post_terminal_final_without_start_and_mixed_runs_fail_append ... ok\ntest strict_lifecycle_rejects_missing_or_mismatched_permit_and_artifact_evidence ... ok\ntest every_public_strict_api_rejects_a_transplanted_chain ... ok\ntest every_failure_terminal_dominates_successful_finalization ... ok\n\ntest result: ok. 7 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.08s"
+    },
+    {
+      "command": "cargo test -p recursive-agent-ledger --test artifact_tamper -- --nocapture",
+      "exit_code": 0,
+      "name": "focus_replay_races",
+      "output_bytes": 820,
+      "output_sha256": "dabe895c760bb3a0f7263ceb4fa2db3dc109be9a6900d5685f376e8bfa5884b5",
+      "tail": "Finished `test` profile [unoptimized + debuginfo] target(s) in 0.04s\n     Running tests/artifact_tamper.rs (target/debug/deps/artifact_tamper-324ef1598adca94e)\n\nrunning 8 tests\ntest malformed_owner_descriptor_is_rejected ... ok\ntest artifact_directory_replacement_does_not_redirect_pinned_store ... ok\ntest descriptor_length_media_type_and_digest_are_bound ... ok\ntest partial_artifact_and_descriptor_metadata_are_rejected ... ok\ntest concurrently_growing_artifact_and_metadata_reads_remain_bounded ... ok\ntest symlink_fifo_directory_and_sparse_file_are_rejected_without_hanging ... ok\ntest active_replacement_never_returns_unverified_bytes ... ok\ntest strict_verify_rejects_missing_truncated_replaced_and_wrong_digest ... ok\n\ntest result: ok. 8 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.05s"
+    },
+    {
+      "command": "cargo test -p recursive-agent-memory sqlite_tampering_is_typed_corruption_and_never_omitted -- --exact --nocapture",
+      "exit_code": 0,
+      "name": "focus_memory_corruption",
+      "output_bytes": 274,
+      "output_sha256": "6172025d384533efd1ca7a372057a697853c88c36d9a8621b5d6ad69b7b578ca",
+      "tail": "Finished `test` profile [unoptimized + debuginfo] target(s) in 0.04s\n     Running unittests src/lib.rs (target/debug/deps/recursive_agent_memory-d879706075d82a3e)\n\nrunning 0 tests\n\ntest result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 6 filtered out; finished in 0.00s"
+    },
+    {
+      "command": "cargo test -p recursive-agent-provider --test secret_contract -- --nocapture",
+      "exit_code": 0,
+      "name": "focus_provider_secret",
+      "output_bytes": 788,
+      "output_sha256": "275d32d6b92526db609b3f0c04decedebbe7fe8219d1a4be479d3e51a1890adc",
+      "tail": "Finished `test` profile [unoptimized + debuginfo] target(s) in 0.04s\n     Running tests/secret_contract.rs (target/debug/deps/secret_contract-c9bdec057a270b75)\n\nrunning 7 tests\ntest debug_output_redacts_secret_material ... ok\ntest raw_secret_reference_and_raw_key_migration_errors_never_echo_input ... ok\ntest provider_execution_is_typed_unavailable_without_resolving_credentials ... ok\ntest provider_spec_serialization_contains_no_secret ... ok\ntest unavailable_invocation_and_debug_paths_cannot_retain_sentinel ... ok\ntest validated_endpoint_debug_and_serialization_are_normalized_and_secret_free ... ok\ntest url_userinfo_query_fragment_scheme_and_control_are_rejected_before_resolver ... ok\n\ntest result: ok. 7 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s"
+    },
+    {
+      "command": "cargo test -p recursive-agent-skills --lib -- --nocapture",
+      "exit_code": 0,
+      "name": "focus_skills",
+      "output_bytes": 550,
+      "output_sha256": "90752328b0ceacda828695be3e74a6baa904b9be3e27cb8b0183cb0d6a464f6a",
+      "tail": "Finished `test` profile [unoptimized + debuginfo] target(s) in 0.03s\n     Running unittests src/lib.rs (target/debug/deps/recursive_agent_skills-2be0074663479b8b)\n\nrunning 5 tests\ntest tests::traversal_absolute_and_symlink_ids_are_rejected ... ok\ntest tests::load_skill_from_file ... ok\ntest tests::missing_required_param_fails ... ok\ntest tests::expand_substitutes_params ... ok\ntest tests::active_manifest_replacement_never_returns_attacker_bytes ... ok\n\ntest result: ok. 5 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.03s"
+    },
+    {
+      "command": "cargo test -p recursive-agent-cli --bin ra doctor_reports_exact_phase_one_candidate_surface -- --exact --nocapture",
+      "exit_code": 0,
+      "name": "focus_doctor",
+      "output_bytes": 255,
+      "output_sha256": "6b3790794675ff942acde17aaadf29161f916e052168677e2f4c8ed523d7d750",
+      "tail": "Finished `test` profile [unoptimized + debuginfo] target(s) in 0.06s\n     Running unittests src/main.rs (target/debug/deps/ra-47fcfa27cac88b50)\n\nrunning 0 tests\n\ntest result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 1 filtered out; finished in 0.00s"
+    },
+    {
+      "command": "cargo test --workspace --all-targets",
+      "exit_code": 0,
+      "name": "workspace",
+      "output_bytes": 12592,
+      "output_sha256": "3e82d89e2aeeafce9f35513d5290edf5eb79fe7e1ed1134b65db75850db0ed7c",
+      "tail": "test tests::load_skill_from_file ... ok\ntest tests::missing_required_param_fails ... ok\ntest tests::expand_substitutes_params ... ok\ntest tests::active_manifest_replacement_never_returns_attacker_bytes ... ok\n\ntest result: ok. 5 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.02s\n\n     Running unittests src/lib.rs (target/debug/deps/recursive_agent_tools-fe25b0aeb989e8d5)\n\nrunning 8 tests\ntest tests::invalid_provider_endpoint_is_rejected_in_tool_args_before_state_exists ... ok\ntest tests::time_now_returns_frozen_timestamp ... ok\ntest tests::output_budget_is_actually_enforced ... ok\ntest tests::llm_rejects_malformed_args_without_network ... ok\ntest tests::time_now_requires_frozen_clock ... ok\ntest tests::echo_returns_text ... ok\ntest tests::unknown_tool_errors ... ok\ntest tests::actual_elapsed_time_is_enforced_before_dispatch ... ok\n\ntest result: ok. 8 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.01s"
+    },
+    {
+      "command": "cargo clippy --workspace --all-targets -- -D warnings",
+      "exit_code": 0,
+      "name": "clippy",
+      "output_bytes": 67,
+      "output_sha256": "e389424af6abef9fc46f30f3113dd11b7a97fd5e9cb5b04a8a4281f3560c2183",
+      "tail": "Finished `dev` profile [unoptimized + debuginfo] target(s) in 0.11s"
+    },
+    {
+      "command": "cargo fmt --all -- --check",
+      "exit_code": 0,
+      "name": "fmt_post",
+      "output_bytes": 0,
+      "output_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "tail": ""
+    },
+    {
+      "command": "git diff --check",
+      "exit_code": 0,
+      "name": "diff_check",
+      "output_bytes": 0,
+      "output_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "tail": ""
+    },
+    {
+      "command": "if rg -n 'unsafe[[:space:]]*\\{|#!\\[(allow|warn|expect)|#\\[(ignore|should_panic)' crates -g '*.rs' -g '!**/tests/**'; then exit 1; else exit 0; fi",
+      "exit_code": 0,
+      "name": "scan_unsafe",
+      "output_bytes": 0,
+      "output_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "tail": ""
+    },
+    {
+      "command": "if rg -n 'locate_fd_hygiene_launcher|recursive-agent-sandbox-launcher' crates/recursive-agent-sandbox/src crates/recursive-agent-sandbox/Cargo.toml; then exit 1; else exit 0; fi",
+      "exit_code": 0,
+      "name": "scan_helper",
+      "output_bytes": 0,
+      "output_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "tail": ""
+    },
+    {
+      "command": "if rg -n 'pub fn verify\\(' crates/recursive-agent-ledger/src; then exit 1; else exit 0; fi",
+      "exit_code": 0,
+      "name": "scan_unbound_verify",
+      "output_bytes": 0,
+      "output_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "tail": ""
+    },
+    {
+      "command": "if rg -n 'read_to_string.*receipts|receipts.*read_to_string' crates/recursive-agent-runner/src crates/recursive-agent-cli/src; then exit 1; else exit 0; fi",
+      "exit_code": 0,
+      "name": "scan_replay_reopen",
+      "output_bytes": 0,
+      "output_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "tail": ""
+    },
+    {
+      "command": "if rg -n 'pub id: String|filter_map\\(.*ok' crates/recursive-agent-memory/src; then exit 1; else exit 0; fi",
+      "exit_code": 0,
+      "name": "scan_memory_loose",
+      "output_bytes": 0,
+      "output_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "tail": ""
+    },
+    {
+      "command": "if rg -n 'ValidatedEndpoint.*path|set_path|base_url: String' crates/recursive-agent-provider/src; then exit 1; else exit 0; fi",
+      "exit_code": 1,
+      "name": "scan_provider_routes",
+      "output_bytes": 155,
+      "output_sha256": "00c69df28131c90074038eeb62f120b9eb83f2871ebddb51d5a18b6416a4f23c",
+      "tail": "crates/recursive-agent-provider/src/lib.rs:322:    parsed.set_path(\"/\");\ncrates/recursive-agent-provider/src/lib.rs:334:    endpoint.set_path(match route {"
+    },
+    {
+      "command": "rg -n 'if parsed\\.path\\(\\) != \\\"/\\\"' crates/recursive-agent-provider/src/lib.rs >/dev/null && rg -n 'ProviderRoute::OllamaGenerate => \\\"/api/generate\\\"' crates/recursive-agent-provider/src/lib.rs >/dev/null && rg -n 'ProviderRoute::OpenAiChatCompletions => \\\"/v1/chat/completions\\\"' crates/recursive-agent-provider/src/lib.rs >/dev/null && if rg -n 'base_url:[[:space:]]*String|pub[[:space:]]+path:' crates/recursive-agent-provider/src; then exit 1; else exit 0; fi",
+      "exit_code": 0,
+      "name": "scan_provider_routes_v2",
+      "output_bytes": 0,
+      "output_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "tail": ""
+    }
+  ],
+  "root": "/home/sikmindz/Coding/recursive-agent",
+  "supersedes": "manifest.json"
+}

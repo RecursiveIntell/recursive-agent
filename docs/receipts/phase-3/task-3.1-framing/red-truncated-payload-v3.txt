@@ -1,0 +1,13 @@
+Recursive Agent Phase 3 Task 3.1 framing RED v3
+Recorded UTC: 2026-08-05T14:07:56.284272+00:00
+$ cargo test -p recursive-agent-daemon --test framing truncated_payload_reports_declared_and_received_lengths -- --nocapture
+exit_code=101
+Compiling recursive-agent-daemon v0.1.0 (/home/sikmindz/Coding/recursive-agent/crates/recursive-agent-daemon)
+error[E0599]: no variant named `TruncatedPayload` found for enum `FrameDecodeError`
+  --> crates/recursive-agent-daemon/tests/framing.rs:35:31
+   |
+35 |         Err(FrameDecodeError::TruncatedPayload {
+   |                               ^^^^^^^^^^^^^^^^ variant not found in `FrameDecodeError`
+
+For more information about this error, try `rustc --explain E0599`.
+error: could not compile `recursive-agent-daemon` (test "framing") due to 1 previous error

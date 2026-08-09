@@ -1,0 +1,15 @@
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.05s
+     Running unittests src/lib.rs (target/debug/deps/recursive_agent_tools-1e4505e622d9bb0e)
+
+running 8 tests
+test tests::invalid_provider_endpoint_is_rejected_in_tool_args_before_state_exists ... ok
+test tests::time_now_returns_frozen_timestamp ... ok
+test tests::echo_returns_text ... ok
+test tests::output_budget_is_actually_enforced ... ok
+test tests::unknown_tool_errors ... ok
+test tests::llm_rejects_malformed_args_without_network ... ok
+test tests::pure_tool_surface_has_no_wall_clock_or_effect_dispatch ... ok
+test tests::time_now_requires_frozen_clock ... ok
+
+test result: ok. 8 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+

@@ -1,0 +1,11 @@
+Finding: R3 — actual budget/time enforcement
+Captured before production-surface modification: 2026-08-05
+Command:
+  rg -n 'spec\.frozen_clock|pub fn dispatch_with_permit|FnOnce|tools::execute|pub fn execute\(' crates/recursive-agent-runner/src/lib.rs crates/recursive-agent-tools/src/lib.rs
+  fail if request time is trusted or an unmetered dispatch closure remains public
+Exit: 1 (expected RED)
+Observed:
+  runner:101 used spec.frozen_clock as trusted_now.
+  runner:441 exported dispatch_with_permit with an arbitrary FnOnce effect.
+  tools:159 exported an unbounded execute call.
+

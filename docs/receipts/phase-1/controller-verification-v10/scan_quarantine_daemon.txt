@@ -1,0 +1,4 @@
+1://! Pure future-daemon protocol decoding for the bounded Phase 1 build.
+7:use recursive_agent_contracts::{parse_run_spec_bytes, RunSpecIngressError, RunSpecV1};
+46:pub fn decode_run_spec(request: &[u8]) -> Result<DecodedRunSpecV1, DaemonDecodeErrorV1> {
+47:    parse_run_spec_bytes(request)

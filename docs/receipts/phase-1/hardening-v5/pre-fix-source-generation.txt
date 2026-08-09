@@ -1,0 +1,13 @@
+command: python3 source-generation probe; cargo fmt --all -- --check
+exit_code: 0
+recorded_at: 2026-08-05 America/Chicago
+branch: main
+head: 3805f7abf319e07e47f1c20b862e614c3dad164f
+source_generation_sha256: ff12c7988e287d3c7318e48b5e352316004807c3280e9ca7332468faf3950f18
+tracked_binary_diff_sha256: 5326607be7cfba967b133ddabe6f01c9a293b7d5dd5935bb50d4ed6313d8a72e
+source_generation_construction: sha256 of sorted per-file sha256 records for Cargo.toml, Cargo.lock, and every regular file below crates/
+tracked_binary_diff_scope: git diff --binary -- Cargo.toml Cargo.lock crates
+fmt_pre_exit_code: 0
+fmt_pre_output: empty after shell startup diagnostics
+
+The working tree was already dirty. Existing changes and retained receipts are user-owned and must be preserved.

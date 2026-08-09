@@ -1,0 +1,13 @@
+Recursive Agent Phase 3 Task 3.1 protocol RED v2
+Recorded UTC: 2026-08-05T14:20:17.373573+00:00
+$ cargo test -p recursive-agent-daemon --test protocol duplicate_keys_in_original_wire_bytes_are_rejected -- --nocapture
+exit_code=101
+Compiling recursive-agent-daemon v0.1.0 (/home/sikmindz/Coding/recursive-agent/crates/recursive-agent-daemon)
+error[E0599]: no variant, associated function, or constant named `DuplicateKey` found for enum `IpcDecodeError` in the current scope
+  --> crates/recursive-agent-daemon/tests/protocol.rs:39:29
+   |
+39 |         Err(IpcDecodeError::DuplicateKey)
+   |                             ^^^^^^^^^^^^ variant, associated function, or constant not found in `IpcDecodeError`
+
+For more information about this error, try `rustc --explain E0599`.
+error: could not compile `recursive-agent-daemon` (test "protocol") due to 1 previous error

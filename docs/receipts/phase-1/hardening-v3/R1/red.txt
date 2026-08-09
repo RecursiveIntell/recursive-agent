@@ -1,0 +1,5 @@
+Phase 1 hardening v3 RED evidence — R1 mutable helper trust
+Observed before production changes on 2026-08-05.
+Command: rg -n 'locate_fd_hygiene_launcher|recursive-agent-sandbox-launcher|helper_identity' crates/recursive-agent-sandbox
+Exit: 0
+Evidence: sandbox execute calls locate_fd_hygiene_launcher(), which searches beside current_exe; EffectivePolicy binds helper_identity; an implicit src/bin/recursive-agent-sandbox-launcher target exists. A current-UID sibling remains in the positive enforcement trust chain.

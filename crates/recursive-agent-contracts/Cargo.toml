@@ -17,6 +17,7 @@ boundary-compiler = { workspace = true }
 stack-ids = { workspace = true }
 blake3 = { workspace = true }
 hex = { workspace = true }
+rustix = { workspace = true }
 
 [lints]
 workspace = true

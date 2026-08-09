@@ -1,0 +1,5 @@
+Phase 1 hardening v3 RED evidence — R6 roots and policy version binding
+Observed before production changes on 2026-08-05.
+Commands: sed -n '470,520p' crates/recursive-agent-sandbox/src/lib.rs; sed -n '810,835p' crates/recursive-agent-policy/src/lib.rs
+Exit: 0
+Evidence: EffectivePolicy binds declared SandboxSpec and runtime identities but omits pinned declared root identities/access modes; runner never compares RunSpecV1.policy_version to active Allowlist.policy_version before permit issue.

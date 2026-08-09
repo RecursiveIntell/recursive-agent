@@ -1,0 +1,12 @@
+Unable to open session log file "/home/sikmindz/.cache/starship/session_9814265923005340.log": Os { code: 30, kind: ReadOnlyFilesystem, message: "Read-only file system" }!
+   Compiling recursive-agent-daemon v0.1.0 (/home/sikmindz/Coding/recursive-agent/crates/recursive-agent-daemon)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.32s
+     Running unittests src/lib.rs (target/debug/deps/recursive_agent_daemon-22da40eb45a5babd)
+
+running 3 tests
+test tests::malformed_request_is_transport_failure_without_run_identity ... ok
+test tests::success_response_is_typed_and_error_free ... ok
+test tests::false_timeout_and_output_overruns_are_typed_operation_failures ... ok
+
+test result: ok. 3 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.25s
+

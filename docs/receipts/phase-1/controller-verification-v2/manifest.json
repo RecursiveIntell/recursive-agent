@@ -1,0 +1,91 @@
+{
+  "complete": true,
+  "results": [
+    {
+      "command": "cargo fmt --all -- --check",
+      "exit_code": 0,
+      "name": "fmt",
+      "output_file": "docs/receipts/phase-1/controller-verification-v2/fmt.txt",
+      "passed": true
+    },
+    {
+      "command": "cargo test -p recursive-agent-contracts --all-targets",
+      "exit_code": 0,
+      "name": "contracts",
+      "output_file": "docs/receipts/phase-1/controller-verification-v2/contracts.txt",
+      "passed": true
+    },
+    {
+      "command": "cargo test -p recursive-agent-policy --all-targets",
+      "exit_code": 0,
+      "name": "policy",
+      "output_file": "docs/receipts/phase-1/controller-verification-v2/policy.txt",
+      "passed": true
+    },
+    {
+      "command": "cargo test -p recursive-agent-ledger --all-targets",
+      "exit_code": 0,
+      "name": "ledger",
+      "output_file": "docs/receipts/phase-1/controller-verification-v2/ledger.txt",
+      "passed": true
+    },
+    {
+      "command": "cargo test -p recursive-agent-sandbox --all-targets",
+      "exit_code": 0,
+      "name": "sandbox",
+      "output_file": "docs/receipts/phase-1/controller-verification-v2/sandbox.txt",
+      "passed": true
+    },
+    {
+      "command": "cargo test -p recursive-agent-provider --all-targets",
+      "exit_code": 0,
+      "name": "provider",
+      "output_file": "docs/receipts/phase-1/controller-verification-v2/provider.txt",
+      "passed": true
+    },
+    {
+      "command": "cargo test -p recursive-agent-runner --all-targets",
+      "exit_code": 0,
+      "name": "runner",
+      "output_file": "docs/receipts/phase-1/controller-verification-v2/runner.txt",
+      "passed": true
+    },
+    {
+      "command": "cargo test --workspace --all-targets",
+      "exit_code": 0,
+      "name": "workspace",
+      "output_file": "docs/receipts/phase-1/controller-verification-v2/workspace.txt",
+      "passed": true
+    },
+    {
+      "command": "cargo clippy --workspace --all-targets -- -D warnings",
+      "exit_code": 0,
+      "name": "clippy",
+      "output_file": "docs/receipts/phase-1/controller-verification-v2/clippy.txt",
+      "passed": true
+    },
+    {
+      "command": "git diff --check",
+      "exit_code": 0,
+      "name": "diff_check",
+      "output_file": "docs/receipts/phase-1/controller-verification-v2/diff_check.txt",
+      "passed": true
+    },
+    {
+      "command": "if rg -n '#!\\[allow\\(unsafe_code\\)\\]|unsafe[[:space:]]*\\{' crates --glob '*.rs' --glob '!**/tests/**' --glob '!**/target/**'; then exit 1; else exit 0; fi",
+      "exit_code": 0,
+      "name": "unsafe_scan",
+      "output_file": "docs/receipts/phase-1/controller-verification-v2/unsafe_scan.txt",
+      "passed": true
+    },
+    {
+      "command": "if rg -n '^#!\\[(allow|warn|expect)' crates --glob '*.rs' --glob '!**/target/**'; then exit 1; else exit 0; fi",
+      "exit_code": 0,
+      "name": "lint_override_scan",
+      "output_file": "docs/receipts/phase-1/controller-verification-v2/lint_override_scan.txt",
+      "passed": true
+    }
+  ],
+  "root": "/home/sikmindz/Coding/recursive-agent",
+  "verified_at_utc": "2026-08-05T05:37:28.416292+00:00"
+}

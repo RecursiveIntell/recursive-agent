@@ -1,0 +1,16 @@
+353:pub const MAX_RUN_NAME_BYTES: usize = 256;
+360:pub const MAX_SHELL_ARGS: usize = 64;
+364:pub const MAX_SHELL_TIMEOUT_MS: u64 = 300_000;
+365:pub const MAX_SHELL_OUTPUT_BYTES: u64 = 64 * 1024;
+434:struct DuplicateSafeValue(serde_json::Value);
+436:impl<'de> Deserialize<'de> for DuplicateSafeValue {
+482:                DuplicateSafeValue::deserialize(value).map(|parsed| parsed.0)
+490:                while let Some(value) = sequence.next_element::<DuplicateSafeValue>()? {
+505:                    let value = map.next_value::<DuplicateSafeValue>()?;
+522:    let parsed = serde_json::from_slice::<DuplicateSafeValue>(input).map_err(|error| {
+542:    validate_ingress_spec(&spec)?;
+575:fn validate_ingress_spec(spec: &RunSpecV1) -> Result<(), RunSpecIngressError> {
+576:    validate_identifier(&spec.name, "name", MAX_RUN_NAME_BYTES)?;
+679:    validate_item_count(args.args.len(), "shell.args", MAX_SHELL_ARGS)?;
+716:    if args.timeout_ms == 0 || args.timeout_ms > MAX_SHELL_TIMEOUT_MS {
+721:    if args.max_output_bytes == 0 || args.max_output_bytes > MAX_SHELL_OUTPUT_BYTES {

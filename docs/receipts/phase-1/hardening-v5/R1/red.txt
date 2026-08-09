@@ -1,0 +1,34 @@
+command: cargo test -p recursive-agent-policy --test hardening_v5_attenuation -- --nocapture
+exit_code: 101
+output_sha256: 7133c2e27f50f0a06a06d8961c430d13bd551b6d9389f90a28d43ce5e61c1597
+output:
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.05s
+     Running tests/hardening_v5_attenuation.rs (target/debug/deps/hardening_v5_attenuation-5961744a3e5e1e50)
+
+running 3 tests
+
+thread 'later_wider_and_unrelated_children_are_denied' (242) panicked at crates/recursive-agent-policy/tests/hardening_v5_attenuation.rs:95:9:
+unsafe child mutation expiry was admitted
+note: run with `RUST_BACKTRACE=1` environment variable to display a backtrace
+test later_wider_and_unrelated_children_are_denied ... FAILED
+
+thread 'cumulative_children_cannot_overallocate_parent_budget' (241) panicked at crates/recursive-agent-policy/tests/hardening_v5_attenuation.rs:116:5:
+cumulative allocation exceeded the parent's durable budget
+test cumulative_children_cannot_overallocate_parent_budget ... FAILED
+
+thread 'consumed_child_cannot_dispatch_after_parent_expiry' (240) panicked at crates/recursive-agent-policy/tests/hardening_v5_attenuation.rs:140:5:
+assertion `left == right` failed
+  left: 1
+ right: 0
+test consumed_child_cannot_dispatch_after_parent_expiry ... FAILED
+
+failures:
+
+failures:
+    consumed_child_cannot_dispatch_after_parent_expiry
+    cumulative_children_cannot_overallocate_parent_budget
+    later_wider_and_unrelated_children_are_denied
+
+test result: FAILED. 0 passed; 3 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+error: test failed, to rerun pass `-p recursive-agent-policy --test hardening_v5_attenuation`

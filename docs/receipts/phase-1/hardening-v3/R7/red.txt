@@ -1,0 +1,5 @@
+Phase 1 hardening v3 RED evidence — R7 lifecycle evidence and bound verify
+Observed before production changes on 2026-08-05.
+Commands: rg -n 'pub fn verify\(|StepCompleted|PermitIssued|ArtifactStored' crates/recursive-agent-{ledger,contracts}/src/lib.rs
+Exit: 0
+Evidence: public verify(paths) returns strict authoritative success without an expected run; lifecycle StepCompleted accepts PermitConsumed state without proving a prior matching ArtifactStored; permit event artifacts are not parsed and validated against typed permit bindings or neighboring receipts.

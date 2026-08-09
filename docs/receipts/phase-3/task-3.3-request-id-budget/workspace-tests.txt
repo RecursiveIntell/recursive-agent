@@ -1,0 +1,434 @@
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.09s
+     Running unittests src/main.rs (target/debug/deps/ra-f468ecd67482e6aa)
+
+running 1 test
+test tests::doctor_reports_exact_phase_one_candidate_surface ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+     Running tests/direct_crash_verify.rs (target/debug/deps/direct_crash_verify-2f3e6c8cea6f02df)
+
+running 1 test
+test ra_verify_directly_reconciles_stale_metadata_projection ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.06s
+
+     Running tests/hardening_v5_ingress.rs (target/debug/deps/hardening_v5_ingress-2683bbe19f4f5713)
+
+running 8 tests
+test recursive_duplicate_keys_reject_before_run_creation ... ok
+test excess_steps_reject_before_identity_or_dispatch ... ok
+test rejected_input_never_reaches_shell_dispatch ... ok
+test unknown_fields_reject_before_run_creation ... ok
+test fifo_device_and_symlink_inputs_are_rejected_without_blocking ... ok
+test oversized_whitespace_and_aggregate_material_reject_at_transport_boundary ... ok
+test hostile_launcher_environment_cannot_execute_before_sandbox ... ok
+test valid_multi_step_sibling_keys_decode_and_execute ... ok
+
+test result: ok. 8 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.12s
+
+     Running tests/terminal_exit.rs (target/debug/deps/terminal_exit-fbf1ff520c5c06ce)
+
+running 2 tests
+test phase_one_cli_exposes_no_unadmitted_serve_commands ... ok
+test real_cli_non_success_matrix_exits_nonzero_and_retains_strict_runs ... ok
+
+test result: ok. 2 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.45s
+
+     Running unittests src/lib.rs (target/debug/deps/recursive_agent_contracts-0457abb2980d65e0)
+
+running 9 tests
+test tests::content_digest_matches_recursive_jcs ... ok
+test tests::current_ids_reject_uuid_and_wrong_family ... ok
+test tests::current_id_deserialization_rejects_empty_arbitrary_uuid_and_wrong_domain ... ok
+test tests::legacy_reader_is_explicit ... ok
+test tests::jcs_canonical_is_stable_across_reordering ... ok
+test tests::id_domains_do_not_collide ... ok
+test tests::lineage_requires_request_then_effect ... ok
+test tests::lineage_full_chain_passes ... ok
+test tests::terminal_outcomes_match_every_terminal_state ... ok
+
+test result: ok. 9 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+     Running tests/hardening_v5_quarantine.rs (target/debug/deps/hardening_v5_quarantine-758bb322f19278dc)
+
+running 2 tests
+test default_phase_one_sources_expose_no_later_phase_execution_adapter ... ok
+test cli_operator_surface_remains_exactly_phase_one ... ok
+
+test result: ok. 2 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+     Running tests/hardening_v6_ingress.rs (target/debug/deps/hardening_v6_ingress-ad2da1bd27058da6)
+
+running 5 tests
+test empty_and_duplicate_step_names_are_rejected ... ok
+test time_label_has_an_explicit_byte_ceiling ... ok
+test valid_multi_step_sibling_objects_reuse_field_names ... ok
+test shell_collections_paths_and_budgets_have_explicit_ceilings ... ok
+test identifiers_and_text_have_explicit_byte_ceilings ... ok
+
+test result: ok. 5 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.01s
+
+     Running tests/phase1_effect_surface.rs (target/debug/deps/phase1_effect_surface-dd70126455b56ea3)
+
+running 1 test
+test default_production_surface_has_no_bare_effect_entrypoint ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+     Running tests/phase2_operation_envelope.rs (target/debug/deps/phase2_operation_envelope-fde8fe3e0a9b00f5)
+
+running 11 tests
+test complete_operation_envelope_round_trips_without_a_second_run_model ... ok
+test operation_schema_accepts_only_exact_v1_tag ... ok
+test operation_envelope_enforces_authority_causality_shape ... ok
+test operation_envelope_rejects_unknown_closed_fields ... ok
+test operation_envelope_rejects_invalid_actor_and_provenance_metadata ... ok
+test operation_envelope_rejects_invalid_operation_budgets ... ok
+test operation_envelope_enforces_replay_classification ... ok
+test operation_v1_canonical_fixed_vector_is_stable ... ok
+test operation_envelope_rejects_effect_mismatch_and_underdeclaration ... ok
+test operation_identity_is_deterministic_and_binds_all_semantic_surfaces ... ok
+test operation_byte_ingress_rejects_hostile_vectors_before_admission ... ok
+
+test result: ok. 11 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+     Running tests/phase2_runtime_events.rs (target/debug/deps/phase2_runtime_events-b735451ca56b82ec)
+
+running 2 tests
+test committed_runtime_event_projection_is_monotonic_causal_and_receipt_backed ... ok
+test runtime_event_conformance_rejects_all_sequence_defects ... ok
+
+test result: ok. 2 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+     Running tests/workspace_lints.rs (target/debug/deps/workspace_lints-697f303548935b1c)
+
+running 1 test
+test every_workspace_member_inherits_lints_exactly_once ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+     Running unittests src/lib.rs (target/debug/deps/recursive_agent_daemon-9d8766781304f7de)
+
+running 3 tests
+test tests::shared_decoder_rejects_duplicates_and_unknown_fields ... ok
+test tests::shared_decoder_accepts_valid_pure_shape ... ok
+test tests::shared_decoder_preserves_semantic_limit_classes ... ok
+
+test result: ok. 3 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+     Running tests/framing.rs (target/debug/deps/framing-25647738d7b9e3f4)
+
+running 5 tests
+test exact_frame_returns_only_the_borrowed_payload ... ok
+test oversized_declared_length_is_rejected_from_prefix_alone ... ok
+test partial_prefix_requires_more_without_payload_allocation ... ok
+test trailing_bytes_after_exact_frame_are_rejected ... ok
+test truncated_payload_reports_declared_and_received_lengths ... ok
+
+test result: ok. 5 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+     Running tests/protocol.rs (target/debug/deps/protocol-76ed911a41ac5a85)
+
+running 4 tests
+test duplicate_keys_in_original_wire_bytes_are_rejected ... ok
+test duplicate_request_ids_are_rejected_per_connection ... ok
+test unsupported_protocol_version_is_typed_and_pre_effect ... ok
+test request_id_registry_has_a_hard_connection_budget ... ok
+
+test result: ok. 4 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.01s
+
+     Running unittests src/lib.rs (target/debug/deps/recursive_agent_ledger-b7ced63365ab1d25)
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+     Running tests/artifact_tamper.rs (target/debug/deps/artifact_tamper-d6831862ee37875d)
+
+running 8 tests
+test artifact_directory_replacement_does_not_redirect_pinned_store ... ok
+test malformed_owner_descriptor_is_rejected ... ok
+test descriptor_length_media_type_and_digest_are_bound ... ok
+test partial_artifact_and_descriptor_metadata_are_rejected ... ok
+test concurrently_growing_artifact_and_metadata_reads_remain_bounded ... ok
+test symlink_fifo_directory_and_sparse_file_are_rejected_without_hanging ... ok
+test active_replacement_never_returns_unverified_bytes ... ok
+test strict_verify_rejects_missing_truncated_replaced_and_wrong_digest ... ok
+
+test result: ok. 8 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.14s
+
+     Running tests/crash_recovery.rs (target/debug/deps/crash_recovery-018a113be8d06e2b)
+
+running 9 tests
+test raw_predecessor_chain_vector_is_fixed ... ok
+test ambiguous_tail_is_rejected_without_deleting_valid_receipt ... ok
+
+running 1 test
+
+running 1 test
+test run_root_is_pinned_and_intermediate_symlinks_are_rejected ... ok
+test missing_newline_is_finalized_and_incomplete_tail_is_truncated ... ok
+test root_and_legacy_lock_entry_replacement_cannot_split_pinned_handles ... ok
+test two_handles_cannot_fork_the_predecessor ... ok
+test two_process_append_race_has_one_predecessor_owner ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 8 filtered out; finished in 0.00s
+
+Error: ChainDivergence { index: 1, reason: "append predecessor does not match locked current head" }
+test two_process_append_race_has_one_predecessor_owner ... FAILED
+
+failures:
+
+failures:
+    two_process_append_race_has_one_predecessor_owner
+
+test result: FAILED. 0 passed; 1 failed; 0 ignored; 0 measured; 8 filtered out; finished in 0.00s
+
+test two_process_append_race_has_one_predecessor_owner ... ok
+test append_failpoints_reopen_to_previous_or_new_chain ... ok
+test process_kill_failpoint_matrix_recovers_previous_or_new_chain ... ok
+
+test result: ok. 9 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.91s
+
+     Running tests/lifecycle_validation.rs (target/debug/deps/lifecycle_validation-9f0d3c5bf07afd7a)
+
+running 9 tests
+test canonical_failed_then_success_chain_fails_offline_verification ... ok
+test strict_lifecycle_rejects_missing_or_mismatched_permit_and_artifact_evidence ... ok
+test impossible_authorization_and_outcome_sequences_are_rejected ... ok
+test duplicate_final_post_terminal_final_without_start_and_mixed_runs_fail_append ... ok
+test expected_run_binding_rejects_whole_chain_transplant ... ok
+test every_public_strict_api_rejects_a_transplanted_chain ... ok
+test every_authoritative_validator_rejects_discontinuous_or_impossible_permits ... ok
+test every_failure_terminal_dominates_successful_finalization ... ok
+test concurrent_readers_observe_only_committed_causal_event_prefixes ... ok
+
+test result: ok. 9 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 1.01s
+
+     Running unittests src/lib.rs (target/debug/deps/recursive_agent_mcp-0879f249e1b7d333)
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+     Running unittests src/lib.rs (target/debug/deps/recursive_agent_mcts-e1ef64ebdb5aefda)
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+     Running unittests src/lib.rs (target/debug/deps/recursive_agent_memory-26f9892cfaa27161)
+
+running 6 tests
+test tests::get_missing_returns_none ... ok
+test tests::identical_material_is_idempotent_and_content_changes_identity ... ok
+test tests::put_and_get ... ok
+test tests::search_finds_relevant ... ok
+test tests::sqlite_tampering_is_typed_corruption_and_never_omitted ... ok
+test tests::identity_is_stable_across_processes ... ok
+
+test result: ok. 6 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+     Running unittests src/lib.rs (target/debug/deps/recursive_agent_policy-27b695ffa078f325)
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+     Running tests/hardening_v5_attenuation.rs (target/debug/deps/hardening_v5_attenuation-d2b1451a6b7afd92)
+
+running 4 tests
+test cumulative_children_cannot_overallocate_parent_budget ... ok
+test consumed_child_cannot_dispatch_after_parent_expiry ... ok
+test retry_after_parent_reservation_does_not_double_count_child_budget ... ok
+test later_wider_and_unrelated_children_are_denied ... ok
+
+test result: ok. 4 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.01s
+
+     Running tests/permit_lifecycle.rs (target/debug/deps/permit_lifecycle-b9377f380508863b)
+
+running 7 tests
+test unissued_parent_lease_is_rejected ... ok
+test root_is_pinned_and_symlink_roots_are_rejected ... ok
+test permit_state_symlink_swap_is_rejected ... ok
+test revoked_parent_cannot_authorize_child_dispatch ... ok
+test concurrent_and_restart_double_spend_are_rejected ... ok
+test wrong_binding_expiry_and_revocation_are_typed ... ok
+test crash_points_reconcile_to_issued_or_consumed ... ok
+
+test result: ok. 7 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.01s
+
+     Running unittests src/lib.rs (target/debug/deps/recursive_agent_provider-5f9fafac5efc605c)
+
+running 4 tests
+test tests::empty_base_rejected ... ok
+test tests::fixed_provider_routes_are_appended_to_origin_only ... ok
+test tests::ollama_url_has_no_double_slash ... ok
+test tests::ollama_spec_round_trips ... ok
+
+test result: ok. 4 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+     Running tests/secret_contract.rs (target/debug/deps/secret_contract-98d5517c8c5dda84)
+
+running 7 tests
+test debug_output_redacts_secret_material ... ok
+test provider_execution_is_typed_unavailable_without_resolving_credentials ... ok
+test unavailable_invocation_and_debug_paths_cannot_retain_sentinel ... ok
+test provider_spec_serialization_contains_no_secret ... ok
+test validated_endpoint_debug_and_serialization_are_normalized_and_secret_free ... ok
+test raw_secret_reference_and_raw_key_migration_errors_never_echo_input ... ok
+test url_userinfo_query_fragment_scheme_and_control_are_rejected_before_resolver ... ok
+
+test result: ok. 7 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+     Running unittests src/lib.rs (target/debug/deps/recursive_agent_runner-2962a6b051dcb0ea)
+
+running 8 tests
+test sandbox_engine::tests::payload_marker_suffix_cannot_satisfy_setup_proof ... ok
+test sandbox_engine::tests::fake_launcher_is_rejected_before_payload_dispatch ... ok
+test pinned_root_tests::symlink_replacement_before_authorization_dispatches_nothing ... ok
+test pinned_root_tests::directory_replacement_before_authorization_dispatches_nothing ... ok
+test sandbox_engine::tests::authority_descriptors_remain_cloexec_and_do_not_leak_to_siblings ... ok
+test pinned_root_tests::replacement_after_dispatch_preserves_one_inode_but_cannot_report_success ... ok
+test sandbox_engine::tests::child_guard_kills_and_reaps_on_early_return ... ok
+test sandbox_engine::tests::post_spawn_parent_revocation_kills_and_reaps_before_effect ... ok
+
+test result: ok. 8 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.34s
+
+     Running tests/canonical_containment.rs (target/debug/deps/canonical_containment-e951db9ff9ca9b61)
+
+running 13 tests
+test runner_private_dispatch_and_zero_timeout_fail_before_effect ... ok
+test missing_allow_path_fails_before_launcher ... ok
+test implementation_contains_no_local_unsafe_or_landlock_claim ... ok
+test fixed_printf_is_mandatorily_enforced_on_this_host ... ok
+test malicious_sibling_helper_is_never_consulted_by_production_execute ... ok
+test network_socket_creation_receives_eperm_under_enforcement ... ok
+test inherited_non_cloexec_descriptor_is_not_visible_to_payload ... ok
+test one_consumed_dispatch_is_not_replayed_on_second_run ... ok
+test filesystem_and_network_attempts_are_denied_or_host_fails_closed ... ok
+test undeclared_read_and_descendant_are_mandatorily_bounded ... ok
+test operation_root_identity_and_access_mode_change_policy_digest ... ok
+test active_mount_source_replacement_never_exposes_attacker_bytes ... ok
+test descendants_output_and_signal_races_are_bounded_or_fail_closed ... ok
+
+test result: ok. 13 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 1.12s
+
+     Running tests/deterministic_identity.rs (target/debug/deps/deterministic_identity-2a02612de7356ed4)
+
+running 6 tests
+test process_identity_probe ... ok
+test every_semantic_receipt_field_changes_identity ... ok
+test production_identity_paths_do_not_invoke_uuid_random_or_time ... ok
+test ids_are_stable_across_processes ... ok
+test changed_material_changes_id ... ok
+test runner_clock_owns_lease_time_while_permit_identity_excludes_live_issue_time ... ok
+
+test result: ok. 6 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.11s
+
+     Running tests/hardening_v3.rs (target/debug/deps/hardening_v3-2bfc6421e491bf50)
+
+running 4 tests
+test network_true_and_wrong_policy_version_fail_before_process_dispatch ... ok
+test verified_replay_snapshot_is_immutable_bounded_and_directory_bound ... ok
+test advancing_and_rollback_clocks_prevent_affected_dispatch ... ok
+test false_signal_stdout_stderr_and_timeout_never_complete_successfully ... ok
+
+test result: ok. 4 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.48s
+
+     Running tests/hardening_v5_executable_bytes.rs (target/debug/deps/hardening_v5_executable_bytes-b51381003bdeafe8)
+
+running 4 tests
+test same_inode_and_writable_hard_link_are_not_byte_authority ... ok
+test parent_components_are_rejected_before_run_root_creation ... ok
+test user_owned_rewritable_executable_is_denied_with_zero_starts ... ok
+test trusted_printf_evidence_contains_exact_command_bash_and_bwrap_digests ... ok
+
+test result: ok. 4 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.09s
+
+     Running tests/lifecycle_state_machine.rs (target/debug/deps/lifecycle_state_machine-6de1e3e402496c22)
+
+running 2 tests
+test terminal_matrix_rejects_success_for_every_non_success_terminal ... ok
+test failed_step_dominates_run_terminal_state ... ok
+
+test result: ok. 2 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.08s
+
+     Running tests/native_vertical.rs (target/debug/deps/native_vertical-26a130b073d91240)
+
+running 1 test
+test native_vertical_authenticates_authorizes_sandboxes_executes_streams_persists_and_verifies ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.12s
+
+     Running tests/permit_dispatch.rs (target/debug/deps/permit_dispatch-4ed0e164a4d2f69b)
+
+running 1 test
+test every_rejected_lease_keeps_dispatch_counter_zero ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.01s
+
+     Running tests/phase2_committed_events.rs (target/debug/deps/phase2_committed_events-958bd679c290c1ff)
+
+running 1 test
+test runner_event_semantics_are_deterministic_and_each_transcript_is_exactly_receipt_backed ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.14s
+
+     Running tests/phase2_runtime_service.rs (target/debug/deps/phase2_runtime_service-b06494fc189198f5)
+
+running 8 tests
+test runtime_dependencies_fail_closed_when_any_owner_is_missing ... ok
+test runtime_dependencies_preserve_every_explicit_owner ... ok
+test runtime_service_rejects_unknown_tools_before_creating_output_root ... ok
+test runtime_service_submit_uses_operation_identity_for_the_authoritative_run ... ok
+test runtime_service_commits_output_from_the_admitted_tool_runtime ... ok
+test runtime_service_reads_status_events_and_verification_from_committed_evidence ... ok
+test admitted_tool_dispatch_preserves_cross_run_event_semantics ... ok
+test runtime_service_rejects_concurrent_duplicate_execution ... ok
+
+test result: ok. 8 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.59s
+
+     Running tests/tool_runtime_boundary.rs (target/debug/deps/tool_runtime_boundary-6fb62360b35ac08c)
+
+running 2 tests
+test legacy_run_spec_entrypoints_are_deprecated_runtime_service_wrappers ... ok
+test production_direct_tool_dispatch_is_quarantined_to_the_named_legacy_runner_executor ... ok
+
+test result: ok. 2 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+     Running unittests src/lib.rs (target/debug/deps/recursive_agent_sandbox-a39bff5aafa12d95)
+
+running 1 test
+test tests::plan_validation_is_pure_and_fail_closed ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+     Running tests/public_surface.rs (target/debug/deps/public_surface-ba2ff4cd8b320cea)
+
+running 1 test
+test downstream_public_api_is_plan_only ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+     Running unittests src/lib.rs (target/debug/deps/recursive_agent_skills-ce50c2e929a84792)
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+     Running unittests src/lib.rs (target/debug/deps/recursive_agent_tools-c6dfe3c13105ee02)
+
+running 8 tests
+test tests::invalid_provider_endpoint_is_rejected_in_tool_args_before_state_exists ... ok
+test tests::time_now_requires_frozen_clock ... ok
+test tests::output_budget_is_actually_enforced ... ok
+test tests::pure_tool_surface_has_no_wall_clock_or_effect_dispatch ... ok
+test tests::unknown_tool_errors ... ok
+test tests::llm_rejects_malformed_args_without_network ... ok
+test tests::echo_returns_text ... ok
+test tests::time_now_returns_frozen_timestamp ... ok
+
+test result: ok. 8 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+

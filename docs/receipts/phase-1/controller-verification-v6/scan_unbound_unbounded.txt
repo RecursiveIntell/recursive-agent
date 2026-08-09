@@ -1,0 +1,15 @@
+23:pub const MAX_ARTIFACT_SIZE: u64 = 16 * 1024 * 1024;
+27:const MAX_RECEIPT_LOG_BYTES: u64 = 64 * 1024 * 1024;
+186:        .take(MAX_RECEIPT_LOG_BYTES + 1)
+188:    if bytes.len() as u64 > MAX_RECEIPT_LOG_BYTES {
+965:                maximum: MAX_ARTIFACT_SIZE,
+968:        if byte_length > MAX_ARTIFACT_SIZE {
+972:                maximum: MAX_ARTIFACT_SIZE,
+1017:                maximum: MAX_ARTIFACT_SIZE,
+1045:            if observed > MAX_ARTIFACT_SIZE || observed > descriptor.byte_length {
+1049:                    maximum: MAX_ARTIFACT_SIZE.min(descriptor.byte_length),
+1070:        if descriptor.byte_length > MAX_ARTIFACT_SIZE {
+1074:                maximum: MAX_ARTIFACT_SIZE,
+1099:        if metadata.len() > MAX_ARTIFACT_SIZE {
+1103:                maximum: MAX_ARTIFACT_SIZE,
+1307:    file.take(maximum + 1).read_to_end(&mut bytes)?;

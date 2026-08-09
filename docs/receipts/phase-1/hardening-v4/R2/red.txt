@@ -1,0 +1,28 @@
+R2 RED evidence captured before the R2 lifecycle fix.
+Captured: 2026-08-05 (America/Chicago)
+Repository: /home/sikmindz/Coding/recursive-agent
+
+Regression added first:
+crates/recursive-agent-ledger/tests/lifecycle_validation.rs::r2_revoked_effect_cannot_finalize_successfully
+
+The fixture writes a structurally and cryptographically valid chain with a typed
+effect permit in this order:
+RunStarted -> StepStarted -> PermitIssued -> PermitRevoked(Ok) -> RunFinalized(Ok).
+Both permit transitions carry complete, individually valid permit-evidence artifacts.
+The test requires every public strict verifier to reject the chain.
+
+Command:
+cargo test -p recursive-agent-ledger --test lifecycle_validation r2_revoked_effect_cannot_finalize_successfully -- --exact --nocapture
+
+Exit: 101
+Result: 0 passed; 1 failed; 7 filtered out.
+Exact failure:
+assertion failed: verify_expected_run(&paths, &fixture.run).is_err()
+at crates/recursive-agent-ledger/tests/lifecycle_validation.rs:683:5
+
+RED conclusion:
+The expected-run strict verifier accepted a revoked effect as an orderly completed
+step and admitted successful run finalization. The current contracts validator stores
+only the coarse PermitIssued state, while ledger verification validates permit
+artifacts independently rather than retaining one continuous permit identity,
+binding, purpose, validity window, and terminal transition for the step.

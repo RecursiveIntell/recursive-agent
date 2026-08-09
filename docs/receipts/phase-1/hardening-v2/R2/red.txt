@@ -1,0 +1,13 @@
+Finding: R2 — descriptor-pinned mounts and explicit runtime roots
+Captured before production-surface modification: 2026-08-05
+Command:
+  rg -n 'canonicalize\(|--ro-bind|"/usr"|policy_digest' crates/recursive-agent-sandbox/src/lib.rs
+  fail if path canonicalization is followed by path-based mount reopening
+Exit: 1 (expected RED)
+Observed:
+  217:    match path.canonicalize() {
+  435:        "--ro-bind".into(),
+  436:        "/usr".into(),
+  437:        "/usr".into(),
+  `/usr` was implicit and not represented as a reviewed runtime-root contract.
+

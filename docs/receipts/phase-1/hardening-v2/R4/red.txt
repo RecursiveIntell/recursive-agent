@@ -1,0 +1,9 @@
+Finding: R4 — expected-run-bound exhaustive lifecycle
+Captured before production-surface modification: 2026-08-05
+Command:
+  search ledger for verify_expected_run and fail when absent
+Exit: 1 (expected RED)
+Observed:
+  recursive-agent-ledger exposed only `pub fn verify(paths: &RunPaths)`.
+  No expected run identifier was accepted or returned by the caller-bound verification API.
+

@@ -1,0 +1,3 @@
+Unable to open session log file "/home/sikmindz/.cache/starship/session_1788424847700511.log": Os { code: 30, kind: ReadOnlyFilesystem, message: "Read-only file system" }!
+72:pub(super) struct DispatchToken {
+206:    context: DispatchToken,

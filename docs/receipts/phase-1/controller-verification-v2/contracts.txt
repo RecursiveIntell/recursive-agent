@@ -1,0 +1,18 @@
+$ cargo test -p recursive-agent-contracts --all-targets
+exit=0
+
+Finished `test` profile [unoptimized + debuginfo] target(s) in 0.07s
+     Running unittests src/lib.rs (target/debug/deps/recursive_agent_contracts-6e9acaff0146a6af)
+
+running 9 tests
+test tests::current_id_deserialization_rejects_empty_arbitrary_uuid_and_wrong_domain ... ok
+test tests::content_digest_matches_recursive_jcs ... ok
+test tests::id_domains_do_not_collide ... ok
+test tests::current_ids_reject_uuid_and_wrong_family ... ok
+test tests::legacy_reader_is_explicit ... ok
+test tests::jcs_canonical_is_stable_across_reordering ... ok
+test tests::lineage_requires_request_then_effect ... ok
+test tests::lineage_full_chain_passes ... ok
+test tests::terminal_outcomes_match_every_terminal_state ... ok
+
+test result: ok. 9 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s

@@ -1,0 +1,79 @@
+{
+  "baseline_gate_results": [
+    {
+      "command": "cargo fmt --all -- --check",
+      "exit_code": 0,
+      "id": "fmt",
+      "output_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "command": "cargo test --workspace --all-targets",
+      "exit_code": 0,
+      "id": "tests",
+      "output_sha256": "f11256eb782426f10c2a6d1af1a0131225669edbb702a1aab0c9d380b249f14b"
+    },
+    {
+      "command": "cargo clippy --workspace --all-targets -- -D warnings",
+      "exit_code": 0,
+      "id": "clippy",
+      "output_sha256": "e51078582eb3983a6dd06f9cb3acaf1f9173b8fa91208f65fa6d49208671ad1e"
+    },
+    {
+      "command": "cargo deny check",
+      "exit_code": 1,
+      "id": "deny",
+      "output_sha256": "5048f3717db74c016fd14f9f8729eac879ae8ec72e8ad9f6c4e51c3fb3ff3fb4"
+    },
+    {
+      "command": "cargo fuzz --version",
+      "exit_code": 101,
+      "id": "fuzz_version",
+      "output_sha256": "994e9d5abbf6bb71c8c88b8815752061dd2dec6bd6ea656fe2d727a03e0dba54"
+    }
+  ],
+  "baseline_head": "3805f7abf319e07e47f1c20b862e614c3dad164f",
+  "changed_paths": [
+    "docs/receipts/phase-0/baseline/**",
+    "docs/claims.md",
+    "docs/owner-admission.md",
+    "docs/receipts/phase-0/phase-0-closeout.json"
+  ],
+  "checks": {
+    "baseline_archive": true,
+    "baseline_head": true,
+    "baseline_schema": true,
+    "baseline_source_stable": true,
+    "claim_count": true,
+    "claim_ids": true,
+    "libraries_status_blocker_disclosed": true,
+    "owner_decisions": true,
+    "owner_generation_fences": true,
+    "semantic_generation_fenced": true
+  },
+  "claim_state": "Phase 0 planning/containment complete; no runtime capability promoted",
+  "complete": true,
+  "evidence_cutoff_utc": "2026-08-05T03:50:24.098534+00:00",
+  "known_blockers": [
+    "cargo deny exits 1",
+    "cargo fuzz unavailable (exit 101)",
+    "Libraries monorepo git status exits 128 due stale sibling worktree metadata; per-owner generations are pinned instead"
+  ],
+  "no_commit_no_push": true,
+  "owner_generation_checks": {
+    "agent-graph": true,
+    "assurance-runtime": true,
+    "authority-delegation": true,
+    "bitemporal-runtime": true,
+    "boundary-compiler": true,
+    "claim-ledger": true,
+    "kernel-oracles": true,
+    "llm-tool-runtime": true,
+    "remote-oracle-admission": true,
+    "stack-ids": true
+  },
+  "phase": 0,
+  "rollback": "Remove only Phase 0 docs/receipt artifacts after independently preserving them; do not alter the pre-existing dirty source tree.",
+  "schema": "recursive-agent-phase-closeout-v1",
+  "source_root": "/home/sikmindz/Coding/recursive-agent",
+  "task": "freeze baseline, fence claims, admit canonical owners"
+}

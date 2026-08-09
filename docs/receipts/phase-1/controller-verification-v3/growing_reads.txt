@@ -1,0 +1,7 @@
+Finished `test` profile [unoptimized + debuginfo] target(s) in 0.06s
+     Running tests/artifact_tamper.rs (target/debug/deps/artifact_tamper-85ba63c0596053c3)
+
+running 1 test
+test concurrently_growing_artifact_and_metadata_reads_remain_bounded ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 7 filtered out; finished in 0.00s

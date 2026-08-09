@@ -1,0 +1,9 @@
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.06s
+     Running tests/replay_capability.rs (target/debug/deps/replay_capability-35c0453535459d43)
+
+running 2 tests
+test tampered_run_reports_unavailable_replay_capability ... ok
+test verified_run_reports_recorded_evidence_replay_capability ... ok
+
+test result: ok. 2 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.06s
+

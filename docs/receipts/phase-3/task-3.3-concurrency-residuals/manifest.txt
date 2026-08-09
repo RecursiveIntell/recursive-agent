@@ -1,0 +1,7 @@
+date: 2026-08-05T23:28:45-05:00
+git_head: 3805f7abf319e07e47f1c20b862e614c3dad164f
+rustc: rustc 1.97.1 (8bab26f4f 2026-07-14)
+workspace=0
+clippy=0
+max_concurrent=0
+slow_reader=0

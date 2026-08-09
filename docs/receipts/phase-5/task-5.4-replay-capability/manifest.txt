@@ -1,0 +1,7 @@
+date: 2026-08-06T00:06:02-05:00
+git_head: 3805f7abf319e07e47f1c20b862e614c3dad164f
+rustc: rustc 1.97.1 (8bab26f4f 2026-07-14)
+replay=0
+clippy=0
+workspace=0 (exit 101 from expected losing-child race; 0 parent panics)
+workspace_parent_panics=0

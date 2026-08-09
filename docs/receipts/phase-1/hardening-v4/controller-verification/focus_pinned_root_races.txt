@@ -1,0 +1,11 @@
+Unable to open session log file "/home/sikmindz/.cache/starship/session_2627511134948330.log": Os { code: 30, kind: ReadOnlyFilesystem, message: "Read-only file system" }!
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.05s
+     Running unittests src/lib.rs (target/debug/deps/recursive_agent_runner-8bf75aa64794c840)
+
+running 3 tests
+test pinned_root_tests::symlink_replacement_before_authorization_dispatches_nothing ... ok
+test pinned_root_tests::directory_replacement_before_authorization_dispatches_nothing ... ok
+test pinned_root_tests::replacement_after_dispatch_preserves_one_inode_but_cannot_report_success ... ok
+
+test result: ok. 3 passed; 0 failed; 0 ignored; 0 measured; 2 filtered out; finished in 0.07s
+

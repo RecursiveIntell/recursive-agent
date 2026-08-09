@@ -1,0 +1,11 @@
+Compiling recursive-agent-tools v0.1.0 (/home/sikmindz/Coding/recursive-agent/crates/recursive-agent-tools)
+   Compiling recursive-agent-runner v0.1.0 (/home/sikmindz/Coding/recursive-agent/crates/recursive-agent-runner)
+   Compiling recursive-agent-daemon v0.1.0 (/home/sikmindz/Coding/recursive-agent/crates/recursive-agent-daemon)
+   Compiling recursive-agent-cli v0.1.0 (/home/sikmindz/Coding/recursive-agent/crates/recursive-agent-cli)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 1.63s
+     Running tests/direct_crash_verify.rs (target/debug/deps/direct_crash_verify-f81dfb27f1ff8e22)
+
+running 1 test
+test ra_verify_directly_reconciles_stale_metadata_projection ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.03s

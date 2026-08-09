@@ -1,0 +1,9 @@
+Finding: R7 — bounded artifact and metadata reads
+Captured before production-surface modification: 2026-08-05
+Command:
+  rg -n 'read_to_end' crates/recursive-agent-ledger/src/lib.rs
+  fail if any unbounded read_to_end remains
+Exit: 1 (expected RED)
+Observed:
+  unbounded reads at lines 169, 618, and 754; only line 875 used a bounded take(maximum + 1).
+

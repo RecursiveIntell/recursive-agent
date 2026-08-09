@@ -1,0 +1,28 @@
+{
+  "changed_paths": [],
+  "checks": [
+    {
+      "gate_id": "G-000",
+      "status": "NOT_RUN"
+    }
+  ],
+  "commands": [],
+  "complete": false,
+  "goal": "Commit the existing Phase 4-6 candidate and resume the earliest unadmitted Recursive Agent gate without widening authority.",
+  "non_goals": [],
+  "remaining_delta": [
+    "Review preflight",
+    "Populate owner map",
+    "Define phase contracts",
+    "Define validation and rollback"
+  ],
+  "rollback": "No source changes were made by scaffold_pass.py.",
+  "schema": "ChangeReceiptV1",
+  "source_identity": {
+    "branch": "main",
+    "head": "3805f7abf319e07e47f1c20b862e614c3dad164f",
+    "root": "/home/sikmindz/Coding/recursive-agent"
+  },
+  "task_id": "20260809T171124Z-commit-the-existing-phase-4-6-candidate-and-resume-the-earliest-",
+  "version": 1
+}

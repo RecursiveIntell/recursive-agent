@@ -1,0 +1,11 @@
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.05s
+     Running tests/ipc_runtime.rs (target/debug/deps/ipc_runtime-751e57a308c4b6e2)
+
+running 3 tests
+test daemon_submits_and_verifies_phase_two_action_over_ipc ... ok
+connection error: frame: DuplicateRequestId { request_id: "req-1" }
+test daemon_serves_status_over_authenticated_ipc ... ok
+test daemon_handles_concurrent_connections_within_cap ... ok
+
+test result: ok. 3 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.07s
+

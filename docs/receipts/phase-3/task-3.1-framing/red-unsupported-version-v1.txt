@@ -1,0 +1,16 @@
+Recursive Agent Phase 3 Task 3.1 protocol RED v1
+Recorded UTC: 2026-08-05T14:18:41.722544+00:00
+$ cargo test -p recursive-agent-daemon --test protocol unsupported_protocol_version_is_typed_and_pre_effect -- --nocapture
+exit_code=101
+Compiling recursive-agent-daemon v0.1.0 (/home/sikmindz/Coding/recursive-agent/crates/recursive-agent-daemon)
+error[E0432]: unresolved imports `recursive_agent_daemon::decode_request_frame`, `recursive_agent_daemon::IpcDecodeError`, `recursive_agent_daemon::IPC_PROTOCOL_VERSION_V1`
+ --> crates/recursive-agent-daemon/tests/protocol.rs:1:30
+  |
+1 | use recursive_agent_daemon::{decode_request_frame, IpcDecodeError, IPC_PROTOCOL_VERSION_V1};
+  |                              ^^^^^^^^^^^^^^^^^^^^  ^^^^^^^^^^^^^^  ^^^^^^^^^^^^^^^^^^^^^^^ no `IPC_PROTOCOL_VERSION_V1` in the root
+  |                              |                     |
+  |                              |                     no `IpcDecodeError` in the root
+  |                              no `decode_request_frame` in the root
+
+For more information about this error, try `rustc --explain E0432`.
+error: could not compile `recursive-agent-daemon` (test "protocol") due to 1 previous error

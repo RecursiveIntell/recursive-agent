@@ -1,0 +1,12 @@
+RED captured before production changes.
+Command: rg -n '#!\[allow\(unsafe_code\)\]|unsafe \{|pre_exec|Landlock|WRITE_FILE|READ_FILE|READ_DIR' crates/recursive-agent-sandbox/src/lib.rs
+Exit: 0 (forbidden/incomplete implementation matched)
+Observed:
+7:#![allow(unsafe_code)]
+37:    Landlock,
+102:const LANDLOCK_ACCESS_FS_WRITE_FILE: u64 = 1 << 1;
+103:const LANDLOCK_ACCESS_FS_READ_FILE: u64 = 1 << 2;
+104:const LANDLOCK_ACCESS_FS_READ_DIR: u64 = 1 << 3;
+133:    if unsafe { libc::pipe2(setup_pipe.as_mut_ptr(), libc::O_CLOEXEC) } != 0 {
+151:        command.pre_exec(move || {
+The implementation used local unsafe pre-exec Landlock and omitted the complete filesystem-rights matrix required by H1/H7.

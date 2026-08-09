@@ -1,0 +1,38 @@
+   Compiling recursive-agent-contracts v0.1.0 (/home/sikmindz/Coding/recursive-agent/crates/recursive-agent-contracts)
+   Compiling recursive-agent-policy v0.1.0 (/home/sikmindz/Coding/recursive-agent/crates/recursive-agent-policy)
+   Compiling recursive-agent-mcp v0.1.0 (/home/sikmindz/Coding/recursive-agent/crates/recursive-agent-mcp)
+   Compiling recursive-agent-daemon v0.1.0 (/home/sikmindz/Coding/recursive-agent/crates/recursive-agent-daemon)
+   Compiling recursive-agent-ledger v0.1.0 (/home/sikmindz/Coding/recursive-agent/crates/recursive-agent-ledger)
+   Compiling recursive-agent-sandbox v0.1.0 (/home/sikmindz/Coding/recursive-agent/crates/recursive-agent-sandbox)
+   Compiling recursive-agent-memory v0.1.0 (/home/sikmindz/Coding/recursive-agent/crates/recursive-agent-memory)
+   Compiling recursive-agent-runner v0.1.0 (/home/sikmindz/Coding/recursive-agent/crates/recursive-agent-runner)
+error[E0004]: non-exhaustive patterns: `RunSpecIngressError::FieldTooLarge { .. }`, `RunSpecIngressError::TooManyItems { .. }` and `RunSpecIngressError::InvalidSemanticField { .. }` not covered
+   --> crates/recursive-agent-daemon/src/lib.rs:25:15
+    |
+ 25 |         match error {
+    |               ^^^^^ patterns `RunSpecIngressError::FieldTooLarge { .. }`, `RunSpecIngressError::TooManyItems { .. }` and `RunSpecIngressError::InvalidSemanticField { .. }` not covered
+    |
+note: `RunSpecIngressError` defined here
+   --> crates/recursive-agent-contracts/src/lib.rs:368:1
+    |
+368 | pub enum RunSpecIngressError {
+    | ^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+...
+386 |     FieldTooLarge {
+    |     ------------- not covered
+...
+391 |     TooManyItems {
+    |     ------------ not covered
+...
+396 |     InvalidSemanticField { field: &'static str },
+    |     -------------------- not covered
+    = note: the matched value is of type `RunSpecIngressError`
+help: ensure that all possible cases are being handled by adding a match arm with a wildcard pattern, a match arm with multiple or-patterns as shown, or multiple match arms
+    |
+ 35 ~             },
+ 36 +             RunSpecIngressError::FieldTooLarge { .. } | RunSpecIngressError::TooManyItems { .. } | RunSpecIngressError::InvalidSemanticField { .. } => todo!()
+    |
+
+For more information about this error, try `rustc --explain E0004`.
+error: could not compile `recursive-agent-daemon` (lib test) due to 1 previous error
+warning: build failed, waiting for other jobs to finish...

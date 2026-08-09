@@ -1,0 +1,29 @@
+R4 RED evidence captured before the R4 pinned-root fix.
+Captured: 2026-08-05 (America/Chicago)
+Repository: /home/sikmindz/Coding/recursive-agent
+
+Command:
+rg -n 'ensure_dir\(&run_dir\)|RunPaths::new\(run_dir|open\(&paths\)|ArtifactStore::new\(&paths\)|DurablePermitStore::open\(run_dir.join|Ok\(RunSummary' crates/recursive-agent-runner/src/lib.rs
+
+Exit: 0
+Observed:
+142:    ensure_dir(&run_dir)?;
+143:    let paths = RunPaths::new(run_dir.clone());
+146:    let mut chain = open(&paths)?;
+149:        return Ok(RunSummary {
+158:    let store = ArtifactStore::new(&paths)?;
+159:    let permit_store = DurablePermitStore::open(run_dir.join("permits"))?;
+295:    Ok(RunSummary {
+
+Constructor audit:
+- recursive-agent-ledger::open reopens paths.root by pathname;
+- ArtifactStore::new separately reopens paths.root by pathname;
+- DurablePermitStore::open separately opens its pathname tree;
+- strict verification/snapshot functions reopen paths.root by pathname;
+- the successful RunSummary is constructed directly from the live chain head without
+  expected-run strict verification and artifact readback on the retained handles.
+
+RED conclusion:
+The runner has no single root capability. Directory replacement between these owner
+construction calls can split receipt, artifact, and permit state across different
+inodes, and the locator path remains authoritative during final verification.

@@ -1,0 +1,9 @@
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.08s
+     Running tests/terminal_exit.rs (target/debug/deps/terminal_exit-1e5815e644c5456c)
+
+running 2 tests
+test phase_one_cli_exposes_no_unadmitted_serve_commands ... ok
+test real_cli_non_success_matrix_exits_nonzero_and_retains_strict_runs ... ok
+
+test result: ok. 2 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.50s
+

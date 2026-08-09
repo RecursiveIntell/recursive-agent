@@ -1,0 +1,5 @@
+Phase 1 hardening v3 RED evidence — R2 network opt-in
+Observed before production changes on 2026-08-05.
+Command: rg -n 'allow_network|network_allowed' crates/recursive-agent-{runner,policy,sandbox}/src
+Exit: 0
+Evidence: runner copies caller allow_network into EffectScopeV1; Allowlist::authorize has no Phase 1 denial; sandbox skips seccomp and labels shared_host_network_explicitly_allowed when true.

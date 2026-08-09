@@ -1,0 +1,12 @@
+5:#[cfg(test)]
+9:#[cfg(test)]
+158:#[cfg(test)]
+163:#[cfg(test)]
+259:#[cfg(test)]
+299:#[cfg(test)]
+300:mod tests {
+360:            let output = std::process::Command::new(&executable)
+203:pub(super) fn execute(
+616:    let child = command.spawn().map_err(|_| SandboxError::SetupFailed {
+745:        .spawn()
+888:    let mut command = Command::new(format!("/proc/self/fd/{}", bash.file.as_raw_fd()));

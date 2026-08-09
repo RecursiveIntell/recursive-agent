@@ -1,9 +1,20 @@
 use std::path::{Path, PathBuf};
+use std::sync::Arc;
 
+use async_trait::async_trait;
 use clap::{Parser, Subcommand};
-use recursive_agent_contracts::RunSpecV1;
-use recursive_agent_ledger::verify;
-use recursive_agent_runner::{replay, run_spec};
+use llm_tool_runtime::{
+    McpSurfaceKind, Tool, ToolApprovalKind, ToolBackendKind, ToolCtx, ToolDescriptor, ToolError,
+    ToolErrorClass, ToolExposureMode, ToolExposurePolicy, ToolIdempotencyClass, ToolOutputMode,
+    ToolReceiptPersistence, ToolRegistry, ToolResult, ToolRuntime, ToolSideEffectClass,
+};
+use recursive_agent_contracts::parse_run_spec_file;
+use recursive_agent_ledger::{verify_directory_bound, RunRootIdentity};
+use recursive_agent_runner::{
+    operation_from_run_spec, replay, Clock, RunSummary, RuntimeDependencies,
+    RuntimeLedgerDependencyV1, RuntimePolicyDependencyV1, RuntimeProviderDependencyV1,
+    RuntimeSandboxDependencyV1, RuntimeService, RuntimeStoreDependencyV1,
+};
 
 #[derive(Parser, Debug)]
 #[command(
@@ -32,6 +43,10 @@ enum Cmd {
         /// $RECURSIVE_AGENT_RUNS or ~/.local/share/recursive-agent/runs.
         #[arg(long)]
         out: Option<PathBuf>,
+        /// Execution adapter: embedded (in-process RuntimeService, default) or
+        /// ipc (connect to a ra-daemon socket). No silent fallback between modes.
+        #[arg(long, value_enum, default_value_t = RuntimeMode::Embedded)]
+        runtime: RuntimeMode,
     },
     /// Verify a run directory's receipt chain offline.
     Verify {
@@ -47,6 +62,14 @@ enum Cmd {
     },
 }
 
+/// Explicit execution adapter selection (Phase 6, Task 6.1). No silent
+/// fallback: each mode is explicit and must translate CLI input to V1.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, clap::ValueEnum)]
+enum RuntimeMode {
+    Embedded,
+    Ipc,
+}
+
 fn default_runs_root() -> PathBuf {
     if let Ok(p) = std::env::var("RECURSIVE_AGENT_RUNS") {
         return PathBuf::from(p);
@@ -59,36 +82,214 @@ fn default_runs_root() -> PathBuf {
         .join("runs")
 }
 
+/// Deterministic clock adapter (embedded mode).
+#[derive(Clone, Copy)]
+struct SystemClockAdapter;
+impl Clock for SystemClockAdapter {
+    fn now(&self) -> chrono::DateTime<chrono::Utc> {
+        chrono::Utc::now()
+    }
+    fn monotonic_now(&self) -> std::time::Duration {
+        std::time::Duration::ZERO
+    }
+}
+
+/// Runner-owned shell surface: effects only through the prepared sandbox
+/// dispatch inside RuntimeService, never a direct subprocess here.
+struct ShellDescriptorOwner {
+    descriptor: ToolDescriptor,
+}
+impl ShellDescriptorOwner {
+    fn new() -> Self {
+        Self {
+            descriptor: ToolDescriptor {
+                name: "shell".into(),
+                version: "1.0.0".into(),
+                description: Some("bounded shell effect (runner-owned dispatch)".into()),
+                backend_kind: ToolBackendKind::LocalFunction,
+                input_schema: serde_json::json!({"type": "object"}),
+                output_mode: ToolOutputMode::StructuredJson,
+                read_only: false,
+                side_effect_class: ToolSideEffectClass::Write,
+                idempotency_class: ToolIdempotencyClass::NonIdempotent,
+                approval_kind: ToolApprovalKind::PolicyRequired,
+                timeout_ms: 3_000,
+                concurrency_key: None,
+                cache_ttl_ms: None,
+                exposure_mode: ToolExposureMode::Auto,
+                mcp_surface_kind: McpSurfaceKind::None,
+                exposure_policy: ToolExposurePolicy::default(),
+                receipt_persistence: ToolReceiptPersistence::Ephemeral,
+                output_size_limit_bytes: Some(4_096),
+                provider_payload: None,
+            },
+        }
+    }
+}
+#[async_trait]
+impl Tool for ShellDescriptorOwner {
+    fn descriptor(&self) -> &ToolDescriptor {
+        &self.descriptor
+    }
+    async fn invoke(
+        &self,
+        _ctx: &ToolCtx,
+        _call: &llm_tool_runtime::ToolCall,
+    ) -> Result<ToolResult, ToolError> {
+        Err(ToolError::new(
+            ToolErrorClass::Denied,
+            "shell effects require runner-owned prepared sandbox dispatch",
+        ))
+    }
+}
+
+/// Deterministic echo tool (pure, read-only) required by CLI fixtures.
+struct EchoDescriptorOwner {
+    descriptor: ToolDescriptor,
+}
+impl EchoDescriptorOwner {
+    fn new() -> Self {
+        Self {
+            descriptor: ToolDescriptor {
+                name: "echo".into(),
+                version: "1.0.0".into(),
+                description: Some("deterministic echo".into()),
+                backend_kind: ToolBackendKind::LocalFunction,
+                input_schema: serde_json::json!({"type": "object"}),
+                output_mode: ToolOutputMode::StructuredJson,
+                read_only: true,
+                side_effect_class: ToolSideEffectClass::ReadOnly,
+                idempotency_class: ToolIdempotencyClass::Idempotent,
+                approval_kind: ToolApprovalKind::PolicyRequired,
+                timeout_ms: 3_000,
+                concurrency_key: None,
+                cache_ttl_ms: None,
+                exposure_mode: ToolExposureMode::Auto,
+                mcp_surface_kind: McpSurfaceKind::None,
+                exposure_policy: ToolExposurePolicy::default(),
+                receipt_persistence: ToolReceiptPersistence::Ephemeral,
+                output_size_limit_bytes: Some(4_096),
+                provider_payload: None,
+            },
+        }
+    }
+}
+#[async_trait]
+impl Tool for EchoDescriptorOwner {
+    fn descriptor(&self) -> &ToolDescriptor {
+        &self.descriptor
+    }
+    async fn invoke(
+        &self,
+        _ctx: &ToolCtx,
+        call: &llm_tool_runtime::ToolCall,
+    ) -> Result<ToolResult, ToolError> {
+        Ok(ToolResult::json(call.arguments.clone()))
+    }
+}
+
+/// Frozen-time tool descriptor. The runner validates and executes it only
+/// against the operation's supplied frozen clock; this owner only admits the
+/// tool to the embedded runtime registry.
+struct TimeNowDescriptorOwner {
+    descriptor: ToolDescriptor,
+}
+impl TimeNowDescriptorOwner {
+    fn new() -> Self {
+        Self {
+            descriptor: ToolDescriptor {
+                name: "time_now".into(),
+                version: "1.0.0".into(),
+                description: Some("frozen-clock time projection".into()),
+                backend_kind: ToolBackendKind::LocalFunction,
+                input_schema: serde_json::json!({"type": "object"}),
+                output_mode: ToolOutputMode::StructuredJson,
+                read_only: true,
+                side_effect_class: ToolSideEffectClass::ReadOnly,
+                idempotency_class: ToolIdempotencyClass::Idempotent,
+                approval_kind: ToolApprovalKind::PolicyRequired,
+                timeout_ms: 3_000,
+                concurrency_key: None,
+                cache_ttl_ms: None,
+                exposure_mode: ToolExposureMode::Auto,
+                mcp_surface_kind: McpSurfaceKind::None,
+                exposure_policy: ToolExposurePolicy::default(),
+                receipt_persistence: ToolReceiptPersistence::Ephemeral,
+                output_size_limit_bytes: Some(4_096),
+                provider_payload: None,
+            },
+        }
+    }
+}
+#[async_trait]
+impl Tool for TimeNowDescriptorOwner {
+    fn descriptor(&self) -> &ToolDescriptor {
+        &self.descriptor
+    }
+    async fn invoke(
+        &self,
+        _ctx: &ToolCtx,
+        call: &llm_tool_runtime::ToolCall,
+    ) -> Result<ToolResult, ToolError> {
+        let timestamp = call
+            .arguments
+            .get("frozen_clock")
+            .and_then(serde_json::Value::as_str)
+            .ok_or_else(|| {
+                ToolError::new(
+                    ToolErrorClass::Denied,
+                    "time_now requires runner-injected frozen-clock evidence",
+                )
+            })?;
+        let label = call
+            .arguments
+            .get("label")
+            .and_then(serde_json::Value::as_str)
+            .ok_or_else(|| ToolError::new(ToolErrorClass::Denied, "time_now requires label"))?;
+        Ok(ToolResult::json(serde_json::json!({
+            "timestamp": timestamp,
+            "label": label,
+        })))
+    }
+}
+
+fn embedded_service(output_root: &Path) -> Result<RuntimeService, Box<dyn std::error::Error>> {
+    let mut registry = ToolRegistry::new();
+    registry.register(ShellDescriptorOwner::new());
+    registry.register(EchoDescriptorOwner::new());
+    registry.register(TimeNowDescriptorOwner::new());
+    let dependencies = RuntimeDependencies::builder()
+        .policy(RuntimePolicyDependencyV1::Native)
+        .sandbox(RuntimeSandboxDependencyV1::Native)
+        .tool_runtime(Arc::new(ToolRuntime::new(registry)))
+        .provider(RuntimeProviderDependencyV1::Disabled)
+        .ledger(RuntimeLedgerDependencyV1::Native)
+        .clock(Arc::new(SystemClockAdapter))
+        .store(RuntimeStoreDependencyV1::Native)
+        .output_root(output_root)
+        .build()?;
+    Ok(RuntimeService::new(dependencies))
+}
+
+#[allow(deprecated)]
 fn main() {
     let cli = Cli::parse();
     match cli.cmd {
         Cmd::Doctor => doctor(),
-        Cmd::Run { spec, out } => {
-            let raw = match std::fs::read_to_string(&spec) {
-                Ok(s) => s,
-                Err(e) => {
-                    eprintln!("error: cannot read spec {spec:?}: {e}");
-                    std::process::exit(2);
-                }
-            };
-            let parsed: RunSpecV1 = match serde_json::from_str(&raw) {
-                Ok(v) => v,
-                Err(e) => {
-                    eprintln!("error: spec is not a valid RunSpecV1: {e}");
+        Cmd::Run { spec, out, runtime } => {
+            let parsed = match parse_run_spec_file(&spec) {
+                Ok(value) => value,
+                Err(error) => {
+                    eprintln!("error: run spec rejected: {error}");
                     std::process::exit(2);
                 }
             };
             let out_root = out.unwrap_or_else(default_runs_root);
-            match run_spec(&parsed, &out_root) {
-                Ok(s) => {
-                    println!("run_id: {}", s.run_id);
-                    println!("run_dir: {}", s.run_dir.display());
-                    println!("chain_length: {}", s.chain_length);
-                    println!("chain_head: {}", s.chain_head);
-                }
-                Err(e) => {
-                    eprintln!("error: run failed: {e}");
-                    std::process::exit(1);
+            match runtime {
+                RuntimeMode::Embedded => run_embedded(&parsed, &out_root),
+                RuntimeMode::Ipc => {
+                    eprintln!("error: --runtime ipc requires a ra-daemon socket and is wired in a later Phase 6 task; use embedded");
+                    std::process::exit(2);
                 }
             }
         }
@@ -97,21 +298,110 @@ fn main() {
     }
 }
 
+/// Execute through the canonical in-process RuntimeService (no private
+/// execution surface). Translates the parsed spec to a V1 operation and
+/// submits, then renders the runtime status.
+#[allow(deprecated)]
+fn run_embedded(parsed: &recursive_agent_contracts::RunSpecV1, out_root: &Path) -> ! {
+    let service = match embedded_service(out_root) {
+        Ok(s) => s,
+        Err(e) => {
+            eprintln!("error: embedded runtime construction failed: {e}");
+            std::process::exit(2);
+        }
+    };
+    let operation = match operation_from_run_spec(parsed) {
+        Ok(op) => op,
+        Err(e) => {
+            eprintln!("error: run spec to V1 translation failed: {e}");
+            std::process::exit(2);
+        }
+    };
+    match service.submit(&operation) {
+        Ok(handle) => {
+            let run_dir = handle.run_dir();
+            let summary = match service.status(handle.run_id()) {
+                Ok(status) => {
+                    let verification = match service.verify(handle.run_id()) {
+                        Ok(v) => v,
+                        Err(e) => {
+                            eprintln!("error: verification failed: {e}");
+                            std::process::exit(1);
+                        }
+                    };
+                    let identity = run_root_identity(run_dir);
+                    RunSummary {
+                        run_id: handle.run_id().clone(),
+                        run_dir: run_dir.to_path_buf(),
+                        chain_length: verification.length,
+                        chain_head: verification.final_head.clone(),
+                        terminal_state: match status {
+                            recursive_agent_runner::RuntimeStatusV1::Terminal { state } => state,
+                            recursive_agent_runner::RuntimeStatusV1::Active => {
+                                eprintln!("error: run did not reach terminal state");
+                                std::process::exit(1);
+                            }
+                        },
+                        run_root_identity: identity,
+                    }
+                }
+                Err(e) => {
+                    eprintln!("error: run status unavailable: {e}");
+                    std::process::exit(1);
+                }
+            };
+            let ok_summary = summary.terminal_state.permits_successful_finalization();
+            match serde_json::to_string(&summary) {
+                Ok(json) => println!("{json}"),
+                Err(error) => {
+                    eprintln!("error: run summary serialization failed: {error}");
+                    std::process::exit(2);
+                }
+            }
+            std::process::exit(if ok_summary { 0 } else { 1 });
+        }
+        Err(e) => {
+            eprintln!("error: run failed: {e}");
+            std::process::exit(1);
+        }
+    }
+}
+
+/// Resolve the pinned run-root identity (device/inode) from a committed run dir.
+fn run_root_identity(run_dir: &Path) -> RunRootIdentity {
+    use std::os::unix::fs::MetadataExt;
+    match std::fs::metadata(run_dir) {
+        Ok(meta) => RunRootIdentity {
+            device: meta.dev(),
+            inode: meta.ino(),
+        },
+        Err(_) => RunRootIdentity {
+            device: 0,
+            inode: 0,
+        },
+    }
+}
+
 fn doctor() {
-    println!("recursive-agent Phase 3 (sandbox + provider)");
-    println!("mode: receipt-bearing, provider + sandboxed shell");
-    println!("boundary-compiler: 0.1.0");
-    println!("stack-ids: 0.1.3");
-    println!("binary:          ra");
-    println!("tools:           echo, time_now, llm, shell");
-    println!("ledger:          hermetic (blake3)");
-    println!("policy:          m0-2 allowlist");
-    println!("sandbox:         user-ns + Landlock (best-effort)");
+    print!("{}", doctor_report());
+}
+
+fn doctor_report() -> &'static str {
+    concat!(
+        "recursive-agent Phase 1 candidate (admission rejected pending hostile review)\n",
+        "mode: provider-free receipt-bearing execution\n",
+        "boundary: boundary-compiler 0.1.0 + stack-ids 0.1.3\n",
+        "available pure tools: echo, time_now (frozen clock required)\n",
+        "available bounded effect: shell (runner-private one-shot dispatch, Bubblewrap + seccomp network EPERM)\n",
+        "typed unavailable: llm/provider networking, mcp_call/client spawn, memory runtime, skills, delegate\n",
+        "ledger: offline blake3 chain + strict artifact verification + bound replay snapshot\n",
+        "policy: m0-2; Phase 1 network is always denied\n",
+    )
 }
 
 fn verify_cmd(run_dir: &Path) {
     let paths = recursive_agent_ledger::RunPaths::new(run_dir);
-    match verify(&paths) {
+    match verify_directory_bound(&paths) {
         Ok(v) => {
             if v.ok {
                 println!("verify: ok");
@@ -164,5 +454,24 @@ fn replay_cmd(run_dir: &Path) {
             eprintln!("replay: ERROR: {e}");
             std::process::exit(2);
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::doctor_report;
+
+    #[test]
+    fn doctor_reports_exact_phase_one_candidate_surface() {
+        let report = doctor_report();
+        assert!(report.contains("Phase 1 candidate"));
+        assert!(report.contains("admission rejected"));
+        assert!(report.contains("Bubblewrap + seccomp network EPERM"));
+        assert!(report.contains("runner-private one-shot dispatch"));
+        assert!(!report.contains("sealed permit context"));
+        assert!(report.contains("available pure tools: echo, time_now"));
+        assert!(report.contains("typed unavailable: llm/provider networking"));
+        assert!(!report.contains("Phase 3"));
+        assert!(!report.contains("Landlock"));
     }
 }

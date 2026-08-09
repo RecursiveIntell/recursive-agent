@@ -1,0 +1,9 @@
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.06s
+     Running tests/resume_boundary.rs (target/debug/deps/resume_boundary-b5e4f54e339e2a3e)
+
+running 2 tests
+test tampered_parent_boundary_is_rejected_not_resumed ... ok
+test verified_parent_yields_causally_linked_continuation ... ok
+
+test result: ok. 2 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.07s
+

@@ -1,0 +1,469 @@
+{
+  "all_gates_passed": false,
+  "branch": "main",
+  "disposition": "controller hostile admission required",
+  "generated_at": "2026-08-05T11:44:23.586457+00:00",
+  "head": "3805f7abf319e07e47f1c20b862e614c3dad164f",
+  "notes": [
+    "The crash-recovery process race intentionally prints one inner losing harness failure; the enclosing test and command must exit zero.",
+    "These receipts are admission-candidate evidence only; they neither admit Phase 1 nor advance Phase 2.",
+    "Controller-v10 adds focused regressions for hostile launcher environment, post-spawn revocation cleanup, child-only FD transfer, and semantic ingress ceilings with valid sibling-step decoding."
+  ],
+  "phase_status": "rejected_pending_controller_hostile_admission",
+  "repository": "/home/sikmindz/Coding/recursive-agent",
+  "results": [
+    {
+      "command": "cargo fmt --all -- --check",
+      "exit_code": 0,
+      "failed": 0,
+      "group": "required_matrix",
+      "name": "fmt_pre",
+      "output_bytes": 0,
+      "output_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "passed": 0
+    },
+    {
+      "command": "cargo test -p recursive-agent-contracts --all-targets",
+      "exit_code": 0,
+      "failed": 0,
+      "group": "required_matrix",
+      "name": "contracts",
+      "output_bytes": 2231,
+      "output_sha256": "c5a1a1381c734a045844c6046b2c261ce38e1f7d19d4dade126cb28f6ec5d4af",
+      "passed": 18
+    },
+    {
+      "command": "cargo test -p recursive-agent-policy --all-targets",
+      "exit_code": 0,
+      "failed": 0,
+      "group": "required_matrix",
+      "name": "policy",
+      "output_bytes": 1475,
+      "output_sha256": "517154fda99d320a1ad571bc3825c9099f086d4b5ff0003a3e0efcbacd7596cb",
+      "passed": 11
+    },
+    {
+      "command": "cargo test -p recursive-agent-ledger --all-targets",
+      "exit_code": 0,
+      "failed": 1,
+      "group": "required_matrix",
+      "name": "ledger",
+      "output_bytes": 3295,
+      "output_sha256": "4e126f01ba39ff2cedb6b1cef59c44f5b32b06dbf82047f9c246247dc57eec7d",
+      "passed": 26
+    },
+    {
+      "command": "cargo test -p recursive-agent-sandbox --all-targets",
+      "exit_code": 0,
+      "failed": 0,
+      "group": "required_matrix",
+      "name": "sandbox",
+      "output_bytes": 702,
+      "output_sha256": "ad1082cb911c5e378be0178bb5d8e6b783bc28362a2dd2c3d5f0e75eadd49aa4",
+      "passed": 2
+    },
+    {
+      "command": "cargo test -p recursive-agent-provider --all-targets",
+      "exit_code": 0,
+      "failed": 0,
+      "group": "required_matrix",
+      "name": "provider",
+      "output_bytes": 1204,
+      "output_sha256": "681a9c8e079bd990faa0cd3940870119fd36fd84680261d07c7b885fea33148d",
+      "passed": 11
+    },
+    {
+      "command": "cargo test -p recursive-agent-runner --all-targets",
+      "exit_code": 0,
+      "failed": 0,
+      "group": "required_matrix",
+      "name": "runner",
+      "output_bytes": 4323,
+      "output_sha256": "938dd8d87a022e3ae6fd758dccc2500565e1403150209e616961c0295a50be25",
+      "passed": 38
+    },
+    {
+      "command": "cargo test -p recursive-agent-tools --all-targets",
+      "exit_code": 0,
+      "failed": 0,
+      "group": "required_matrix",
+      "name": "tools",
+      "output_bytes": 1081,
+      "output_sha256": "f250988250e9e9e8c7928c7b9ff4d2f414425cbae8bc8f9351bb19b60dbf59f0",
+      "passed": 8
+    },
+    {
+      "command": "cargo test -p recursive-agent-cli --all-targets",
+      "exit_code": 0,
+      "failed": 0,
+      "group": "required_matrix",
+      "name": "cli",
+      "output_bytes": 1906,
+      "output_sha256": "d25ba21240f778aef1d72ed70e283f9153ecd18aeb9e3ea3a0c2e2e1a4806895",
+      "passed": 12
+    },
+    {
+      "command": "cargo test -p recursive-agent-daemon --all-targets",
+      "exit_code": 101,
+      "failed": 0,
+      "group": "required_matrix",
+      "name": "daemon",
+      "output_bytes": 1588,
+      "output_sha256": "bbe0f7ff6e6f5cde2f7465a00da2b4ada8c985932bb604876bdd538aac4ee3d6",
+      "passed": 0
+    },
+    {
+      "command": "cargo test --workspace --all-targets",
+      "exit_code": 101,
+      "failed": 0,
+      "group": "required_matrix",
+      "name": "workspace",
+      "output_bytes": 2440,
+      "output_sha256": "efb445d85f878d4221285ae7573ededeeb7ee38828a19abde4338f2bd1c104a1",
+      "passed": 0
+    },
+    {
+      "command": "cargo clippy --workspace --all-targets -- -D warnings",
+      "exit_code": 101,
+      "failed": 0,
+      "group": "required_matrix",
+      "name": "clippy",
+      "output_bytes": 2809,
+      "output_sha256": "811b0513228d2fc2b9a9be52f8198beea33d0cf2f777c6e997221ab0f8386f9c",
+      "passed": 0
+    },
+    {
+      "command": "cargo fmt --all -- --check",
+      "exit_code": 0,
+      "failed": 0,
+      "group": "required_matrix",
+      "name": "fmt_post",
+      "output_bytes": 0,
+      "output_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "passed": 0
+    },
+    {
+      "command": "git diff --check",
+      "exit_code": 0,
+      "failed": 0,
+      "group": "required_matrix",
+      "name": "diff_check",
+      "output_bytes": 0,
+      "output_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "passed": 0
+    },
+    {
+      "command": "cargo test -p recursive-agent-contracts --test phase1_effect_surface -- --nocapture",
+      "exit_code": 0,
+      "failed": 0,
+      "group": "focused_gate",
+      "name": "focus_public_effect_surface",
+      "output_bytes": 357,
+      "output_sha256": "993936b7dd05f75e9271e78a18ec5bd57c6cb98eae150ab8cc5c231adb52023f",
+      "passed": 1
+    },
+    {
+      "command": "cargo test -p recursive-agent-contracts --test workspace_lints -- --nocapture",
+      "exit_code": 0,
+      "failed": 0,
+      "group": "focused_gate",
+      "name": "focus_workspace_lints",
+      "output_bytes": 339,
+      "output_sha256": "777afd47c1d04c281ae11471fa793112b5130d63f04bb0d9d7e44dedb3043530",
+      "passed": 1
+    },
+    {
+      "command": "cargo test -p recursive-agent-contracts --test hardening_v6_ingress -- --nocapture",
+      "exit_code": 0,
+      "failed": 0,
+      "group": "focused_gate",
+      "name": "focus_ingress_v6_semantics",
+      "output_bytes": 590,
+      "output_sha256": "1668844e39da4cb144eee1426a1b60f8a05662c379b1abc9a503ec6584275827",
+      "passed": 5
+    },
+    {
+      "command": "cargo test -p recursive-agent-cli --test hardening_v5_ingress -- --nocapture",
+      "exit_code": 0,
+      "failed": 0,
+      "group": "focused_gate",
+      "name": "focus_cli_ingress_v6",
+      "output_bytes": 811,
+      "output_sha256": "a7a4cbeb83053405a43089fdc1f22e2d2897f6348c67fddbbc2d63f0c1b6b9ad",
+      "passed": 8
+    },
+    {
+      "command": "cargo test -p recursive-agent-runner --test canonical_containment -- --nocapture",
+      "exit_code": 0,
+      "failed": 0,
+      "group": "focused_gate",
+      "name": "focus_runner_containment_one_shot",
+      "output_bytes": 1194,
+      "output_sha256": "19c8b1b764b1a0c2c38bc39616225509430a2b96ad3bba0d3e0eb6c30885842a",
+      "passed": 13
+    },
+    {
+      "command": "cargo test -p recursive-agent-runner post_spawn_parent_revocation_kills_and_reaps_before_effect -- --nocapture",
+      "exit_code": 0,
+      "failed": 0,
+      "group": "focused_gate",
+      "name": "focus_post_spawn_revocation",
+      "output_bytes": 1662,
+      "output_sha256": "586c9550415279a7138501f2efe424a6675eb3abff527a85b99bee90b3586675",
+      "passed": 1
+    },
+    {
+      "command": "cargo test -p recursive-agent-runner child_guard_kills_and_reaps_on_early_return -- --nocapture",
+      "exit_code": 0,
+      "failed": 0,
+      "group": "focused_gate",
+      "name": "focus_child_reap_guard",
+      "output_bytes": 1647,
+      "output_sha256": "9b306667f1287ae8bb445b7b09837d3b322606b483c556554c25356f8913f096",
+      "passed": 1
+    },
+    {
+      "command": "cargo test -p recursive-agent-runner authority_descriptors_remain_cloexec_and_do_not_leak_to_siblings -- --nocapture",
+      "exit_code": 0,
+      "failed": 0,
+      "group": "focused_gate",
+      "name": "focus_child_only_fd_transfer",
+      "output_bytes": 1668,
+      "output_sha256": "e6e93e7806abfa96a9ef332f402e2abcd3865e9737f82f7523d39eefba8cbb67",
+      "passed": 1
+    },
+    {
+      "command": "cargo test -p recursive-agent-runner --lib pinned_root_tests -- --nocapture",
+      "exit_code": 0,
+      "failed": 0,
+      "group": "focused_gate",
+      "name": "focus_pinned_root_races",
+      "output_bytes": 568,
+      "output_sha256": "2d14a0faf2308625dae12ae9005215850394782bef7b7605a10574a6b4cf3b7b",
+      "passed": 3
+    },
+    {
+      "command": "cargo test -p recursive-agent-ledger --test lifecycle_validation -- --nocapture",
+      "exit_code": 0,
+      "failed": 0,
+      "group": "focused_gate",
+      "name": "focus_permit_continuity",
+      "output_bytes": 895,
+      "output_sha256": "3c8c74bd050addd2e470bc349634cc7a5b5b00783cbc99824a4cb5822d9684a4",
+      "passed": 8
+    },
+    {
+      "command": "cargo test -p recursive-agent-cli --test terminal_exit -- --nocapture",
+      "exit_code": 0,
+      "failed": 0,
+      "group": "focused_gate",
+      "name": "focus_cli_terminal_exit",
+      "output_bytes": 414,
+      "output_sha256": "51efc3a5f5fe206dfe9803cfda6a9196c9c8efac2d7603a08bafb99faa35f937",
+      "passed": 2
+    },
+    {
+      "command": "cargo test -p recursive-agent-daemon --all-targets -- --nocapture",
+      "exit_code": 101,
+      "failed": 0,
+      "group": "focused_gate",
+      "name": "focus_daemon_envelope",
+      "output_bytes": 1588,
+      "output_sha256": "bbe0f7ff6e6f5cde2f7465a00da2b4ada8c985932bb604876bdd538aac4ee3d6",
+      "passed": 0
+    },
+    {
+      "command": "cargo test -p recursive-agent-runner --test deterministic_identity -- --nocapture",
+      "exit_code": 0,
+      "failed": 0,
+      "group": "focused_gate",
+      "name": "focus_deterministic_ids",
+      "output_bytes": 628,
+      "output_sha256": "686ad35c384c71bf9da3cf0cc5340edeca94cdc6314557e7eb812b70e4b26df8",
+      "passed": 6
+    },
+    {
+      "command": "cargo test -p recursive-agent-ledger --test crash_recovery -- --nocapture",
+      "exit_code": 0,
+      "failed": 1,
+      "group": "focused_gate",
+      "name": "focus_crash_recovery",
+      "output_bytes": 1400,
+      "output_sha256": "32a256abcedb298bb056086b19baae1b1d735416b85ccc646d704c35d0e8b83f",
+      "passed": 10
+    },
+    {
+      "command": "cargo test -p recursive-agent-ledger --test artifact_tamper -- --nocapture",
+      "exit_code": 0,
+      "failed": 0,
+      "group": "focused_gate",
+      "name": "focus_replay_artifact_races",
+      "output_bytes": 826,
+      "output_sha256": "54e696324e8e0c500855cccb0ad337da5ddd7c330ef3b482137d4dae3ff6ebc0",
+      "passed": 8
+    },
+    {
+      "command": "cargo test -p recursive-agent-memory --all-targets -- --nocapture",
+      "exit_code": 0,
+      "failed": 0,
+      "group": "focused_gate",
+      "name": "focus_memory_corruption",
+      "output_bytes": 719,
+      "output_sha256": "a666ce90fb20478ef0d6e0a83bc442091714803e9731a7e71541ef8cd94eb0c3",
+      "passed": 6
+    },
+    {
+      "command": "cargo test -p recursive-agent-provider --test secret_contract -- --nocapture",
+      "exit_code": 0,
+      "failed": 0,
+      "group": "focused_gate",
+      "name": "focus_provider_secret",
+      "output_bytes": 794,
+      "output_sha256": "762c58e54bc2c8df74783dabb1ade2ee6793187d3b10fa25eb2b3452f2fec64b",
+      "passed": 7
+    },
+    {
+      "command": "cargo test -p recursive-agent-skills --all-targets -- --nocapture",
+      "exit_code": 0,
+      "failed": 0,
+      "group": "focused_gate",
+      "name": "focus_skill_traversal",
+      "output_bytes": 280,
+      "output_sha256": "507d1776ac867164aeb8fad87b20ccf414809d0def8f63b60228a2bc977ad345",
+      "passed": 0
+    },
+    {
+      "command": "cargo test -p recursive-agent-cli --bin ra tests::doctor_reports_exact_phase_one_candidate_surface -- --exact --nocapture",
+      "exit_code": 0,
+      "failed": 0,
+      "group": "focused_gate",
+      "name": "focus_doctor_truth",
+      "output_bytes": 328,
+      "output_sha256": "6339a6d003878a19422ff3381fc09f1961a0d2b642836f1662e0c286ce8692a4",
+      "passed": 1
+    },
+    {
+      "command": "cargo test -p recursive-agent-sandbox --doc",
+      "exit_code": 0,
+      "failed": 0,
+      "group": "focused_gate",
+      "name": "focus_sandbox_compile_fail",
+      "output_bytes": 302,
+      "output_sha256": "748d456628f3c0b4eb594451bfb9c88af18810b9f335e249bc5eec0563c509e1",
+      "passed": 1
+    },
+    {
+      "command": "set -euo pipefail\nhits=$(rg -l 'Command::new|[.]spawn[(]|CommandExt::exec|[.]exec[(]' crates/*/src --glob '*.rs' | sort)\nexpected=$'crates/recursive-agent-memory/src/lib.rs\\ncrates/recursive-agent-runner/src/sandbox_engine.rs'\ntest \"$hits\" = \"$expected\"\nrg -n '^#\\[cfg\\(test\\)\\]$|^mod tests|Command::new' crates/recursive-agent-memory/src/lib.rs\nrg -n 'Command::new|[.]spawn[(]|pub\\(super\\) fn execute|posix_spawn' crates/recursive-agent-runner/src/sandbox_engine.rs",
+      "exit_code": 0,
+      "failed": 0,
+      "group": "source_scan",
+      "name": "scan_process_owner",
+      "output_bytes": 443,
+      "output_sha256": "95e4ef5d446f6675c5e3c52942044f6653078d20d40d7ccf2af0b7926994916a",
+      "passed": 0
+    },
+    {
+      "command": "set -euo pipefail\nrg -n 'pub\\(super\\) struct DispatchToken|context: DispatchToken' crates/recursive-agent-runner/src/sandbox_engine.rs\nif rg -n 'impl Clone for DispatchToken|Serialize for DispatchToken|Deserialize for DispatchToken|derive\\([^)]*(Clone|Serialize|Deserialize)[^)]*\\)[[:space:]]*pub\\(super\\) struct DispatchToken' crates/recursive-agent-runner/src/sandbox_engine.rs; then exit 1; fi",
+      "exit_code": 0,
+      "failed": 0,
+      "group": "source_scan",
+      "name": "scan_dispatch_token",
+      "output_bytes": 133,
+      "output_sha256": "4b21003c7c0ef9c440a1edfad1a7b6bbd3429ffc9964d8e428523d93ed269ac3",
+      "passed": 0
+    },
+    {
+      "command": "set -euo pipefail\nif rg -n 'ArtifactStore::new|DurablePermitStore::open' crates --glob '*.rs'; then exit 1; fi\nif rg -n 'recursive_agent_ledger::open\\(|DurablePermitStore::from_dir_fd' crates/recursive-agent-runner/src --glob '*.rs'; then exit 1; fi\nrg -n 'open_from_dir_fd|from_run_root_fd|verified_snapshot_expected_run_from_dir_fd' crates/recursive-agent-runner/src/lib.rs",
+      "exit_code": 0,
+      "failed": 0,
+      "group": "source_scan",
+      "name": "scan_child_store_reopen",
+      "output_bytes": 584,
+      "output_sha256": "d696c6c959169fc67807ebcb881322cb7a14faa4009ab780eaa5c563e8a15736",
+      "passed": 0
+    },
+    {
+      "command": "set -euo pipefail\nif rg -n 'pub fn verify\\(' crates/recursive-agent-ledger/src; then exit 1; fi\nif rg -n 'read_to_string.*receipts|receipts.*read_to_string|std::fs::read\\([^)]*receipts' crates/recursive-agent-runner/src crates/recursive-agent-cli/src; then exit 1; fi\nrg -n 'take\\(maximum \\+ 1\\)|MAX_RECEIPT_LOG_BYTES|MAX_ARTIFACT_SIZE' crates/recursive-agent-ledger/src/lib.rs",
+      "exit_code": 0,
+      "failed": 0,
+      "group": "source_scan",
+      "name": "scan_unbound_unbounded",
+      "output_bytes": 849,
+      "output_sha256": "46977a8ef219f59808d250eef90701965981b21f46ffe5eeb3e5e6bc7f5ff82f",
+      "passed": 0
+    },
+    {
+      "command": "set -euo pipefail\nif rg -n 'unsafe[[:space:]]*\\{|#!\\[(allow|warn|expect)|#\\[(ignore|should_panic)' crates --glob '*.rs' --glob '!**/tests/**'; then exit 1; fi\nif rg -n '#!\\[(allow|warn|expect)|#\\[(ignore|should_panic)' crates --glob '*.rs'; then exit 1; fi",
+      "exit_code": 0,
+      "failed": 0,
+      "group": "source_scan",
+      "name": "scan_unsafe_lint_ignore",
+      "output_bytes": 0,
+      "output_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "passed": 0
+    },
+    {
+      "command": "set -euo pipefail\nif rg -n '(^|[[:space:]])(Serve|McpServe)([[:space:]]|\\{|,)|mcp-serve|runner-private one-shot dispatch.*daemon available' crates/recursive-agent-cli/src/main.rs crates/recursive-agent-cli/Cargo.toml; then exit 1; fi\nrg -n 'runner-private one-shot dispatch|MCP client: unavailable|provider execution: unavailable|runtime memory: unavailable|skills: unavailable|delegation/MCTS: unavailable' crates/recursive-agent-cli/src/main.rs",
+      "exit_code": 0,
+      "failed": 0,
+      "group": "source_scan",
+      "name": "scan_quarantine_cli",
+      "output_bytes": 194,
+      "output_sha256": "78eea8c079edf6a32622c93736519a3c0baf2ee512e5ae2bbd4a694d1a8a7473",
+      "passed": 0
+    },
+    {
+      "command": "set -euo pipefail\nif rg -n 'pub fn start|UnixListener|UnixStream|std::thread::spawn|remove_file|create_dir_all|recursive_agent_runner|(^|[^[:alnum:]_])run_spec[(]|Command::new|[.]spawn[(]|append_receipt|DurablePermitStore' crates/recursive-agent-daemon/src/lib.rs crates/recursive-agent-daemon/Cargo.toml; then exit 1; fi\nrg -n 'Pure future-daemon protocol decoding|pub fn decode_run_spec|parse_run_spec_bytes' crates/recursive-agent-daemon/src/lib.rs",
+      "exit_code": 0,
+      "failed": 0,
+      "group": "source_scan",
+      "name": "scan_quarantine_daemon",
+      "output_bytes": 293,
+      "output_sha256": "4d8c28c138bd9ea320ecd946e140b61e569e17925cb119b570232e567f1457df",
+      "passed": 0
+    },
+    {
+      "command": "set -euo pipefail\nif rg -n 'fcntl_setfd|fn inherit_fd|pre_exec' crates/recursive-agent-runner/src/sandbox_engine.rs; then exit 1; fi\nrg -n 'PosixSpawnFileActions|pipe2\\(OFlag::O_CLOEXEC\\)|add_dup2|parent descriptor flags are never modified' crates/recursive-agent-runner/src/sandbox_engine.rs",
+      "exit_code": 0,
+      "failed": 0,
+      "group": "source_scan",
+      "name": "scan_child_only_fd_transfer",
+      "output_bytes": 625,
+      "output_sha256": "3e25df2c7e81d6f600dbdf4fbfb40659d8c05ec8ff2f6f6257e59e093004ef87",
+      "passed": 0
+    },
+    {
+      "command": "set -euo pipefail\nrg -n 'PATH=/usr/bin:/bin|LANG=C|LC_ALL=C' crates/recursive-agent-runner/src/sandbox_engine.rs\nif rg -n 'BASH_ENV|LD_PRELOAD|LD_LIBRARY_PATH' crates/recursive-agent-runner/src/sandbox_engine.rs --glob '*.rs' | rg -v 'hostile|test'; then exit 1; fi",
+      "exit_code": 0,
+      "failed": 0,
+      "group": "source_scan",
+      "name": "scan_fixed_launcher_environment",
+      "output_bytes": 64,
+      "output_sha256": "240d4b45eef195136a4dd937d17202e69fdf3c0bbabf714368860bf0af760c97",
+      "passed": 0
+    },
+    {
+      "command": "set -euo pipefail\nif rg -n 'parse_with_dup_check' crates/recursive-agent-contracts/src/lib.rs; then exit 1; fi\nrg -n 'MAX_RUN_NAME_BYTES|MAX_SHELL_ARGS|MAX_SHELL_TIMEOUT_MS|MAX_SHELL_OUTPUT_BYTES|validate_ingress_spec|DuplicateSafeValue' crates/recursive-agent-contracts/src/lib.rs",
+      "exit_code": 0,
+      "failed": 0,
+      "group": "source_scan",
+      "name": "scan_ingress_v6_contract",
+      "output_bytes": 1080,
+      "output_sha256": "d2058a4440563f600d633833ccd02887b87823944bda9d0062157f25bd7e5239",
+      "passed": 0
+    }
+  ],
+  "schema": "recursive-agent/phase-1-hardening-v6-controller-candidate/v1",
+  "source_generation_digest": {
+    "algorithm": "sha256",
+    "construction": "sha256 of sorted per-file sha256 records for Cargo.toml, Cargo.lock, and every regular file below crates/",
+    "file_count": 50,
+    "record_file": "source-files.sha256",
+    "value": "f4de102d1d04a3dfb438d029ef60ccab81c8011830ea6d592d04debc4b5f904c"
+  },
+  "tracked_binary_diff_digest": {
+    "algorithm": "sha256",
+    "scope": "git diff --binary -- Cargo.toml Cargo.lock crates",
+    "value": "972b79ca5a03a5178ab9120d238a24e5098e6f41dcf1129eb8f232083a81312c"
+  }
+}

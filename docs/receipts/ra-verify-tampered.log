@@ -1,1 +1,1 @@
-verify: FAIL at receipt index 1 (prev_chain_digest mismatch): expected_head=020a9ed50a3490af3941d848965dca2dceeddc621f057d4798472b410b95315e observed_head=720a9ed50a3490af3941d848965dca2dceeddc621f057d4798472b410b95315e
+verify: ERROR: contract error: malformed payload: receipt identity does not bind all semantic fields

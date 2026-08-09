@@ -1,0 +1,12 @@
+$ cargo test -p recursive-agent-contracts --test phase2_operation_envelope -- --nocapture
+exit_code: 101
+
+Compiling recursive-agent-contracts v0.1.0 (/home/sikmindz/Coding/recursive-agent/crates/recursive-agent-contracts)
+error[E0432]: unresolved import `recursive_agent_contracts::OperationSchemaV1`
+ --> crates/recursive-agent-contracts/tests/phase2_operation_envelope.rs:1:5
+  |
+1 | use recursive_agent_contracts::OperationSchemaV1;
+  |     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ no `OperationSchemaV1` in the root
+
+For more information about this error, try `rustc --explain E0432`.
+error: could not compile `recursive-agent-contracts` (test "phase2_operation_envelope") due to 1 previous error

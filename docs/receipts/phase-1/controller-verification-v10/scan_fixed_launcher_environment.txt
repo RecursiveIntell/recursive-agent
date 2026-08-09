@@ -1,0 +1,1 @@
+1267:    let env = ["PATH=/usr/bin:/bin", "LANG=C", "LC_ALL=C"]

@@ -1,0 +1,18 @@
+Finished `test` profile [unoptimized + debuginfo] target(s) in 0.12s
+     Running unittests src/lib.rs (target/debug/deps/recursive_agent_provider-b1230bc8cd779bf3)
+
+running 3 tests
+test tests::empty_base_rejected ... ok
+test tests::ollama_spec_round_trips ... ok
+test tests::ollama_url_has_no_double_slash ... ok
+
+test result: ok. 3 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+     Running tests/secret_contract.rs (target/debug/deps/secret_contract-9f5a67aebe6d4992)
+
+running 3 tests
+test debug_output_redacts_secret_material ... ok
+test missing_credential_is_typed ... ok
+test provider_spec_serialization_contains_no_secret ... ok
+
+test result: ok. 3 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s

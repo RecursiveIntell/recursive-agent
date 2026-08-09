@@ -1,0 +1,21 @@
+Unable to open session log file "/home/sikmindz/.cache/starship/session_4076192952772714.log": Os { code: 30, kind: ReadOnlyFilesystem, message: "Read-only file system" }!
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.05s
+     Running unittests src/lib.rs (target/debug/deps/recursive_agent_policy-a2f839bfb831c456)
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+     Running tests/permit_lifecycle.rs (target/debug/deps/permit_lifecycle-2b77fa535f4c4f60)
+
+running 7 tests
+test permit_state_symlink_swap_is_rejected ... ok
+test unissued_parent_lease_is_rejected ... ok
+test root_is_pinned_and_symlink_roots_are_rejected ... ok
+test revoked_parent_cannot_authorize_child_dispatch ... ok
+test concurrent_and_restart_double_spend_are_rejected ... ok
+test wrong_binding_expiry_and_revocation_are_typed ... ok
+test crash_points_reconcile_to_issued_or_consumed ... ok
+
+test result: ok. 7 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.01s
+

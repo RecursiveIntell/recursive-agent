@@ -1,0 +1,5 @@
+Phase 1 hardening v3 RED evidence — R4 shell terminal truth
+Observed before production changes on 2026-08-05.
+Command: sed -n '390,480p' crates/recursive-agent-runner/src/lib.rs
+Exit: 0
+Evidence: runner checks only body.timed_out after a shell result, then emits StepCompleted. It does not require exit_code == 0, Enforced, or zero stdout/stderr truncation and dropped bytes.

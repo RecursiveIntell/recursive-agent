@@ -1,0 +1,11 @@
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.05s
+     Running tests/cancellation.rs (target/debug/deps/cancellation-a30bf5f053707a9c)
+
+running 4 tests
+test runtime_cancel_result_exposes_terminal_and_requested_variants ... ok
+test runtime_cancel_without_scheduler_reports_active_unavailable ... ok
+test scheduler_store_cancel_is_durable_and_idempotent ... ok
+test sandbox_timeout_kills_descendant_process_group ... ok
+
+test result: ok. 4 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 1.56s
+

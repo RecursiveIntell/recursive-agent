@@ -1,0 +1,52 @@
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.11s
+     Running unittests src/main.rs (target/debug/deps/ra-4ca5d6b984453334)
+
+running 1 test
+test tests::doctor_reports_exact_phase_one_candidate_surface ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+     Running tests/direct_crash_verify.rs (target/debug/deps/direct_crash_verify-0b72eb3c3b00fbaf)
+
+running 1 test
+test ra_verify_directly_reconciles_stale_metadata_projection ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.06s
+
+     Running tests/hardening_v5_ingress.rs (target/debug/deps/hardening_v5_ingress-ae2e6acb1a148eba)
+
+running 8 tests
+test recursive_duplicate_keys_reject_before_run_creation ... ok
+test excess_steps_reject_before_identity_or_dispatch ... ok
+test rejected_input_never_reaches_shell_dispatch ... ok
+test unknown_fields_reject_before_run_creation ... ok
+test fifo_device_and_symlink_inputs_are_rejected_without_blocking ... ok
+test oversized_whitespace_and_aggregate_material_reject_at_transport_boundary ... ok
+test hostile_launcher_environment_cannot_execute_before_sandbox ... ok
+test valid_multi_step_sibling_keys_decode_and_execute ... ok
+
+test result: ok. 8 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.12s
+
+     Running tests/terminal_exit.rs (target/debug/deps/terminal_exit-5a43432a5f465eb1)
+
+running 2 tests
+test phase_one_cli_exposes_no_unadmitted_serve_commands ... ok
+test real_cli_non_success_matrix_exits_nonzero_and_retains_strict_runs ... FAILED
+
+failures:
+
+---- real_cli_non_success_matrix_exits_nonzero_and_retains_strict_runs stdout ----
+
+thread 'real_cli_non_success_matrix_exits_nonzero_and_retains_strict_runs' (117069) panicked at crates/recursive-agent-cli/tests/terminal_exit.rs:99:9:
+assertion `left == right` failed: timeout terminal
+  left: SandboxFailed
+ right: TimedOut
+note: run with `RUST_BACKTRACE=1` environment variable to display a backtrace
+
+
+failures:
+    real_cli_non_success_matrix_exits_nonzero_and_retains_strict_runs
+
+test result: FAILED. 1 passed; 1 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.29s
+
+error: test failed, to rerun pass `-p recursive-agent-cli --test terminal_exit`

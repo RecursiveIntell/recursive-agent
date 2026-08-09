@@ -1,0 +1,28 @@
+$ cargo test -p recursive-agent-contracts --test phase2_operation_envelope -- --nocapture
+exit_code: 0
+
+Compiling recursive-agent-contracts v0.1.0 (/home/sikmindz/Coding/recursive-agent/crates/recursive-agent-contracts)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 2.22s
+     Running tests/phase2_operation_envelope.rs (target/debug/deps/phase2_operation_envelope-e90f56f8b91c6a51)
+
+running 2 tests
+test operation_schema_accepts_only_exact_v1_tag ... ok
+test complete_operation_envelope_round_trips_without_a_second_run_model ... ok
+
+test result: ok. 2 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+$ cargo clippy -p recursive-agent-contracts --all-targets --all-features -- -D warnings
+exit_code: 0
+
+Checking recursive-agent-contracts v0.1.0 (/home/sikmindz/Coding/recursive-agent/crates/recursive-agent-contracts)
+    Finished `dev` profile [unoptimized + debuginfo] target(s) in 1.44s
+
+$ cargo fmt --all -- --check
+exit_code: 0
+
+
+
+$ git diff --check
+exit_code: 0
+
+

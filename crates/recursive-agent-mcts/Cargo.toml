@@ -1,0 +1,21 @@
+[package]
+name = "recursive-agent-mcts"
+version = "0.1.0"
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+authors.workspace = true
+publish = false
+
+[features]
+default = []
+later-phase-prototype = []
+
+[dependencies]
+serde.workspace = true
+serde_json.workspace = true
+thiserror.workspace = true
+rand = "0.8"
+
+[lints]
+workspace = true

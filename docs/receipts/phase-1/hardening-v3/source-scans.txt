@@ -1,0 +1,53 @@
+Recursive Agent Phase 1 hardening-v3 final source scans
+Recorded: 2026-08-05
+Disposition: controller hostile review required
+
+1. Production prohibited tokens
+   Query: unsafe blocks/functions, .unwrap(), .expect(), panic!, todo!, dbg!,
+          #[allow], and #[ignore under crates/*/src/**/*.rs
+   Result: rg exit 1; zero matches.
+
+2. Lint overrides and skipped/expected-panic tests
+   Query: #[allow|warn|deny|forbid], #[ignore], and #[should_panic] under crates/**/*.rs
+   Result: rg exit 1; zero matches.
+
+3. Public bare effect surfaces
+   Query: public complete/spawn/execute_with/verify/verify_with_mode/memory_put,
+          public MCP client module, and public MemoryStore.
+   Result: production zero matches. Four matches were negative source-surface
+           assertions in phase1_effect_surface.rs and enforcement_truth.rs.
+
+4. Receipt/artifact reads
+   Result: no runner/CLI receipt path reopen or read_to_string. The four ledger
+           read_to_end sites are each applied to take(maximum + 1) and followed
+           by a strict post-read maximum check.
+
+5. Memory IDs and corruption omission
+   Result: MemoryEntry.id is CurrentMemoryId; no memory id String field and no
+           filter_map(Result::ok). SQLite decode recomputes identity and returns
+           typed corruption.
+
+6. Provider endpoint paths
+   Result: ValidatedEndpoint accepts and normalizes only root origins. The only
+           retained non-root paths are the fixed ProviderRoute arms
+           /api/generate and /v1/chat/completions.
+
+7. Mutable helper references
+   Result: no production helper locator or helper target. Remaining old helper
+           name occurrences are solely the mandatory malicious sibling fixture
+           and a negative source-surface assertion.
+
+8. Lint inheritance
+   Result: 13/13 workspace member manifests contain exactly one [lints] table
+           with workspace = true. The executable manifest audit test passed.
+
+9. Authoritative verification
+   Result: public strict APIs are verify_expected_run,
+           verify_directory_bound, and verified_snapshot_directory_bound.
+           verify_with_mode_private is private; legacy inspection has no
+           authoritative success boolean.
+
+10. Network authorization
+    Result: SandboxSpec retains allow_network for future typing, but policy,
+            sandbox authorization, and runner boundary all reject true before
+            effect dispatch. Enabled Phase 1 shell always installs network EPERM.

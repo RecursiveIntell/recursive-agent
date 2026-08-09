@@ -1,0 +1,32 @@
+command: cargo test -p recursive-agent-runner --test hardening_v5_executable_bytes -- --nocapture
+exit_code: 101
+output_sha256: b81e37fe42aac0f7f86f25c6878d21cf1771bd3a48c5bde9f86c52caeac54a59
+output:
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.06s
+     Running tests/hardening_v5_executable_bytes.rs (target/debug/deps/hardening_v5_executable_bytes-73a952ec8e45869b)
+
+running 3 tests
+
+thread 'same_inode_and_writable_hard_link_are_not_byte_authority' (296) panicked at crates/recursive-agent-runner/tests/hardening_v5_executable_bytes.rs:84:5:
+metadata-only identity admits same-inode byte replacement
+note: run with `RUST_BACKTRACE=1` environment variable to display a backtrace
+test same_inode_and_writable_hard_link_are_not_byte_authority ... FAILED
+
+thread 'user_owned_rewritable_executable_is_denied_with_zero_starts' (298) panicked at crates/recursive-agent-runner/tests/hardening_v5_executable_bytes.rs:66:5:
+assertion `left != right` failed
+  left: Succeeded
+ right: Succeeded
+test user_owned_rewritable_executable_is_denied_with_zero_starts ... FAILED
+Error: "exact executable evidence missing"
+test trusted_printf_evidence_contains_exact_command_bash_and_bwrap_digests ... FAILED
+
+failures:
+
+failures:
+    same_inode_and_writable_hard_link_are_not_byte_authority
+    trusted_printf_evidence_contains_exact_command_bash_and_bwrap_digests
+    user_owned_rewritable_executable_is_denied_with_zero_starts
+
+test result: FAILED. 0 passed; 3 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.08s
+
+error: test failed, to rerun pass `-p recursive-agent-runner --test hardening_v5_executable_bytes`

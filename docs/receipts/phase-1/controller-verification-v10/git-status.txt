@@ -1,0 +1,41 @@
+## main...origin/main
+ M Cargo.lock
+ M Cargo.toml
+ M crates/recursive-agent-cli/Cargo.toml
+ M crates/recursive-agent-cli/src/main.rs
+ M crates/recursive-agent-contracts/Cargo.toml
+ M crates/recursive-agent-contracts/src/lib.rs
+ M crates/recursive-agent-ledger/Cargo.toml
+ M crates/recursive-agent-ledger/src/lib.rs
+ M crates/recursive-agent-policy/Cargo.toml
+ M crates/recursive-agent-policy/src/lib.rs
+ M crates/recursive-agent-provider/Cargo.toml
+ M crates/recursive-agent-provider/src/lib.rs
+ M crates/recursive-agent-runner/Cargo.toml
+ M crates/recursive-agent-runner/src/lib.rs
+ M crates/recursive-agent-sandbox/Cargo.toml
+ M crates/recursive-agent-sandbox/src/lib.rs
+ M crates/recursive-agent-tools/Cargo.toml
+ M crates/recursive-agent-tools/src/lib.rs
+?? .hermes/
+?? crates/recursive-agent-cli/tests/
+?? crates/recursive-agent-contracts/tests/
+?? crates/recursive-agent-daemon/
+?? crates/recursive-agent-ledger/tests/
+?? crates/recursive-agent-mcp/
+?? crates/recursive-agent-mcts/
+?? crates/recursive-agent-memory/
+?? crates/recursive-agent-policy/tests/
+?? crates/recursive-agent-provider/tests/
+?? crates/recursive-agent-runner/src/sandbox_engine.rs
+?? crates/recursive-agent-runner/tests/
+?? crates/recursive-agent-sandbox/tests/
+?? crates/recursive-agent-skills/
+?? deny.toml
+?? docs/claims.md
+?? docs/owner-admission.md
+?? docs/receipts/cross-phase-parallelization-advisory.md
+?? docs/receipts/cross-phase-parallelization-receipt.json
+?? docs/receipts/phase-0/
+?? docs/receipts/phase-1/
+?? fuzz/

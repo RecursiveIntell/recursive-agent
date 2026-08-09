@@ -1,0 +1,22 @@
+$ cargo test -p recursive-agent-contracts --test phase2_operation_envelope operation_envelope_rejects_invalid_actor_and_provenance_metadata -- --nocapture
+exit_code: 101
+
+Compiling recursive-agent-contracts v0.1.0 (/home/sikmindz/Coding/recursive-agent/crates/recursive-agent-contracts)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.65s
+     Running tests/phase2_operation_envelope.rs (target/debug/deps/phase2_operation_envelope-e90f56f8b91c6a51)
+
+running 1 test
+
+thread 'operation_envelope_rejects_invalid_actor_and_provenance_metadata' (2222926) panicked at crates/recursive-agent-contracts/tests/phase2_operation_envelope.rs:299:9:
+empty actor was accepted
+note: run with `RUST_BACKTRACE=1` environment variable to display a backtrace
+test operation_envelope_rejects_invalid_actor_and_provenance_metadata ... FAILED
+
+failures:
+
+failures:
+    operation_envelope_rejects_invalid_actor_and_provenance_metadata
+
+test result: FAILED. 0 passed; 1 failed; 0 ignored; 0 measured; 6 filtered out; finished in 0.00s
+
+error: test failed, to rerun pass `-p recursive-agent-contracts --test phase2_operation_envelope`

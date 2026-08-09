@@ -1,4 +1,1 @@
-run_id: run:b05438d1-f002-422e-bed5-dcda579829b9
-run_dir: /home/sikmindz/.local/share/recursive-agent/runs/b05438d1-f002-422e-bed5-dcda579829b9
-chain_length: 6
-chain_head: c9b83dffca2ec1f2ffca4d6fef6af4de2b64c699c5d5900dffe365c342ee5266
+{"run_id":"v1:recursive-agent/run/v1:det:1425265319060c140aa722d527c214d4df162619e26585da188f3ee1a6b95b9e","run_dir":"/home/sikmindz/.local/share/recursive-agent/runs/f14b6ba4c1aa7d0a53ef228e4bf5e6ffd70341f83f80ace8401d2264e81ff67b","chain_length":15,"chain_head":"1ac71d7a5a8b4ae566bb4c6bac4e73ec3ae5b67152b337d3a5562faf0a554f37","terminal_state":"succeeded","run_root_identity":{"device":36,"inode":41481845}}

@@ -1,0 +1,5 @@
+Phase 1 hardening v3 RED evidence — R10 endpoint origin
+Observed before production changes on 2026-08-05.
+Command: cargo test -p recursive-agent-provider --test secret_contract validated_endpoint_debug_and_serialization_are_normalized_and_secret_free -- --exact
+Exit: 0 (demonstrates rejected contract)
+Evidence: test constructs https://example.test/v1 and asserts that /v1/ remains in serialized authoritative endpoint state; validate_base_url accepts every arbitrary non-root path.

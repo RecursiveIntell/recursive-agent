@@ -1,0 +1,14 @@
+Finished `test` profile [unoptimized + debuginfo] target(s) in 0.14s
+     Running unittests src/lib.rs (target/debug/deps/recursive_agent_contracts-6e9acaff0146a6af)
+
+running 8 tests
+test tests::empty_family_is_rejected ... ok
+test tests::content_digest_matches_recursive_jcs ... ok
+test tests::id_domains_do_not_collide ... ok
+test tests::family_id_composes_family_and_suffix ... ok
+test tests::jcs_canonical_is_stable_across_reordering ... ok
+test tests::lineage_requires_request_then_effect ... ok
+test tests::lineage_full_chain_passes ... ok
+test tests::terminal_outcomes_match_every_terminal_state ... ok
+
+test result: ok. 8 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s

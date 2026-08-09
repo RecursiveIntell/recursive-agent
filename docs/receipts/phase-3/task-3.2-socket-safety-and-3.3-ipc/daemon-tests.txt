@@ -1,0 +1,52 @@
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.05s
+     Running unittests src/lib.rs (target/debug/deps/recursive_agent_daemon-11d128227a766824)
+
+running 3 tests
+test tests::shared_decoder_rejects_duplicates_and_unknown_fields ... ok
+test tests::shared_decoder_accepts_valid_pure_shape ... ok
+test tests::shared_decoder_preserves_semantic_limit_classes ... ok
+
+test result: ok. 3 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+     Running tests/framing.rs (target/debug/deps/framing-713a53ca9fb7cdde)
+
+running 5 tests
+test exact_frame_returns_only_the_borrowed_payload ... ok
+test oversized_declared_length_is_rejected_from_prefix_alone ... ok
+test partial_prefix_requires_more_without_payload_allocation ... ok
+test trailing_bytes_after_exact_frame_are_rejected ... ok
+test truncated_payload_reports_declared_and_received_lengths ... ok
+
+test result: ok. 5 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+     Running tests/ipc_runtime.rs (target/debug/deps/ipc_runtime-751e57a308c4b6e2)
+
+running 2 tests
+test daemon_serves_status_over_authenticated_ipc ... ok
+test daemon_handles_concurrent_connections_within_cap ... ok
+
+test result: ok. 2 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.07s
+
+     Running tests/protocol.rs (target/debug/deps/protocol-9bfd485936f34d53)
+
+running 4 tests
+test duplicate_keys_in_original_wire_bytes_are_rejected ... ok
+test duplicate_request_ids_are_rejected_per_connection ... ok
+test unsupported_protocol_version_is_typed_and_pre_effect ... ok
+test request_id_registry_has_a_hard_connection_budget ... ok
+
+test result: ok. 4 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.01s
+
+     Running tests/socket_safety.rs (target/debug/deps/socket_safety-7dfbeb6ff4093a38)
+
+running 7 tests
+test bind_creates_private_socket ... ok
+test existing_non_socket_path_is_not_unlinked ... ok
+test runtime_root_must_be_a_directory ... ok
+test unsafe_world_writable_root_is_rejected ... ok
+test peer_principal_is_reported_from_kernel ... ok
+test second_bind_same_path_after_drop_rebinds ... ok
+test symlink_at_socket_path_is_not_followed_or_removed ... ok
+
+test result: ok. 7 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+

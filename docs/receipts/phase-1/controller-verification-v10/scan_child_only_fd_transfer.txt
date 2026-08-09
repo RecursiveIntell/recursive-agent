@@ -1,0 +1,9 @@
+1198:    use nix::spawn::{self, PosixSpawnAttr, PosixSpawnFileActions};
+1200:    let (stdout_read, stdout_write) = nix::unistd::pipe2(OFlag::O_CLOEXEC)
+1202:    let (stderr_read, stderr_write) = nix::unistd::pipe2(OFlag::O_CLOEXEC)
+1211:        PosixSpawnFileActions::init().map_err(|error| SandboxError::Io(error.to_string()))?;
+1213:        .add_dup2(null.as_raw_fd(), 0)
+1214:        .and_then(|()| actions.add_dup2(stdout_write.as_raw_fd(), 1))
+1215:        .and_then(|()| actions.add_dup2(stderr_write.as_raw_fd(), 2))
+1233:        // The parent descriptor flags are never modified.
+1235:            .add_dup2(*fd, *fd)

@@ -1,0 +1,168 @@
+{
+  "captured_at_utc": "2026-08-05T04:19:16.918018+00:00",
+  "complete": true,
+  "phase": 1,
+  "results": [
+    {
+      "command": "python3 -c 'import socket,tempfile,os; p=tempfile.mktemp(prefix=\"ra-afunix-\",dir=\"/tmp\"); s=socket.socket(socket.AF_UNIX); s.bind(p); s.close(); os.unlink(p); print(\"AF_UNIX_OK\")'",
+      "exit_code": 0,
+      "last_lines": [
+        "AF_UNIX_OK"
+      ],
+      "name": "unix_socket_probe",
+      "output_file": "docs/receipts/phase-1/controller-verification/unix_socket_probe.txt"
+    },
+    {
+      "command": "cargo fmt --all -- --check",
+      "exit_code": 0,
+      "last_lines": [],
+      "name": "fmt",
+      "output_file": "docs/receipts/phase-1/controller-verification/fmt.txt"
+    },
+    {
+      "command": "cargo test -p recursive-agent-contracts --all-targets",
+      "exit_code": 0,
+      "last_lines": [
+        "test tests::id_domains_do_not_collide ... ok",
+        "test tests::family_id_composes_family_and_suffix ... ok",
+        "test tests::jcs_canonical_is_stable_across_reordering ... ok",
+        "test tests::lineage_requires_request_then_effect ... ok",
+        "test tests::lineage_full_chain_passes ... ok",
+        "test tests::terminal_outcomes_match_every_terminal_state ... ok",
+        "",
+        "test result: ok. 8 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s"
+      ],
+      "name": "contracts",
+      "output_file": "docs/receipts/phase-1/controller-verification/contracts.txt"
+    },
+    {
+      "command": "cargo test -p recursive-agent-policy --all-targets",
+      "exit_code": 0,
+      "last_lines": [
+        "     Running tests/permit_lifecycle.rs (target/debug/deps/permit_lifecycle-26f1771f71f4ecf5)",
+        "",
+        "running 3 tests",
+        "test same_tool_different_args_scope_or_step_do_not_share_a_permit ... ok",
+        "test restart_double_spend_is_rejected ... ok",
+        "test concurrent_double_spend_is_rejected ... ok",
+        "",
+        "test result: ok. 3 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s"
+      ],
+      "name": "policy",
+      "output_file": "docs/receipts/phase-1/controller-verification/policy.txt"
+    },
+    {
+      "command": "cargo test -p recursive-agent-ledger --all-targets",
+      "exit_code": 0,
+      "last_lines": [
+        "test truncated_tail_is_rejected_or_recovered_without_false_success ... ok",
+        "test metadata_ahead_of_log_is_corruption ... ok",
+        "test reopen_verification_preserves_creation_time ... ok",
+        "test wrong_metadata_head_and_genesis_are_corruption ... ok",
+        "test log_ahead_of_metadata_recovers ... ok",
+        "test malformed_interior_and_duplicate_receipts_are_rejected ... ok",
+        "",
+        "test result: ok. 6 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s"
+      ],
+      "name": "ledger",
+      "output_file": "docs/receipts/phase-1/controller-verification/ledger.txt"
+    },
+    {
+      "command": "cargo test -p recursive-agent-sandbox --all-targets",
+      "exit_code": 0,
+      "last_lines": [
+        "",
+        "running 4 tests",
+        "test missing_allow_path_fails ... ok",
+        "test zero_timeout_rejected ... ok",
+        "test landlock_unavailable_is_never_reported_as_sandboxed ... ok",
+        "test setup_failure_prevents_effect ... ok",
+        "",
+        "test result: ok. 4 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s"
+      ],
+      "name": "sandbox",
+      "output_file": "docs/receipts/phase-1/controller-verification/sandbox.txt"
+    },
+    {
+      "command": "cargo test -p recursive-agent-provider --all-targets",
+      "exit_code": 0,
+      "last_lines": [
+        "     Running tests/secret_contract.rs (target/debug/deps/secret_contract-9f5a67aebe6d4992)",
+        "",
+        "running 3 tests",
+        "test debug_output_redacts_secret_material ... ok",
+        "test missing_credential_is_typed ... ok",
+        "test provider_spec_serialization_contains_no_secret ... ok",
+        "",
+        "test result: ok. 3 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s"
+      ],
+      "name": "provider",
+      "output_file": "docs/receipts/phase-1/controller-verification/provider.txt"
+    },
+    {
+      "command": "cargo test -p recursive-agent-runner --all-targets",
+      "exit_code": 0,
+      "last_lines": [
+        "",
+        "     Running tests/lifecycle_state_machine.rs (target/debug/deps/lifecycle_state_machine-45da3180032bef07)",
+        "",
+        "running 2 tests",
+        "test terminal_matrix_rejects_success_for_every_non_success_terminal ... ok",
+        "test failed_step_dominates_run_terminal_state ... ok",
+        "",
+        "test result: ok. 2 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.01s"
+      ],
+      "name": "runner",
+      "output_file": "docs/receipts/phase-1/controller-verification/runner.txt"
+    },
+    {
+      "command": "cargo test -p recursive-agent-daemon --all-targets",
+      "exit_code": 0,
+      "last_lines": [
+        "Finished `test` profile [unoptimized + debuginfo] target(s) in 0.12s",
+        "     Running unittests src/lib.rs (target/debug/deps/recursive_agent_daemon-aae0797674622b02)",
+        "",
+        "running 2 tests",
+        "test tests::empty_connection_is_rejected ... ok",
+        "test tests::daemon_accepts_and_runs_echo_spec ... ok",
+        "",
+        "test result: ok. 2 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.30s"
+      ],
+      "name": "daemon",
+      "output_file": "docs/receipts/phase-1/controller-verification/daemon.txt"
+    },
+    {
+      "command": "cargo test --workspace --all-targets",
+      "exit_code": 0,
+      "last_lines": [
+        "running 5 tests",
+        "test tests::echo_returns_text ... ok",
+        "test tests::time_now_requires_frozen_clock ... ok",
+        "test tests::llm_rejects_malformed_args_without_network ... ok",
+        "test tests::time_now_returns_frozen_timestamp ... ok",
+        "test tests::unknown_tool_errors ... ok",
+        "",
+        "test result: ok. 5 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s"
+      ],
+      "name": "workspace",
+      "output_file": "docs/receipts/phase-1/controller-verification/workspace.txt"
+    },
+    {
+      "command": "cargo clippy --workspace --all-targets -- -D warnings",
+      "exit_code": 0,
+      "last_lines": [
+        "Finished `dev` profile [unoptimized + debuginfo] target(s) in 0.18s"
+      ],
+      "name": "clippy",
+      "output_file": "docs/receipts/phase-1/controller-verification/clippy.txt"
+    },
+    {
+      "command": "git diff --check",
+      "exit_code": 0,
+      "last_lines": [],
+      "name": "diff_check",
+      "output_file": "docs/receipts/phase-1/controller-verification/diff_check.txt"
+    }
+  ],
+  "schema": "recursive-agent-controller-verification-v1"
+}

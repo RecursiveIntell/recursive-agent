@@ -1,0 +1,34 @@
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.04s
+     Running tests/crash_recovery.rs (target/debug/deps/crash_recovery-a05ca5c2d5884b4d)
+
+running 9 tests
+test raw_predecessor_chain_vector_is_fixed ... ok
+test ambiguous_tail_is_rejected_without_deleting_valid_receipt ... ok
+
+running 1 test
+
+running 1 test
+test run_root_is_pinned_and_intermediate_symlinks_are_rejected ... ok
+test root_and_legacy_lock_entry_replacement_cannot_split_pinned_handles ... ok
+test missing_newline_is_finalized_and_incomplete_tail_is_truncated ... ok
+test two_handles_cannot_fork_the_predecessor ... ok
+test two_process_append_race_has_one_predecessor_owner ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 8 filtered out; finished in 0.00s
+
+Error: ChainDivergence { index: 1, reason: "append predecessor does not match locked current head" }
+test two_process_append_race_has_one_predecessor_owner ... FAILED
+
+failures:
+
+failures:
+    two_process_append_race_has_one_predecessor_owner
+
+test result: FAILED. 0 passed; 1 failed; 0 ignored; 0 measured; 8 filtered out; finished in 0.00s
+
+test two_process_append_race_has_one_predecessor_owner ... ok
+test append_failpoints_reopen_to_previous_or_new_chain ... ok
+test process_kill_failpoint_matrix_recovers_previous_or_new_chain ... ok
+
+test result: ok. 9 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.85s
+

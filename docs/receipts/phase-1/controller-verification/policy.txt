@@ -1,0 +1,20 @@
+Finished `test` profile [unoptimized + debuginfo] target(s) in 0.07s
+     Running unittests src/lib.rs (target/debug/deps/recursive_agent_policy-99efffa494516925)
+
+running 5 tests
+test tests::default_allowlist_accepts_echo ... ok
+test tests::default_allowlist_rejects_unknown_tool ... ok
+test tests::lineage_is_canonical ... ok
+test tests::time_now_requires_frozen_clock ... ok
+test tests::permit_is_owner_qualified ... ok
+
+test result: ok. 5 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+     Running tests/permit_lifecycle.rs (target/debug/deps/permit_lifecycle-26f1771f71f4ecf5)
+
+running 3 tests
+test same_tool_different_args_scope_or_step_do_not_share_a_permit ... ok
+test restart_double_spend_is_rejected ... ok
+test concurrent_double_spend_is_rejected ... ok
+
+test result: ok. 3 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s

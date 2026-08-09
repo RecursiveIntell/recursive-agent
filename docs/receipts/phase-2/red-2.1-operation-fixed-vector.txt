@@ -1,0 +1,27 @@
+$ cargo test -p recursive-agent-contracts --test phase2_operation_envelope operation_v1_canonical_fixed_vector_is_stable -- --nocapture
+exit_code: 101
+
+Compiling recursive-agent-contracts v0.1.0 (/home/sikmindz/Coding/recursive-agent/crates/recursive-agent-contracts)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 1.07s
+     Running tests/phase2_operation_envelope.rs (target/debug/deps/phase2_operation_envelope-e90f56f8b91c6a51)
+
+running 1 test
+CANONICAL={"actor":{"origin":"direct","principal":"actor:test"},"budget":{"max_artifact_bytes":4096,"max_output_bytes":4096,"max_steps":1,"max_wall_time_ms":1000},"causality":{"parent_operation_id":null,"root_operation_id":null},"effects":{"action_digest":"9ea93ede3bb046a4242d8f05eaa32bdbbd7a9e3724eb2e7d298ea99ee6f26e16","network_allowed":false,"read_roots":[],"write_roots":[]},"provenance":[{"digest":"74d2052c62913e1ff9bcec2145c76325a42a6ddf4112ebe84e2103fa15a09456","source":"urn:test:request"}],"replay":{"class":"deterministic","intent":"execute_once"},"run_spec":{"frozen_clock":null,"name":"phase2-envelope","policy_version":"policy-v1","steps":[{"call":{"args":{"text":"hello"},"frozen_clock":null,"tool":"echo"},"name":"echo"}]},"schema":"recursive-agent.operation/v1"}
+ENVELOPE_DIGEST=d512e800e2a997ce7dd5a82b4e0a5669fc87e8039356d33f13c7207647c677cc
+OPERATION_ID=v1:recursive-agent/run/v1:det:d512e800e2a997ce7dd5a82b4e0a5669fc87e8039356d33f13c7207647c677cc
+
+thread 'operation_v1_canonical_fixed_vector_is_stable' (2239075) panicked at crates/recursive-agent-contracts/tests/phase2_operation_envelope.rs:470:5:
+assertion `left == right` failed
+  left: "{\"actor\":{\"origin\":\"direct\",\"principal\":\"actor:test\"},\"budget\":{\"max_artifact_bytes\":4096,\"max_output_bytes\":4096,\"max_steps\":1,\"max_wall_time_ms\":1000},\"causality\":{\"parent_operation_id\":null,\"root_operation_id\":null},\"effects\":{\"action_digest\":\"9ea93ede3bb046a4242d8f05eaa32bdbbd7a9e3724eb2e7d298ea99ee6f26e16\",\"network_allowed\":false,\"read_roots\":[],\"write_roots\":[]},\"provenance\":[{\"digest\":\"74d2052c62913e1ff9bcec2145c76325a42a6ddf4112ebe84e2103fa15a09456\",\"source\":\"urn:test:request\"}],\"replay\":{\"class\":\"deterministic\",\"intent\":\"execute_once\"},\"run_spec\":{\"frozen_clock\":null,\"name\":\"phase2-envelope\",\"policy_version\":\"policy-v1\",\"steps\":[{\"call\":{\"args\":{\"text\":\"hello\"},\"frozen_clock\":null,\"tool\":\"echo\"},\"name\":\"echo\"}]},\"schema\":\"recursive-agent.operation/v1\"}"
+ right: "FIXME_PHASE2_OPERATION_V1_CANONICAL_VECTOR"
+note: run with `RUST_BACKTRACE=1` environment variable to display a backtrace
+test operation_v1_canonical_fixed_vector_is_stable ... FAILED
+
+failures:
+
+failures:
+    operation_v1_canonical_fixed_vector_is_stable
+
+test result: FAILED. 0 passed; 1 failed; 0 ignored; 0 measured; 10 filtered out; finished in 0.00s
+
+error: test failed, to rerun pass `-p recursive-agent-contracts --test phase2_operation_envelope`

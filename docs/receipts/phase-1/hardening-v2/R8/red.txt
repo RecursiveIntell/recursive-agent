@@ -1,0 +1,10 @@
+Finding: R8 — validated provider URL at ingress
+Captured before production-surface modification: 2026-08-05
+Command:
+  rg -n 'base_url: String|ProviderSpecV1|validate_base_url' crates/recursive-agent-provider/src/lib.rs
+  fail if ProviderSpecV1 stores public raw URL strings
+Exit: 1 (expected RED)
+Observed:
+  ProviderSpecV1 and its wire form stored `base_url: String`.
+  URL validation occurred only in completion functions.
+

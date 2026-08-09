@@ -1,0 +1,44 @@
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.06s
+     Running unittests src/lib.rs (target/debug/deps/recursive_agent_runner-f47539de8e403bc2)
+
+running 1 test
+test sandbox_engine::tests::child_guard_kills_and_reaps_on_early_return ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 7 filtered out; finished in 0.30s
+
+     Running tests/canonical_containment.rs (target/debug/deps/canonical_containment-4383fa7bcbca9501)
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 13 filtered out; finished in 0.00s
+
+     Running tests/deterministic_identity.rs (target/debug/deps/deterministic_identity-eea6fc382fe36333)
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 6 filtered out; finished in 0.00s
+
+     Running tests/hardening_v3.rs (target/debug/deps/hardening_v3-3a4a028d21e114d9)
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 4 filtered out; finished in 0.00s
+
+     Running tests/hardening_v5_executable_bytes.rs (target/debug/deps/hardening_v5_executable_bytes-88f1fcfd4936e5c8)
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 4 filtered out; finished in 0.00s
+
+     Running tests/lifecycle_state_machine.rs (target/debug/deps/lifecycle_state_machine-c76c4dfe9d9c3a08)
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 2 filtered out; finished in 0.00s
+
+     Running tests/permit_dispatch.rs (target/debug/deps/permit_dispatch-0f1ba869759a31a0)
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 1 filtered out; finished in 0.00s
+

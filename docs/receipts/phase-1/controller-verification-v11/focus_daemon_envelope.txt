@@ -1,0 +1,10 @@
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.05s
+     Running unittests src/lib.rs (target/debug/deps/recursive_agent_daemon-d3f2bb9cf70e8a99)
+
+running 3 tests
+test tests::shared_decoder_rejects_duplicates_and_unknown_fields ... ok
+test tests::shared_decoder_accepts_valid_pure_shape ... ok
+test tests::shared_decoder_preserves_semantic_limit_classes ... ok
+
+test result: ok. 3 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+

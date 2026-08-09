@@ -1,0 +1,5 @@
+name: recursive-agent-native
+version: 1.0.0
+description: "Translate one bounded recursive-agent action over authenticated native IPC. No MCP, no Hermes core edits. Submits a fixed native V1 operation to a local recursive-agent daemon and returns terminal status plus a receipt reference."
+author: RecursiveIntell
+kind: agent

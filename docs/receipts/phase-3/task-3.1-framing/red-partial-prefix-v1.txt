@@ -1,0 +1,15 @@
+Recursive Agent Phase 3 Task 3.1 framing RED v1
+Recorded UTC: 2026-08-05T14:03:24.700022+00:00
+$ cargo test -p recursive-agent-daemon --test framing partial_prefix_requires_more_without_payload_allocation -- --nocapture
+exit_code=101
+Compiling recursive-agent-daemon v0.1.0 (/home/sikmindz/Coding/recursive-agent/crates/recursive-agent-daemon)
+error[E0432]: unresolved imports `recursive_agent_daemon::decode_frame_payload`, `recursive_agent_daemon::FrameDecodeError`
+ --> crates/recursive-agent-daemon/tests/framing.rs:1:30
+  |
+1 | use recursive_agent_daemon::{decode_frame_payload, FrameDecodeError};
+  |                              ^^^^^^^^^^^^^^^^^^^^  ^^^^^^^^^^^^^^^^ no `FrameDecodeError` in the root
+  |                              |
+  |                              no `decode_frame_payload` in the root
+
+For more information about this error, try `rustc --explain E0432`.
+error: could not compile `recursive-agent-daemon` (test "framing") due to 1 previous error

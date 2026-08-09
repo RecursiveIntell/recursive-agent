@@ -1,0 +1,12 @@
+RED captured before production changes.
+Command: rg -n 'derive\(.*Deserialize|pub struct FamilyId|pub struct ReceiptV1|struct ReceiptIdentityMaterial|lineage|spec_digest|args_digest' crates/recursive-agent-contracts/src/lib.rs
+Exit: 0 (unchecked derived ingress and incomplete identity material matched)
+Observed:
+58:#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+60:pub struct FamilyId(String);
+159:struct ReceiptIdentityMaterial<'a> {
+285:pub struct ReceiptV1 {
+292:    pub lineage: Vec<AuthorityLineageEntryV1>,
+293:    pub spec_digest: ContentDigest,
+294:    pub args_digest: ContentDigest,
+FamilyId used transparent derived deserialization, ReceiptV1 persisted IDs as strings, and the receipt identity material omitted lineage/spec/args.
