@@ -857,6 +857,31 @@ impl LiveParentRun {
         self.terminal_state
     }
 
+    /// Cancellation is observed from the family authority before parent
+    /// finalization; retain the terminal fact so the canonical close receipt
+    /// cannot report a successful parent after revocation.
+    pub(crate) fn mark_cancelled(&mut self, clock: &dyn Clock) -> Result<(), RunError> {
+        if self.finalized {
+            return Err(RunError::LiveParentUnavailable);
+        }
+        append_receipt!(
+            &mut self.chain,
+            self.run_id.clone(),
+            self.lifecycle_step_id.clone(),
+            ReceiptKindV1::ParentCancelled,
+            clock.now(),
+            self.lifecycle_lineage.clone(),
+            self.spec_digest.clone(),
+            self.spec_digest.clone(),
+            vec![],
+            ReceiptOutcomeV1::Cancelled {
+                reason: "live-parent family authority was revoked".into(),
+            },
+        )?;
+        self.terminal_state = RunTerminalStateV1::Cancelled;
+        Ok(())
+    }
+
     pub(crate) fn configure_family(
         &mut self,
         output_root: &Path,

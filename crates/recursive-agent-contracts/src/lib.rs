@@ -900,6 +900,10 @@ pub enum ReceiptKindV1 {
     ArtifactStored,
     StepCompleted,
     StepFailed,
+    /// Parent-side terminal cancellation observed from the runtime-owned family
+    /// authority before finalization. This prevents a cancelled live parent
+    /// from being represented as a successful terminal run.
+    ParentCancelled,
     /// Parent-side receipt binding one authority-free V2 proposal before any
     /// family reservation or child dispatch.
     ChildAdmissionPrepared,
@@ -1247,6 +1251,18 @@ pub fn validate_receipt_sequence(
                 }
                 set_terminal(&mut terminal, state)?;
                 steps.insert(receipt.step_id.clone(), StepLifecycle::Complete);
+            }
+            ReceiptKindV1::ParentCancelled => {
+                if terminal.is_some()
+                    || !matches!(receipt.outcome, ReceiptOutcomeV1::Cancelled { .. })
+                    || !receipt.artifact_refs.is_empty()
+                {
+                    return Err(ContractError::Malformed(
+                        "ParentCancelled must be the sole terminal cancellation before finalization"
+                            .into(),
+                    ));
+                }
+                set_terminal(&mut terminal, RunTerminalStateV1::Cancelled)?;
             }
             ReceiptKindV1::ChildAdmissionPrepared => {
                 if terminal.is_some()

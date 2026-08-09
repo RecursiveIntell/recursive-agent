@@ -350,6 +350,33 @@ fn live_parent_v2_binds_child_admission_before_dispatch_and_finalizes_only_after
 }
 
 #[test]
+fn live_parent_cancellation_revokes_family_before_child_admission_and_closes_parent(
+) -> Result<(), Box<dyn std::error::Error>> {
+    let output_root = tempfile::tempdir()?;
+    let parent = sample_operation()?;
+    let child = child_proposal(&parent)?;
+    let service = RuntimeService::new(service_dependencies(output_root.path())?);
+
+    let mut live_parent = service.begin_parent_v2(&parent)?;
+    assert!(matches!(
+        service.cancel(live_parent.run_id())?,
+        RuntimeCancelResultV1::CancellationRequested { .. }
+    ));
+    assert!(matches!(
+        live_parent.submit_child(&child),
+        Err(RuntimeServiceError::LiveParentNotAdmissible {
+            state: RunTerminalStateV1::Cancelled
+        })
+    ));
+
+    let parent_handle = live_parent.finalize()?;
+    let verification = service.verify(parent_handle.run_id())?;
+    assert_eq!(verification.terminal_state, RunTerminalStateV1::Cancelled);
+    assert!(verification.current_strict_success);
+    Ok(())
+}
+
+#[test]
 fn runtime_service_commits_output_from_the_admitted_tool_runtime(
 ) -> Result<(), Box<dyn std::error::Error>> {
     let output_root = tempfile::tempdir()?;

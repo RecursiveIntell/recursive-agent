@@ -707,6 +707,11 @@ impl RuntimeService {
 }
 
 impl RuntimeLiveParentV2<'_> {
+    /// Return the runtime-owned parent run identity for status and cancellation.
+    pub fn run_id(&self) -> &CurrentRunId {
+        self.parent.run_id()
+    }
+
     /// Durably admit, reserve, link, execute, strictly verify, and close one
     /// V2 child. The proposal has no parent receipt ID, preventing the
     /// self-referential receipt/artifact identity cycle.
@@ -729,6 +734,16 @@ impl RuntimeLiveParentV2<'_> {
             || proposal.causality.root_operation_id.as_ref() != Some(&parent_id)
         {
             return Err(RuntimeServiceError::ChildParentMismatch);
+        }
+        if self
+            .parent
+            .family_store()?
+            .parent_is_revoked()
+            .map_err(RunError::Policy)?
+        {
+            return Err(RuntimeServiceError::LiveParentNotAdmissible {
+                state: RunTerminalStateV1::Cancelled,
+            });
         }
         self.service
             .require_registered_tools(&proposal.run_spec.steps)?;
@@ -882,13 +897,13 @@ impl RuntimeLiveParentV2<'_> {
             .verify_child_links(self.service.dependencies.output_root(), true)?;
         let family = self.parent.family_store()?;
         if family.parent_is_revoked().map_err(RunError::Policy)? {
-            return Err(RuntimeServiceError::LiveParentNotAdmissible {
-                state: RunTerminalStateV1::Cancelled,
-            });
+            self.parent
+                .mark_cancelled(self.service.dependencies.clock())?;
+        } else {
+            family
+                .revoke_parent(self.service.dependencies.clock().now())
+                .map_err(RunError::Policy)?;
         }
-        family
-            .revoke_parent(self.service.dependencies.clock().now())
-            .map_err(RunError::Policy)?;
         let summary = self
             .parent
             .finish_chain(self.service.dependencies.clock())?;

@@ -181,7 +181,7 @@ fn event_kind(receipt: &ReceiptV1) -> RuntimeEventKindV1 {
             step_id: receipt.step_id.clone(),
             artifacts: receipt.artifact_refs.clone(),
         },
-        ReceiptKindV1::StepFailed => RuntimeEventKindV1::Failed {
+        ReceiptKindV1::StepFailed | ReceiptKindV1::ParentCancelled => RuntimeEventKindV1::Failed {
             step_id: receipt.step_id.clone(),
             outcome: receipt.outcome.clone(),
         },
