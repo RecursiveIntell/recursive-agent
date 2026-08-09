@@ -51,6 +51,15 @@ pub enum ProjectedState {
 pub struct OperationRow {
     /// Canonical operation id (material identity, not a random UUID).
     pub operation_id: String,
+    /// Rebuildable causal-family visibility only; never authority.
+    #[serde(default)]
+    pub parent_operation_id: Option<String>,
+    /// Rebuildable causal-family root visibility only; never authority.
+    #[serde(default)]
+    pub root_operation_id: Option<String>,
+    /// Rebuildable child visibility projection only; never authority.
+    #[serde(default)]
+    pub children: Vec<String>,
     /// Digest binding the idempotency key to the request (for Task 5.4).
     pub idempotency_key_digest: Option<String>,
     /// Lease holder identity (e.g. a worker/session id).
@@ -69,6 +78,9 @@ impl OperationRow {
     fn new(operation_id: impl Into<String>) -> Self {
         Self {
             operation_id: operation_id.into(),
+            parent_operation_id: None,
+            root_operation_id: None,
+            children: Vec::new(),
             idempotency_key_digest: None,
             lease_holder: None,
             heartbeat: 0,
@@ -135,6 +147,50 @@ impl SchedulerStore {
         self.file.rows.insert(operation_id.clone(), row.clone());
         self.persist()?;
         Ok(row)
+    }
+
+    /// Add a causal child to the rebuildable projection. This does not admit,
+    /// reserve, authorize, or dispatch the child.
+    pub fn project_child(
+        &mut self,
+        parent_operation_id: &str,
+        root_operation_id: &str,
+        child_operation_id: &str,
+    ) -> Result<(), SchedulerStoreError> {
+        let parent = self
+            .file
+            .rows
+            .get_mut(parent_operation_id)
+            .ok_or_else(|| SchedulerStoreError::UnknownAdmission(parent_operation_id.into()))?;
+        if parent
+            .root_operation_id
+            .as_deref()
+            .is_some_and(|root| root != root_operation_id)
+        {
+            return Err(SchedulerStoreError::Invalid(
+                "root projection mismatch".into(),
+            ));
+        }
+        parent.root_operation_id = Some(root_operation_id.into());
+        if !parent
+            .children
+            .iter()
+            .any(|child| child == child_operation_id)
+        {
+            parent.children.push(child_operation_id.into());
+        }
+        if let Some(child) = self.file.rows.get_mut(child_operation_id) {
+            child.parent_operation_id = Some(parent_operation_id.into());
+            child.root_operation_id = Some(root_operation_id.into());
+        }
+        self.persist()
+    }
+
+    pub fn children_of(&self, parent_operation_id: &str) -> Vec<String> {
+        self.file
+            .rows
+            .get(parent_operation_id)
+            .map_or_else(Vec::new, |row| row.children.clone())
     }
 
     /// Acquire an exclusive lease. Fails if a different holder owns it.

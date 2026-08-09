@@ -63,6 +63,28 @@ pub enum LedgerError {
     },
     #[error("injected append interruption after {0:?}")]
     InjectedInterruption(AppendStage),
+    #[error("child link verification failed: {0}")]
+    ChildLinkInvalid(String),
+}
+
+/// Durable cross-chain binding emitted by a live parent before child dispatch.
+/// This type is owned by the ledger so verification never depends on a scheduler
+/// projection or an adapter return value.
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct ChildRunLinkV1 {
+    pub parent_run_id: CurrentRunId,
+    pub parent_receipt_id: recursive_agent_contracts::CurrentReceiptId,
+    pub parent_control_permit_id: recursive_agent_contracts::CurrentPermitId,
+    pub child_run_id: CurrentRunId,
+    pub child_control_permit_id: recursive_agent_contracts::CurrentPermitId,
+    pub root_operation_id: CurrentRunId,
+    pub reserved_budget: recursive_agent_contracts::OperationBudgetV1,
+    pub child_envelope_digest: ContentDigest,
+    pub child_terminal_receipt_id: Option<recursive_agent_contracts::CurrentReceiptId>,
+    pub child_terminal_state: Option<RunTerminalStateV1>,
+    pub child_chain_head: Option<String>,
+    pub cancelled: bool,
 }
 
 #[derive(Debug, Clone)]
@@ -551,6 +573,50 @@ impl VerifiedReceiptSnapshot {
     pub fn receipts(&self) -> &[ReceiptV1] {
         &self.receipts
     }
+}
+
+/// Strictly validate the child-link set associated with a parent snapshot.
+pub fn verify_child_links(
+    parent: &VerifiedReceiptSnapshot,
+    links: &[ChildRunLinkV1],
+) -> Result<(), LedgerError> {
+    let parent_id = parent
+        .verification
+        .verified_run_id
+        .as_ref()
+        .ok_or_else(|| LedgerError::ChildLinkInvalid("parent run is unverified".into()))?;
+    let mut seen = BTreeSet::new();
+    for link in links {
+        if !seen.insert(link.child_run_id.to_string()) {
+            return Err(LedgerError::ChildLinkInvalid(format!(
+                "duplicate child {}",
+                link.child_run_id
+            )));
+        }
+        if link.parent_run_id != *parent_id {
+            return Err(LedgerError::ChildLinkInvalid("parent run mismatch".into()));
+        }
+        if !parent
+            .receipts
+            .iter()
+            .any(|r| r.receipt_id == link.parent_receipt_id && r.run_id == link.parent_run_id)
+        {
+            return Err(LedgerError::ChildLinkInvalid(format!(
+                "missing parent admission receipt {}",
+                link.parent_receipt_id
+            )));
+        }
+        if !link.cancelled
+            && (link.child_terminal_receipt_id.is_none()
+                || link.child_terminal_state.is_none()
+                || link.child_chain_head.is_none())
+        {
+            return Err(LedgerError::ChildLinkInvalid(
+                "child link lacks verified terminal closure".into(),
+            ));
+        }
+    }
+    Ok(())
 }
 
 pub fn verify_expected_run(
