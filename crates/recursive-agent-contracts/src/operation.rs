@@ -183,7 +183,32 @@ pub struct OperationEnvelopeV1 {
     pub run_spec: RunSpecV1,
 }
 
-/// Canonical V2 child-operation request accepted only by the child-run lane.
+/// Caller-supplied V2 child-operation material before it has a parent admission
+/// receipt. This deliberately omits `ChildRunAuthorityV1` so an admission
+/// receipt can bind this material without requiring its own ID in the preimage.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct ChildOperationProposalV2 {
+    /// Must be `recursive-agent.operation/v2`.
+    pub schema: OperationSchemaV1,
+    /// Delegated actor authority.
+    pub actor: ActorAuthorityV1,
+    /// Immediate parent and root causal linkage.
+    pub causality: CausalLinkV1,
+    /// Explicit operation-wide resource ceilings.
+    pub budget: OperationBudgetV1,
+    /// Declared effect surface and action binding.
+    pub effects: DeclaredEffectsV1,
+    /// Durable provenance inputs.
+    pub provenance: Vec<ProvenanceRefV1>,
+    /// Replay classification and intent.
+    pub replay: ReplaySpecV1,
+    /// Existing bounded run graph carried as payload, not a second model.
+    pub run_spec: RunSpecV1,
+}
+
+/// Canonical V2 child-operation request accepted only after live-parent
+/// admission has created and bound `child_authority`.
 ///
 /// V2 repeats direct operation material rather than placing optional child
 /// authority into `OperationEnvelopeV1`: V1 remains a closed root-only
@@ -211,18 +236,6 @@ pub struct ChildOperationEnvelopeV2 {
     pub run_spec: RunSpecV1,
 }
 
-#[derive(Serialize)]
-struct ChildOperationMaterialV2<'a> {
-    schema: OperationSchemaV1,
-    actor: &'a ActorAuthorityV1,
-    causality: &'a CausalLinkV1,
-    budget: &'a OperationBudgetV1,
-    effects: &'a DeclaredEffectsV1,
-    provenance: &'a [ProvenanceRefV1],
-    replay: &'a ReplaySpecV1,
-    run_spec: &'a RunSpecV1,
-}
-
 /// Derive the authoritative run identity from the complete operation material.
 ///
 /// This deliberately reuses the current run-ID owner and domain. The operation
@@ -240,6 +253,14 @@ pub fn derive_child_operation_id(
     derive_operation_identity(envelope)
 }
 
+/// Derive the digest that a V2 proposal binds before a parent-admission receipt
+/// exists. It is exactly the material later copied into a closed envelope.
+pub fn derive_child_operation_proposal_digest(
+    proposal: &ChildOperationProposalV2,
+) -> Result<ContentDigest, ContractError> {
+    crate::content_digest(proposal)
+}
+
 /// Derive the digest that a V2 child envelope must carry as its immutable
 /// proposal material. The child-authority proof itself is deliberately
 /// excluded so the proof can bind this exact proposed operation without a
@@ -247,15 +268,15 @@ pub fn derive_child_operation_id(
 pub fn derive_child_operation_material_digest(
     envelope: &ChildOperationEnvelopeV2,
 ) -> Result<ContentDigest, ContractError> {
-    crate::content_digest(&ChildOperationMaterialV2 {
+    derive_child_operation_proposal_digest(&ChildOperationProposalV2 {
         schema: envelope.schema,
-        actor: &envelope.actor,
-        causality: &envelope.causality,
-        budget: &envelope.budget,
-        effects: &envelope.effects,
-        provenance: &envelope.provenance,
-        replay: &envelope.replay,
-        run_spec: &envelope.run_spec,
+        actor: envelope.actor.clone(),
+        causality: envelope.causality.clone(),
+        budget: envelope.budget.clone(),
+        effects: envelope.effects.clone(),
+        provenance: envelope.provenance.clone(),
+        replay: envelope.replay.clone(),
+        run_spec: envelope.run_spec.clone(),
     })
 }
 
@@ -293,6 +314,35 @@ pub fn parse_operation_envelope_bytes(
         .validate()
         .map_err(OperationIngressError::Semantic)?;
     Ok(envelope)
+}
+
+/// Decode hostile bytes into one validated, closed V2 child operation.
+pub fn parse_child_operation_proposal_v2_bytes(
+    input: &[u8],
+) -> Result<ChildOperationProposalV2, OperationIngressError> {
+    if input.len() as u64 > MAX_RUN_SPEC_INPUT_BYTES {
+        return Err(OperationIngressError::InputTooLarge {
+            maximum_bytes: MAX_RUN_SPEC_INPUT_BYTES,
+        });
+    }
+    let parsed = serde_json::from_slice::<crate::DuplicateSafeValue>(input).map_err(|error| {
+        if error.to_string().contains("duplicate object key") {
+            OperationIngressError::DuplicateKey
+        } else {
+            OperationIngressError::Malformed
+        }
+    })?;
+    let canonical =
+        crate::jcs_canonical(&parsed.0).map_err(|_| OperationIngressError::CanonicalBoundary)?;
+    if canonical.len() > MAX_RUN_SPEC_MATERIAL_BYTES {
+        return Err(OperationIngressError::CanonicalBoundary);
+    }
+    let proposal = serde_json::from_value::<ChildOperationProposalV2>(parsed.0)
+        .map_err(|_| OperationIngressError::Malformed)?;
+    proposal
+        .validate()
+        .map_err(OperationIngressError::Semantic)?;
+    Ok(proposal)
 }
 
 /// Decode hostile bytes into one validated, closed V2 child operation.
@@ -345,6 +395,38 @@ impl OperationEnvelopeV1 {
             "actor.principal",
             MAX_RUN_NAME_BYTES,
         )?;
+        validate_operation_provenance(&self.provenance)?;
+        validate_declared_effects(&self.run_spec, &self.effects, &self.replay)?;
+        validate_operation_budget(&self.budget, &self.run_spec)
+    }
+}
+
+impl ChildOperationProposalV2 {
+    /// Validate delegated child material before a live parent creates its
+    /// admission receipt and closed child authority.
+    pub fn validate(&self) -> Result<(), ContractError> {
+        if self.schema != OperationSchemaV1::V2 {
+            return Err(ContractError::Malformed(
+                "child operation requires the exact V2 schema tag".into(),
+            ));
+        }
+        if self.actor.origin != AuthorityOriginV1::Delegated {
+            return Err(ContractError::Malformed(
+                "child operation requires delegated authority origin".into(),
+            ));
+        }
+        validate_operation_identifier(
+            &self.actor.principal,
+            "actor.principal",
+            MAX_RUN_NAME_BYTES,
+        )?;
+        if self.causality.parent_operation_id.is_none()
+            || self.causality.root_operation_id.is_none()
+        {
+            return Err(ContractError::Malformed(
+                "child operation requires parent and root lineage".into(),
+            ));
+        }
         validate_operation_provenance(&self.provenance)?;
         validate_declared_effects(&self.run_spec, &self.effects, &self.replay)?;
         validate_operation_budget(&self.budget, &self.run_spec)

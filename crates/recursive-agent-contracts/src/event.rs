@@ -1,6 +1,7 @@
 use crate::{
-    validate_receipt_sequence, ArtifactDescriptorV1, ContractError, CurrentReceiptId, CurrentRunId,
-    CurrentStepId, LifecycleValidationMode, ReceiptKindV1, ReceiptOutcomeV1, ReceiptV1,
+    validate_receipt_sequence, ArtifactDescriptorV1, ContentDigest, ContractError,
+    CurrentReceiptId, CurrentRunId, CurrentStepId, LifecycleValidationMode, ReceiptKindV1,
+    ReceiptOutcomeV1, ReceiptV1,
 };
 use serde::{Deserialize, Serialize};
 
@@ -63,6 +64,25 @@ pub enum RuntimeEventKindV1 {
         step_id: CurrentStepId,
         /// Exact terminal receipt outcome.
         outcome: ReceiptOutcomeV1,
+    },
+    /// A parent persisted authority-free child material before reservation.
+    ChildAdmissionPrepared {
+        /// Digest of the exact V2 proposal material.
+        proposal_digest: ContentDigest,
+    },
+    /// A parent persisted one immutable child-link artifact.
+    ChildLinked {
+        /// Digest of the exact V2 proposal material.
+        proposal_digest: ContentDigest,
+        /// Ledger-verified child-link artifact descriptors.
+        artifacts: Vec<ArtifactDescriptorV1>,
+    },
+    /// A parent persisted verified child terminal-closure evidence.
+    ChildClosed {
+        /// Digest of the exact V2 proposal material.
+        proposal_digest: ContentDigest,
+        /// Ledger-verified child-closure artifact descriptors.
+        artifacts: Vec<ArtifactDescriptorV1>,
     },
     /// The run reached its authoritative terminal state.
     Completed {
@@ -164,6 +184,17 @@ fn event_kind(receipt: &ReceiptV1) -> RuntimeEventKindV1 {
         ReceiptKindV1::StepFailed => RuntimeEventKindV1::Failed {
             step_id: receipt.step_id.clone(),
             outcome: receipt.outcome.clone(),
+        },
+        ReceiptKindV1::ChildAdmissionPrepared => RuntimeEventKindV1::ChildAdmissionPrepared {
+            proposal_digest: receipt.args_digest.clone(),
+        },
+        ReceiptKindV1::ChildLinked => RuntimeEventKindV1::ChildLinked {
+            proposal_digest: receipt.args_digest.clone(),
+            artifacts: receipt.artifact_refs.clone(),
+        },
+        ReceiptKindV1::ChildClosed => RuntimeEventKindV1::ChildClosed {
+            proposal_digest: receipt.args_digest.clone(),
+            artifacts: receipt.artifact_refs.clone(),
         },
         ReceiptKindV1::RunFinalized => RuntimeEventKindV1::Completed {
             outcome: receipt.outcome.clone(),

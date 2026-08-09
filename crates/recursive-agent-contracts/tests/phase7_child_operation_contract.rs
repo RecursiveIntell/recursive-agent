@@ -1,10 +1,12 @@
 use recursive_agent_contracts::{
     content_digest, derive_child_operation_id, derive_child_operation_material_digest,
-    derive_operation_id, parse_child_operation_envelope_v2_bytes, parse_operation_envelope_bytes,
-    ActorAuthorityV1, AuthorityOriginV1, CausalLinkV1, ChildOperationEnvelopeV2,
-    ChildRunAuthorityV1, ContentDigest, CurrentPermitId, CurrentReceiptId, CurrentRunId,
-    DeclaredEffectsV1, OperationBudgetV1, OperationEnvelopeV1, OperationSchemaV1, ProvenanceRefV1,
-    ReplayClassV1, ReplayIntentV1, ReplaySpecV1, RunSpecV1, StepSpecV1, ToolCallSpecV1,
+    derive_child_operation_proposal_digest, derive_operation_id,
+    parse_child_operation_envelope_v2_bytes, parse_child_operation_proposal_v2_bytes,
+    parse_operation_envelope_bytes, ActorAuthorityV1, AuthorityOriginV1, CausalLinkV1,
+    ChildOperationEnvelopeV2, ChildOperationProposalV2, ChildRunAuthorityV1, ContentDigest,
+    CurrentPermitId, CurrentReceiptId, CurrentRunId, DeclaredEffectsV1, OperationBudgetV1,
+    OperationEnvelopeV1, OperationSchemaV1, ProvenanceRefV1, ReplayClassV1, ReplayIntentV1,
+    ReplaySpecV1, RunSpecV1, StepSpecV1, ToolCallSpecV1,
 };
 
 fn root_operation() -> Result<OperationEnvelopeV1, Box<dyn std::error::Error>> {
@@ -112,6 +114,36 @@ fn child_operation() -> Result<ChildOperationEnvelopeV2, Box<dyn std::error::Err
     };
     child.child_authority.child_operation_digest = derive_child_operation_material_digest(&child)?;
     Ok(child)
+}
+
+#[test]
+fn v2_child_proposal_is_closed_without_admission_identity() -> Result<(), Box<dyn std::error::Error>>
+{
+    let child = child_operation()?;
+    let proposal = ChildOperationProposalV2 {
+        schema: child.schema,
+        actor: child.actor.clone(),
+        causality: child.causality.clone(),
+        budget: child.budget.clone(),
+        effects: child.effects.clone(),
+        provenance: child.provenance.clone(),
+        replay: child.replay.clone(),
+        run_spec: child.run_spec.clone(),
+    };
+
+    proposal.validate()?;
+    let encoded = serde_json::to_vec(&proposal)?;
+    assert_eq!(parse_child_operation_proposal_v2_bytes(&encoded)?, proposal);
+    assert_eq!(
+        derive_child_operation_proposal_digest(&proposal)?,
+        derive_child_operation_material_digest(&child)?,
+        "the pre-admission proposal digest must bind exactly the later V2 material"
+    );
+    assert!(
+        !String::from_utf8(encoded)?.contains("parent_admission_receipt_id"),
+        "caller input must not carry a self-referential parent admission receipt ID"
+    );
+    Ok(())
 }
 
 #[test]

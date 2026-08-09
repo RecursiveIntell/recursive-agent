@@ -13,11 +13,13 @@ pub use event::{
     RuntimeEventSchemaV1, RuntimeEventV1,
 };
 pub use operation::{
-    derive_child_operation_id, derive_child_operation_material_digest, derive_operation_id,
-    parse_child_operation_envelope_v2_bytes, parse_operation_envelope_bytes, ActorAuthorityV1,
-    AuthorityOriginV1, CausalLinkV1, ChildOperationEnvelopeV2, ChildRunAuthorityV1,
-    DeclaredEffectsV1, OperationBudgetV1, OperationEnvelopeV1, OperationIngressError,
-    OperationSchemaV1, ProvenanceRefV1, ReplayClassV1, ReplayIntentV1, ReplaySpecV1,
+    derive_child_operation_id, derive_child_operation_material_digest,
+    derive_child_operation_proposal_digest, derive_operation_id,
+    parse_child_operation_envelope_v2_bytes, parse_child_operation_proposal_v2_bytes,
+    parse_operation_envelope_bytes, ActorAuthorityV1, AuthorityOriginV1, CausalLinkV1,
+    ChildOperationEnvelopeV2, ChildOperationProposalV2, ChildRunAuthorityV1, DeclaredEffectsV1,
+    OperationBudgetV1, OperationEnvelopeV1, OperationIngressError, OperationSchemaV1,
+    ProvenanceRefV1, ReplayClassV1, ReplayIntentV1, ReplaySpecV1,
 };
 
 use boundary_compiler::{Canonicalizer, ContentDigest as BoundaryContentDigest, JcsError};
@@ -898,6 +900,13 @@ pub enum ReceiptKindV1 {
     ArtifactStored,
     StepCompleted,
     StepFailed,
+    /// Parent-side receipt binding one authority-free V2 proposal before any
+    /// family reservation or child dispatch.
+    ChildAdmissionPrepared,
+    /// Parent-side receipt carrying the content-addressed immutable child link.
+    ChildLinked,
+    /// Parent-side receipt carrying verified terminal closure evidence.
+    ChildClosed,
     RunFinalized,
 }
 
@@ -1040,6 +1049,9 @@ pub fn validate_receipt_sequence(
     > = std::collections::BTreeMap::new();
     let mut terminal = None;
     let mut finalized = false;
+    let mut prepared_children = std::collections::BTreeSet::new();
+    let mut linked_children = std::collections::BTreeSet::new();
+    let mut closed_children = std::collections::BTreeSet::new();
     for (index, receipt) in receipts.iter().enumerate() {
         receipt.validate_material()?;
         if finalized {
@@ -1236,6 +1248,44 @@ pub fn validate_receipt_sequence(
                 set_terminal(&mut terminal, state)?;
                 steps.insert(receipt.step_id.clone(), StepLifecycle::Complete);
             }
+            ReceiptKindV1::ChildAdmissionPrepared => {
+                if terminal.is_some()
+                    || !matches!(receipt.outcome, ReceiptOutcomeV1::Ok)
+                    || !receipt.artifact_refs.is_empty()
+                    || !prepared_children.insert(receipt.args_digest.clone())
+                {
+                    return Err(ContractError::Malformed(
+                        "ChildAdmissionPrepared must be one successful proposal binding before terminal state"
+                            .into(),
+                    ));
+                }
+            }
+            ReceiptKindV1::ChildLinked => {
+                if terminal.is_some()
+                    || !matches!(receipt.outcome, ReceiptOutcomeV1::Ok)
+                    || receipt.artifact_refs.is_empty()
+                    || !prepared_children.contains(&receipt.args_digest)
+                    || !linked_children.insert(receipt.args_digest.clone())
+                {
+                    return Err(ContractError::Malformed(
+                        "ChildLinked requires one preceding prepared proposal and immutable link evidence"
+                            .into(),
+                    ));
+                }
+            }
+            ReceiptKindV1::ChildClosed => {
+                if terminal.is_some()
+                    || !matches!(receipt.outcome, ReceiptOutcomeV1::Ok)
+                    || receipt.artifact_refs.is_empty()
+                    || !linked_children.contains(&receipt.args_digest)
+                    || !closed_children.insert(receipt.args_digest.clone())
+                {
+                    return Err(ContractError::Malformed(
+                        "ChildClosed requires one preceding linked proposal and closure evidence"
+                            .into(),
+                    ));
+                }
+            }
             ReceiptKindV1::RunFinalized => {
                 if index == 0 {
                     return Err(ContractError::Malformed(
@@ -1257,6 +1307,13 @@ pub fn validate_receipt_sequence(
                 {
                     return Err(ContractError::Malformed(
                         "RunFinalized has an incomplete step".into(),
+                    ));
+                }
+                if observed == RunTerminalStateV1::Succeeded && prepared_children != closed_children
+                {
+                    return Err(ContractError::Malformed(
+                        "successful RunFinalized has a prepared child without verified closure"
+                            .into(),
                     ));
                 }
                 terminal = Some(observed);
