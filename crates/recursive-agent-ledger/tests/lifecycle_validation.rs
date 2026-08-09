@@ -11,8 +11,8 @@ use recursive_agent_ledger::{
 };
 use recursive_agent_policy::{
     ActorPrincipalV1, DelegatedActionV1, DelegationCeilingV1, DelegationTransitionV1,
-    EffectScopeV1, ExecutionPermitV1, PermitBindingV1, PermitBudgetV1, PermitEvidenceV1,
-    PermitRecordV1, PermitRevocationReasonV1, PermitStateV1,
+    DurablePermitStore, EffectScopeV1, ExecutionPermitV1, PermitBindingV1, PermitBudgetV1,
+    PermitEvidenceV1, PermitRecordV1, PermitRevocationReasonV1, PermitStateV1,
 };
 
 type TestResult = Result<(), Box<dyn std::error::Error>>;
@@ -109,6 +109,7 @@ fn fixture() -> TestResultValue<Fixture> {
         policy_version: binding.policy_version.clone(),
         run_id: run.clone(),
         transition: DelegationTransitionV1::ControlToEffect,
+        audiences: vec![binding.tool.clone()],
         actions: vec![DelegatedActionV1 {
             tool: binding.tool.clone(),
             action_digest: binding.action_digest.clone(),
@@ -121,9 +122,12 @@ fn fixture() -> TestResultValue<Fixture> {
         not_before: time,
         expires_at: binding.expires_at,
     };
-    let control = ExecutionPermitV1::control(control_binding, ceiling)?;
+    let root = tempfile::tempdir()?;
+    let root_file = std::fs::File::open(root.path())?;
+    let store = DurablePermitStore::from_dir_fd(&root_file)?;
+    let control = store.issue_control(&control_binding, ceiling, time)?;
     binding.parent_permit_id = Some(control.permit_id.clone());
-    let permit = ExecutionPermitV1::effect(binding, Vec::new())?;
+    let permit = store.issue_effect(&binding, Vec::new(), time)?;
     let lineage = [
         LineageOrigin::Request,
         LineageOrigin::Plan,
@@ -878,23 +882,16 @@ fn every_authoritative_validator_rejects_discontinuous_or_impossible_permits() -
         },
     )?;
 
-    let mut other_binding = fixture.permit.binding.clone();
-    other_binding.actor = ActorPrincipalV1::try_new("other")?;
-    let other = ExecutionPermitV1::effect(other_binding, Vec::new())?;
-    let other_consumed = evidence_bytes(
-        &other,
-        PermitStateV1::Consumed {
-            consumed_at: fixture.time,
-        },
-    )?;
+    let mut other_consumed: serde_json::Value = serde_json::from_slice(&consumed)?;
+    other_consumed["binding"]["actor"] = serde_json::json!("other");
     assert_every_strict_verifier_and_append_reject(
         &fixture,
         &successful_effect_events(
             &fixture,
             issued.clone(),
-            other_consumed,
+            serde_json::to_vec(&other_consumed)?,
             fixture.time,
-            lineage_for(&other),
+            fixture.lineage.clone(),
         ),
     )?;
 
@@ -911,25 +908,20 @@ fn every_authoritative_validator_rejects_discontinuous_or_impossible_permits() -
         ),
     )?;
 
-    let mut before_not_before_binding = fixture.permit.binding.clone();
-    before_not_before_binding.not_before = fixture.time + chrono::TimeDelta::milliseconds(100);
-    let delayed = ExecutionPermitV1::effect(before_not_before_binding, Vec::new())?;
-    let delayed_issued = evidence_bytes(&delayed, PermitStateV1::Issued)?;
-    let mut delayed_consumed: serde_json::Value = serde_json::from_slice(&evidence_bytes(
-        &delayed,
-        PermitStateV1::Consumed {
-            consumed_at: delayed.binding.not_before,
-        },
-    )?)?;
+    let delayed_not_before = fixture.time + chrono::TimeDelta::milliseconds(100);
+    let mut delayed_issued: serde_json::Value = serde_json::from_slice(&issued)?;
+    delayed_issued["binding"]["not_before"] = serde_json::to_value(delayed_not_before)?;
+    let mut delayed_consumed: serde_json::Value = serde_json::from_slice(&consumed)?;
+    delayed_consumed["binding"]["not_before"] = serde_json::to_value(delayed_not_before)?;
     delayed_consumed["state"]["at"] = serde_json::to_value(fixture.time)?;
     assert_every_strict_verifier_and_append_reject(
         &fixture,
         &successful_effect_events(
             &fixture,
-            delayed_issued,
+            serde_json::to_vec(&delayed_issued)?,
             serde_json::to_vec(&delayed_consumed)?,
             fixture.time,
-            lineage_for(&delayed),
+            fixture.lineage.clone(),
         ),
     )?;
 

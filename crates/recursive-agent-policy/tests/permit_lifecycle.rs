@@ -301,6 +301,7 @@ fn revoked_parent_cannot_authorize_child_dispatch() -> TestResult {
         policy_version: parent_binding.policy_version.clone(),
         run_id: parent_binding.run_id.clone(),
         transition: DelegationTransitionV1::ControlToEffect,
+        audiences: vec![child_binding.tool.clone()],
         actions: vec![DelegatedActionV1 {
             tool: child_binding.tool.clone(),
             action_digest: child_binding.action_digest.clone(),

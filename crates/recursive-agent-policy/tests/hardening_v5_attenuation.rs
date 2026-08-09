@@ -1,10 +1,11 @@
 use chrono::{DateTime, TimeDelta, Utc};
+use proptest::prelude::*;
 use recursive_agent_contracts::{
     content_digest, derive_run_id, derive_step_id, RunSpecV1, StepSpecV1, ToolCallSpecV1,
 };
 use recursive_agent_policy::{
     ActorPrincipalV1, DelegatedActionV1, DelegationCeilingV1, DelegationTransitionV1,
-    DurablePermitStore, EffectScopeV1, PermitBindingV1, PermitBudgetV1,
+    DurablePermitStore, EffectScopeV1, PermitBindingV1, PermitBudgetV1, PermitEvidenceV1,
 };
 
 type TestResult = Result<(), Box<dyn std::error::Error>>;
@@ -81,6 +82,7 @@ fn issue_parent(
         policy_version: parent_binding.policy_version.clone(),
         run_id: parent_binding.run_id.clone(),
         transition: DelegationTransitionV1::ControlToEffect,
+        audiences: vec![allowed_child.tool.clone()],
         actions: vec![DelegatedActionV1 {
             tool: allowed_child.tool.clone(),
             action_digest: allowed_child.action_digest.clone(),
@@ -201,4 +203,304 @@ fn retry_after_parent_reservation_does_not_double_count_child_budget() -> TestRe
     );
     assert!(store.state(&first.permit_id).is_ok());
     Ok(())
+}
+
+#[test]
+fn persisted_delegation_proof_binds_identity_and_rejects_tampering() -> TestResult {
+    let root = tempfile::tempdir()?;
+    let root_file = std::fs::File::open(root.path())?;
+    let store = DurablePermitStore::from_dir_fd(&root_file)?;
+    let parent_binding = binding("runner.lifecycle", "parent")?;
+    let prototype = binding("echo", "child")?;
+    let parent = issue_parent(&store, &parent_binding, &prototype)?;
+    let child_binding = child_of(&parent, &parent_binding, "child")?;
+    let child = store.issue_effect(&child_binding, Vec::new(), now())?;
+    let parent_evidence = PermitEvidenceV1::from_record(&store.state(&parent.permit_id)?)?;
+    let child_evidence = PermitEvidenceV1::from_record(&store.state(&child.permit_id)?)?;
+
+    let child_json = serde_json::to_value(&child_evidence)?;
+    let proof = child_json
+        .get("delegation_identity")
+        .ok_or("delegated child evidence lacks a persisted derivation proof")?;
+    assert_eq!(proof["actor"], parent_binding.actor.as_str());
+    assert_eq!(proof["delegate"], child_binding.actor.as_str());
+    assert_eq!(proof["audience"], child_binding.tool);
+    assert_eq!(proof["depth"], 1);
+
+    for (field, value) in [
+        ("actor", serde_json::json!("actor:other")),
+        ("delegate", serde_json::json!("actor:other")),
+        ("audience", serde_json::json!("shell")),
+        ("depth", serde_json::json!(2)),
+    ] {
+        let mut tampered_json = child_json.clone();
+        tampered_json["delegation_identity"][field] = value;
+        let tampered: PermitEvidenceV1 = serde_json::from_value(tampered_json)?;
+        assert!(recursive_agent_policy::validate_delegation_attenuation(
+            &parent_evidence,
+            &tampered,
+            now(),
+        )
+        .is_err());
+    }
+    Ok(())
+}
+
+#[test]
+fn persisted_identity_is_accepted_only_at_its_derived_depth() -> TestResult {
+    let root = tempfile::tempdir()?;
+    let root_file = std::fs::File::open(root.path())?;
+    let store = DurablePermitStore::from_dir_fd(&root_file)?;
+    let parent_binding = binding("runner.lifecycle", "parent")?;
+    let prototype = binding("echo", "child")?;
+    let parent = issue_parent(&store, &parent_binding, &prototype)?;
+    let child_binding = child_of(&parent, &parent_binding, "child")?;
+    let child = store.issue_effect(&child_binding, Vec::new(), now())?;
+    let parent_evidence = PermitEvidenceV1::from_record(&store.state(&parent.permit_id)?)?;
+    let child_evidence = PermitEvidenceV1::from_record(&store.state(&child.permit_id)?)?;
+    recursive_agent_policy::validate_delegation_attenuation(
+        &parent_evidence,
+        &child_evidence,
+        now(),
+    )?;
+    Ok(())
+}
+
+#[test]
+fn nested_controls_are_strictly_attenuated_and_prove_transitive_depth() -> TestResult {
+    let root = tempfile::tempdir()?;
+    let root_file = std::fs::File::open(root.path())?;
+    let store = DurablePermitStore::from_dir_fd(&root_file)?;
+    let root_binding = binding("runner.lifecycle", "root")?;
+    let leaf_prototype = binding("echo", "leaf")?;
+    let root_ceiling = DelegationCeilingV1 {
+        actor: root_binding.actor.clone(),
+        policy_version: root_binding.policy_version.clone(),
+        run_id: root_binding.run_id.clone(),
+        transition: DelegationTransitionV1::ControlToControl,
+        audiences: vec!["runner.lifecycle".into()],
+        actions: vec![DelegatedActionV1 {
+            tool: leaf_prototype.tool.clone(),
+            action_digest: leaf_prototype.action_digest.clone(),
+            args_digest: leaf_prototype.args_digest.clone(),
+            effect: leaf_prototype.effect.clone(),
+            effect_digest: leaf_prototype.effect_digest.clone(),
+            executable_authority: Vec::new(),
+        }],
+        budget: root_binding.budget.clone(),
+        not_before: root_binding.not_before,
+        expires_at: root_binding.expires_at,
+    };
+    let root_control = store.issue_control(&root_binding, root_ceiling, now())?;
+
+    let mut child_binding = binding("runner.lifecycle", "child-control")?;
+    child_binding.run_id = root_binding.run_id.clone();
+    child_binding.parent_permit_id = Some(root_control.permit_id.clone());
+    child_binding.parent_operation_id = Some(root_binding.run_id.clone());
+    child_binding.budget.max_output_bytes = 99;
+    let child_ceiling = DelegationCeilingV1 {
+        actor: child_binding.actor.clone(),
+        policy_version: child_binding.policy_version.clone(),
+        run_id: child_binding.run_id.clone(),
+        transition: DelegationTransitionV1::ControlToEffect,
+        audiences: vec!["echo".into()],
+        actions: vec![DelegatedActionV1 {
+            tool: leaf_prototype.tool.clone(),
+            action_digest: leaf_prototype.action_digest.clone(),
+            args_digest: leaf_prototype.args_digest.clone(),
+            effect: leaf_prototype.effect.clone(),
+            effect_digest: leaf_prototype.effect_digest.clone(),
+            executable_authority: Vec::new(),
+        }],
+        budget: child_binding.budget.clone(),
+        not_before: child_binding.not_before,
+        expires_at: child_binding.expires_at,
+    };
+    let child_control = store.issue_control(&child_binding, child_ceiling, now())?;
+
+    let mut leaf_binding = child_of(&child_control, &child_binding, "leaf")?;
+    leaf_binding.budget.max_output_bytes = 50;
+    let leaf = store.issue_effect(&leaf_binding, Vec::new(), now())?;
+    let root_evidence = PermitEvidenceV1::from_record(&store.state(&root_control.permit_id)?)?;
+    let child_evidence = PermitEvidenceV1::from_record(&store.state(&child_control.permit_id)?)?;
+    let leaf_evidence = PermitEvidenceV1::from_record(&store.state(&leaf.permit_id)?)?;
+    recursive_agent_policy::validate_delegation_attenuation(
+        &root_evidence,
+        &child_evidence,
+        now(),
+    )?;
+    recursive_agent_policy::validate_delegation_attenuation(
+        &child_evidence,
+        &leaf_evidence,
+        now(),
+    )?;
+    let child_identity = child_evidence
+        .delegation_identity
+        .as_ref()
+        .ok_or("child control evidence lacks delegation identity")?;
+    let leaf_identity = leaf_evidence
+        .delegation_identity
+        .as_ref()
+        .ok_or("leaf effect evidence lacks delegation identity")?;
+    assert_eq!(child_identity.depth, 1);
+    assert_eq!(leaf_identity.depth, 2);
+    Ok(())
+}
+
+#[test]
+fn nested_control_with_extra_audience_is_denied() -> TestResult {
+    let root = tempfile::tempdir()?;
+    let root_file = std::fs::File::open(root.path())?;
+    let store = DurablePermitStore::from_dir_fd(&root_file)?;
+    let root_binding = binding("runner.lifecycle", "root")?;
+    let leaf_prototype = binding("echo", "leaf")?;
+    let root_ceiling = DelegationCeilingV1 {
+        actor: root_binding.actor.clone(),
+        policy_version: root_binding.policy_version.clone(),
+        run_id: root_binding.run_id.clone(),
+        transition: DelegationTransitionV1::ControlToControl,
+        audiences: vec!["runner.lifecycle".into()],
+        actions: vec![DelegatedActionV1 {
+            tool: leaf_prototype.tool.clone(),
+            action_digest: leaf_prototype.action_digest.clone(),
+            args_digest: leaf_prototype.args_digest.clone(),
+            effect: leaf_prototype.effect.clone(),
+            effect_digest: leaf_prototype.effect_digest.clone(),
+            executable_authority: Vec::new(),
+        }],
+        budget: root_binding.budget.clone(),
+        not_before: root_binding.not_before,
+        expires_at: root_binding.expires_at,
+    };
+    let root_control = store.issue_control(&root_binding, root_ceiling, now())?;
+
+    let mut child_binding = binding("runner.lifecycle", "child-control")?;
+    child_binding.run_id = root_binding.run_id.clone();
+    child_binding.parent_permit_id = Some(root_control.permit_id.clone());
+    child_binding.parent_operation_id = Some(root_binding.run_id.clone());
+    child_binding.budget.max_output_bytes = 99;
+    let child_ceiling = DelegationCeilingV1 {
+        actor: child_binding.actor.clone(),
+        policy_version: child_binding.policy_version.clone(),
+        run_id: child_binding.run_id.clone(),
+        transition: DelegationTransitionV1::ControlToEffect,
+        audiences: vec!["echo".into(), "shell".into()],
+        actions: vec![DelegatedActionV1 {
+            tool: leaf_prototype.tool.clone(),
+            action_digest: leaf_prototype.action_digest.clone(),
+            args_digest: leaf_prototype.args_digest.clone(),
+            effect: leaf_prototype.effect.clone(),
+            effect_digest: leaf_prototype.effect_digest.clone(),
+            executable_authority: Vec::new(),
+        }],
+        budget: child_binding.budget.clone(),
+        not_before: child_binding.not_before,
+        expires_at: child_binding.expires_at,
+    };
+
+    assert!(
+        store
+            .issue_control(&child_binding, child_ceiling, now())
+            .is_err(),
+        "a child control may not introduce a new audience"
+    );
+    Ok(())
+}
+
+fn widened_budget_child_is_rejected(extra: u64) -> TestResult {
+    let root = tempfile::tempdir()?;
+    let root_file = std::fs::File::open(root.path())?;
+    let store = DurablePermitStore::from_dir_fd(&root_file)?;
+    let parent_binding = binding("runner.lifecycle", "parent")?;
+    let prototype = binding("echo", "child")?;
+    let parent = issue_parent(&store, &parent_binding, &prototype)?;
+    let mut child = child_of(&parent, &parent_binding, "child")?;
+    child.budget.max_output_bytes = parent_binding
+        .budget
+        .max_output_bytes
+        .checked_add(extra)
+        .ok_or("test budget overflow")?;
+    if store.issue_effect(&child, Vec::new(), now()).is_ok() {
+        return Err("a child effect with a wider budget was admitted".into());
+    }
+    Ok(())
+}
+
+fn nested_control_with_added_audience_is_rejected(extra_audience: String) -> TestResult {
+    let root = tempfile::tempdir()?;
+    let root_file = std::fs::File::open(root.path())?;
+    let store = DurablePermitStore::from_dir_fd(&root_file)?;
+    let root_binding = binding("runner.lifecycle", "root")?;
+    let leaf_prototype = binding("echo", "leaf")?;
+    let root_ceiling = DelegationCeilingV1 {
+        actor: root_binding.actor.clone(),
+        policy_version: root_binding.policy_version.clone(),
+        run_id: root_binding.run_id.clone(),
+        transition: DelegationTransitionV1::ControlToControl,
+        audiences: vec!["runner.lifecycle".into()],
+        actions: vec![DelegatedActionV1 {
+            tool: leaf_prototype.tool.clone(),
+            action_digest: leaf_prototype.action_digest.clone(),
+            args_digest: leaf_prototype.args_digest.clone(),
+            effect: leaf_prototype.effect.clone(),
+            effect_digest: leaf_prototype.effect_digest.clone(),
+            executable_authority: Vec::new(),
+        }],
+        budget: root_binding.budget.clone(),
+        not_before: root_binding.not_before,
+        expires_at: root_binding.expires_at,
+    };
+    let root_control = store.issue_control(&root_binding, root_ceiling, now())?;
+
+    let mut child_binding = binding("runner.lifecycle", "child-control")?;
+    child_binding.run_id = root_binding.run_id.clone();
+    child_binding.parent_permit_id = Some(root_control.permit_id.clone());
+    child_binding.parent_operation_id = Some(root_binding.run_id.clone());
+    child_binding.budget.max_output_bytes = 99;
+    let mut audiences = vec!["echo".into(), extra_audience];
+    audiences.sort();
+    let child_ceiling = DelegationCeilingV1 {
+        actor: child_binding.actor.clone(),
+        policy_version: child_binding.policy_version.clone(),
+        run_id: child_binding.run_id.clone(),
+        transition: DelegationTransitionV1::ControlToEffect,
+        audiences,
+        actions: vec![DelegatedActionV1 {
+            tool: leaf_prototype.tool.clone(),
+            action_digest: leaf_prototype.action_digest.clone(),
+            args_digest: leaf_prototype.args_digest.clone(),
+            effect: leaf_prototype.effect.clone(),
+            effect_digest: leaf_prototype.effect_digest.clone(),
+            executable_authority: Vec::new(),
+        }],
+        budget: child_binding.budget.clone(),
+        not_before: child_binding.not_before,
+        expires_at: child_binding.expires_at,
+    };
+    if store
+        .issue_control(&child_binding, child_ceiling, now())
+        .is_ok()
+    {
+        return Err("a child control with an extra audience was admitted".into());
+    }
+    Ok(())
+}
+
+proptest! {
+    #![proptest_config(ProptestConfig {
+        cases: 128,
+        failure_persistence: None,
+        .. ProptestConfig::default()
+    })]
+
+    #[test]
+    fn any_positive_effect_budget_widening_is_rejected(extra in 1_u64..10_000) {
+        prop_assert!(widened_budget_child_is_rejected(extra).is_ok());
+    }
+
+    #[test]
+    fn any_added_child_control_audience_is_rejected(extra_audience in "[a-z]{1,16}") {
+        prop_assume!(extra_audience != "echo");
+        prop_assert!(nested_control_with_added_audience_is_rejected(extra_audience).is_ok());
+    }
 }

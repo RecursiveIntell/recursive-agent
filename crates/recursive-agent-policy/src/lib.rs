@@ -46,6 +46,30 @@ impl ActorPrincipalV1 {
     }
 }
 
+/// Explicit grantor, delegate, audience, and delegation depth for one edge.
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct DelegationIdentityV1 {
+    pub actor: ActorPrincipalV1,
+    pub delegate: ActorPrincipalV1,
+    pub audience: String,
+    pub depth: u32,
+}
+
+impl DelegationIdentityV1 {
+    pub fn validate(&self) -> Result<(), PolicyError> {
+        if self.audience.is_empty()
+            || self.audience.chars().any(char::is_control)
+            || self.depth == 0
+        {
+            return Err(PolicyError::InvalidLease(
+                "invalid delegation identity".into(),
+            ));
+        }
+        Ok(())
+    }
+}
+
 impl<'de> serde::Deserialize<'de> for ActorPrincipalV1 {
     fn deserialize<D: serde::Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
         let value = <String as serde::Deserialize>::deserialize(deserializer)?;
@@ -151,6 +175,7 @@ pub struct DelegatedActionV1 {
 #[serde(rename_all = "snake_case")]
 pub enum DelegationTransitionV1 {
     ControlToEffect,
+    ControlToControl,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
@@ -160,6 +185,8 @@ pub struct DelegationCeilingV1 {
     pub policy_version: String,
     pub run_id: CurrentRunId,
     pub transition: DelegationTransitionV1,
+    /// Canonical, closed audience set for the next delegation edge.
+    pub audiences: Vec<String>,
     pub actions: Vec<DelegatedActionV1>,
     pub budget: PermitBudgetV1,
     pub not_before: DateTime<Utc>,
@@ -170,6 +197,7 @@ impl DelegationCeilingV1 {
     pub fn validate(&self) -> Result<(), PolicyError> {
         if self.policy_version.is_empty()
             || self.actions.is_empty()
+            || self.audiences.is_empty()
             || self.not_before >= self.expires_at
             || self.budget.max_wall_time_ms == 0
             || self.budget.max_output_bytes == 0
@@ -179,6 +207,19 @@ impl DelegationCeilingV1 {
                 "invalid delegation ceiling".into(),
             ));
         }
+        let mut prior_audience: Option<&str> = None;
+        for audience in &self.audiences {
+            if audience.is_empty()
+                || audience.chars().any(char::is_control)
+                || prior_audience.is_some_and(|prior| prior >= audience.as_str())
+            {
+                return Err(PolicyError::InvalidLease(
+                    "delegation audiences must be nonempty, unique, and sorted".into(),
+                ));
+            }
+            prior_audience = Some(audience);
+        }
+        let mut prior_action: Option<String> = None;
         for action in &self.actions {
             if action.tool.is_empty()
                 || action.effect.scope_name.is_empty()
@@ -192,6 +233,16 @@ impl DelegationCeilingV1 {
             for executable in &action.executable_authority {
                 executable.validate()?;
             }
+            let action_key = content_digest(action)?.hex().to_owned();
+            if prior_action
+                .as_ref()
+                .is_some_and(|prior| prior >= &action_key)
+            {
+                return Err(PolicyError::InvalidLease(
+                    "delegation actions must be unique and canonically sorted".into(),
+                ));
+            }
+            prior_action = Some(action_key);
         }
         Ok(())
     }
@@ -317,6 +368,8 @@ pub struct ExecutionPermitV1 {
     pub binding: PermitBindingV1,
     pub purpose: PermitPurposeV1,
     pub delegation_ceiling: Option<DelegationCeilingV1>,
+    /// Immutable derivation proof for a delegated effect permit.
+    pub delegation_identity: Option<DelegationIdentityV1>,
     pub executable_authority: Vec<ExecutableAuthorityV1>,
 }
 
@@ -325,14 +378,21 @@ impl ExecutionPermitV1 {
         binding: PermitBindingV1,
         delegation_ceiling: DelegationCeilingV1,
     ) -> Result<Self, PolicyError> {
+        if binding.parent_permit_id.is_some() {
+            return Err(PolicyError::InvalidLease(
+                "delegated controls must be issued through DurablePermitStore".into(),
+            ));
+        }
         delegation_ceiling.validate()?;
         let purpose = PermitPurposeV1::Control;
         let delegation_ceiling = Some(delegation_ceiling);
+        let delegation_identity = None;
         let executable_authority = Vec::new();
         let permit_id = derive_permit_id(&execution_identity_material(
             &binding,
             purpose,
             &delegation_ceiling,
+            &delegation_identity,
             &executable_authority,
         )?)?;
         Ok(Self {
@@ -340,6 +400,7 @@ impl ExecutionPermitV1 {
             binding,
             purpose,
             delegation_ceiling,
+            delegation_identity,
             executable_authority,
         })
     }
@@ -348,12 +409,19 @@ impl ExecutionPermitV1 {
         binding: PermitBindingV1,
         executable_authority: Vec<ExecutableAuthorityV1>,
     ) -> Result<Self, PolicyError> {
+        if binding.parent_permit_id.is_some() {
+            return Err(PolicyError::InvalidLease(
+                "delegated effects must be issued through DurablePermitStore".into(),
+            ));
+        }
         let purpose = PermitPurposeV1::Effect;
         let delegation_ceiling = None;
+        let delegation_identity = None;
         let permit_id = derive_permit_id(&execution_identity_material(
             &binding,
             purpose,
             &delegation_ceiling,
+            &delegation_identity,
             &executable_authority,
         )?)?;
         Ok(Self {
@@ -361,6 +429,7 @@ impl ExecutionPermitV1 {
             binding,
             purpose,
             delegation_ceiling,
+            delegation_identity,
             executable_authority,
         })
     }
@@ -370,6 +439,7 @@ impl ExecutionPermitV1 {
             &self.binding,
             self.purpose,
             &self.delegation_ceiling,
+            &self.delegation_identity,
             &self.executable_authority,
         )
     }
@@ -379,6 +449,7 @@ fn execution_identity_material(
     binding: &PermitBindingV1,
     purpose: PermitPurposeV1,
     delegation_ceiling: &Option<DelegationCeilingV1>,
+    delegation_identity: &Option<DelegationIdentityV1>,
     executable_authority: &[ExecutableAuthorityV1],
 ) -> Result<PermitIdentityMaterialV1, PolicyError> {
     #[derive(serde::Serialize)]
@@ -386,6 +457,7 @@ fn execution_identity_material(
         binding: &'a PermitIdentityMaterialV1,
         purpose: PermitPurposeV1,
         delegation_ceiling: Option<DelegationCeilingIdentity<'a>>,
+        delegation_identity: &'a Option<DelegationIdentityV1>,
         executable_authority: &'a [ExecutableAuthorityV1],
     }
     #[derive(serde::Serialize)]
@@ -394,6 +466,7 @@ fn execution_identity_material(
         policy_version: &'a str,
         run_id: &'a CurrentRunId,
         transition: DelegationTransitionV1,
+        audiences: &'a [String],
         actions: &'a [DelegatedActionV1],
         budget: &'a PermitBudgetV1,
         requested_not_before_delay_ms: u64,
@@ -411,6 +484,7 @@ fn execution_identity_material(
                     policy_version: &ceiling.policy_version,
                     run_id: &ceiling.run_id,
                     transition: ceiling.transition,
+                    audiences: &ceiling.audiences,
                     actions: &ceiling.actions,
                     budget: &ceiling.budget,
                     requested_not_before_delay_ms: u64::try_from(delay.num_milliseconds())
@@ -429,6 +503,7 @@ fn execution_identity_material(
             binding: &temporal,
             purpose,
             delegation_ceiling: ceiling_identity,
+            delegation_identity,
             executable_authority,
         })?,
         requested_not_before_delay_ms: temporal.requested_not_before_delay_ms,
@@ -499,6 +574,7 @@ pub struct PermitEvidenceV1 {
     pub binding_digest: ContentDigest,
     pub purpose: PermitPurposeV1,
     pub delegation_ceiling: Option<DelegationCeilingV1>,
+    pub delegation_identity: Option<DelegationIdentityV1>,
     pub executable_authority: Vec<ExecutableAuthorityV1>,
     pub child_allocations: std::collections::BTreeMap<CurrentPermitId, PermitBudgetV1>,
     pub state: PermitEvidenceStateV1,
@@ -522,6 +598,7 @@ impl PermitEvidenceV1 {
             binding_digest: content_digest(&record.permit.binding)?,
             purpose: record.permit.purpose,
             delegation_ceiling: record.permit.delegation_ceiling.clone(),
+            delegation_identity: record.permit.delegation_identity.clone(),
             executable_authority: record.permit.executable_authority.clone(),
             child_allocations: record.child_allocations.clone(),
             state,
@@ -541,6 +618,7 @@ impl PermitEvidenceV1 {
             binding_digest: content_digest(&permit.binding)?,
             purpose: permit.purpose,
             delegation_ceiling: permit.delegation_ceiling.clone(),
+            delegation_identity: permit.delegation_identity.clone(),
             executable_authority: permit.executable_authority.clone(),
             child_allocations: std::collections::BTreeMap::new(),
             state: PermitEvidenceStateV1::Rejected { at, reason },
@@ -556,6 +634,7 @@ impl PermitEvidenceV1 {
             binding: self.binding.clone(),
             purpose: self.purpose,
             delegation_ceiling: self.delegation_ceiling.clone(),
+            delegation_identity: self.delegation_identity.clone(),
             executable_authority: self.executable_authority.clone(),
         };
         if self.binding_digest != content_digest(&self.binding)?
@@ -572,7 +651,6 @@ impl PermitEvidenceV1 {
                 })?;
                 ceiling.validate()?;
                 if !self.executable_authority.is_empty()
-                    || self.binding.parent_permit_id.is_some()
                     || ceiling.actor != self.binding.actor
                     || ceiling.policy_version != self.binding.policy_version
                     || ceiling.run_id != self.binding.run_id
@@ -584,12 +662,40 @@ impl PermitEvidenceV1 {
                         "control permit does not bind its delegation ceiling".into(),
                     ));
                 }
+                match (&self.binding.parent_permit_id, &self.delegation_identity) {
+                    (Some(_), Some(identity)) => identity.validate()?,
+                    (Some(_), None) => {
+                        return Err(PolicyError::InvalidLease(
+                            "delegated control permit lacks a derivation proof".into(),
+                        ));
+                    }
+                    (None, Some(_)) => {
+                        return Err(PolicyError::InvalidLease(
+                            "root control permit carries a delegation proof".into(),
+                        ));
+                    }
+                    (None, None) => {}
+                }
             }
             PermitPurposeV1::Effect => {
                 if self.delegation_ceiling.is_some() {
                     return Err(PolicyError::InvalidLease(
                         "effect permit carries a control delegation ceiling".into(),
                     ));
+                }
+                match (&self.binding.parent_permit_id, &self.delegation_identity) {
+                    (Some(_), Some(identity)) => identity.validate()?,
+                    (Some(_), None) => {
+                        return Err(PolicyError::InvalidLease(
+                            "delegated effect permit lacks a derivation proof".into(),
+                        ));
+                    }
+                    (None, Some(_)) => {
+                        return Err(PolicyError::InvalidLease(
+                            "root effect permit carries a delegation proof".into(),
+                        ));
+                    }
+                    (None, None) => {}
                 }
                 for executable in &self.executable_authority {
                     executable.validate()?;
@@ -849,11 +955,6 @@ impl DurablePermitStore {
         ceiling: DelegationCeilingV1,
         trusted_now: DateTime<Utc>,
     ) -> Result<ExecutionPermitV1, PolicyError> {
-        if binding.parent_permit_id.is_some() {
-            return Err(PolicyError::InvalidLease(
-                "control permit cannot be an effect child".into(),
-            ));
-        }
         self.issue_authority(
             binding,
             PermitPurposeV1::Control,
@@ -911,25 +1012,39 @@ impl DurablePermitStore {
                 "requested permit validity is outside the trusted policy window".into(),
             ));
         }
-        let permit_id = derive_permit_id(&execution_identity_material(
-            binding,
-            purpose,
-            &delegation_ceiling,
-            &executable_authority,
-        )?)?;
-        let permit = ExecutionPermitV1 {
-            permit_id,
-            binding: binding.clone(),
-            purpose,
-            delegation_ceiling,
-            executable_authority,
-        };
-        PermitEvidenceV1::from_record(&PermitRecordV1 {
-            permit: permit.clone(),
-            state: PermitStateV1::Issued,
-            child_allocations: std::collections::BTreeMap::new(),
-        })?;
         self.with_lock(|| {
+            let parent = binding
+                .parent_permit_id
+                .as_ref()
+                .map(|parent_id| {
+                    self.read_record(parent_id)
+                        .map_err(|_| rejected(parent_id, PermitRejectionReasonV1::WrongParent))
+                })
+                .transpose()?;
+            let delegation_identity = parent
+                .as_ref()
+                .map(|parent| derive_delegation_identity(&parent.permit, binding))
+                .transpose()?;
+            let permit_id = derive_permit_id(&execution_identity_material(
+                binding,
+                purpose,
+                &delegation_ceiling,
+                &delegation_identity,
+                &executable_authority,
+            )?)?;
+            let permit = ExecutionPermitV1 {
+                permit_id,
+                binding: binding.clone(),
+                purpose,
+                delegation_ceiling: delegation_ceiling.clone(),
+                delegation_identity,
+                executable_authority: executable_authority.clone(),
+            };
+            PermitEvidenceV1::from_record(&PermitRecordV1 {
+                permit: permit.clone(),
+                state: PermitStateV1::Issued,
+                child_allocations: std::collections::BTreeMap::new(),
+            })?;
             let record = PermitRecordV1 {
                 permit: permit.clone(),
                 state: PermitStateV1::Issued,
@@ -943,10 +1058,7 @@ impl DurablePermitStore {
                 }
                 Err(error) => return Err(error),
             };
-            if let Some(parent_id) = &binding.parent_permit_id {
-                let mut parent = self
-                    .read_record(parent_id)
-                    .map_err(|_| rejected(parent_id, PermitRejectionReasonV1::WrongParent))?;
+            if let Some(mut parent) = parent {
                 validate_parent_binding(&permit, &parent, trusted_now)?;
 
                 // Treat the parent allocation map as the durable reservation
@@ -979,10 +1091,10 @@ impl DurablePermitStore {
                 self.replace_record(&parent, None)?;
             }
             if existing_child.is_some() {
-                return Ok(permit.clone());
+                return Ok(permit);
             }
             self.replace_record(&record, None)?;
-            Ok(permit.clone())
+            Ok(permit)
         })
     }
 
@@ -1288,6 +1400,26 @@ fn validate_dispatch(
     Ok(())
 }
 
+fn derive_delegation_identity(
+    parent: &ExecutionPermitV1,
+    child_binding: &PermitBindingV1,
+) -> Result<DelegationIdentityV1, PolicyError> {
+    let parent_depth = parent
+        .delegation_identity
+        .as_ref()
+        .map_or(0, |identity| identity.depth);
+    let identity = DelegationIdentityV1 {
+        actor: parent.binding.actor.clone(),
+        delegate: child_binding.actor.clone(),
+        audience: child_binding.tool.clone(),
+        depth: parent_depth
+            .checked_add(1)
+            .ok_or_else(|| PolicyError::InvalidLease("delegation depth overflow".into()))?,
+    };
+    identity.validate()?;
+    Ok(identity)
+}
+
 fn validate_parent_binding(
     child: &ExecutionPermitV1,
     parent: &PermitRecordV1,
@@ -1314,21 +1446,13 @@ fn validate_parent_permits(
         .delegation_ceiling
         .as_ref()
         .ok_or_else(|| rejected(child_id, PermitRejectionReasonV1::WrongParent))?;
-    let action = ceiling.actions.iter().find(|action| {
-        action.tool == child_binding.tool
-            && action.action_digest == child_binding.action_digest
-            && action.args_digest == child_binding.args_digest
-    });
-    let Some(action) = action else {
-        return Err(rejected(child_id, PermitRejectionReasonV1::WrongAction));
-    };
     let roots_subset = |child_roots: &[String], parent_roots: &[String]| {
         child_roots.iter().all(|root| parent_roots.contains(root))
     };
+    let expected_identity = derive_delegation_identity(parent, child_binding)?;
     if !parent_is_active
         || parent.purpose != PermitPurposeV1::Control
-        || child.purpose != PermitPurposeV1::Effect
-        || !matches!(ceiling.transition, DelegationTransitionV1::ControlToEffect)
+        || child.delegation_identity.as_ref() != Some(&expected_identity)
         || now < parent_binding.not_before
         || now >= parent_binding.expires_at
         || now < ceiling.not_before
@@ -1346,17 +1470,76 @@ fn validate_parent_permits(
         || child_binding.expires_at > parent_binding.expires_at
         || child_binding.expires_at > ceiling.expires_at
         || !child_binding.budget.is_within(&ceiling.budget)
-        || child_binding.effect.scope_name != action.effect.scope_name
-        || child_binding.effect.network_allowed != action.effect.network_allowed
-        || !roots_subset(&child_binding.effect.read_roots, &action.effect.read_roots)
-        || !roots_subset(
-            &child_binding.effect.write_roots,
-            &action.effect.write_roots,
-        )
-        || child_binding.effect_digest != content_digest(&child_binding.effect)?
-        || child.executable_authority != action.executable_authority
     {
         return Err(rejected(child_id, PermitRejectionReasonV1::WrongParent));
+    }
+    match child.purpose {
+        PermitPurposeV1::Effect => {
+            let action = ceiling.actions.iter().find(|action| {
+                action.tool == child_binding.tool
+                    && action.action_digest == child_binding.action_digest
+                    && action.args_digest == child_binding.args_digest
+            });
+            let Some(action) = action else {
+                return Err(rejected(child_id, PermitRejectionReasonV1::WrongAction));
+            };
+            if !matches!(ceiling.transition, DelegationTransitionV1::ControlToEffect)
+                || child.delegation_ceiling.is_some()
+                || !ceiling.audiences.contains(&child_binding.tool)
+                || child_binding.effect.scope_name != action.effect.scope_name
+                || child_binding.effect.network_allowed != action.effect.network_allowed
+                || !roots_subset(&child_binding.effect.read_roots, &action.effect.read_roots)
+                || !roots_subset(
+                    &child_binding.effect.write_roots,
+                    &action.effect.write_roots,
+                )
+                || child_binding.effect_digest != content_digest(&child_binding.effect)?
+                || child.executable_authority != action.executable_authority
+            {
+                return Err(rejected(child_id, PermitRejectionReasonV1::WrongParent));
+            }
+        }
+        PermitPurposeV1::Control => {
+            let child_ceiling = child
+                .delegation_ceiling
+                .as_ref()
+                .ok_or_else(|| rejected(child_id, PermitRejectionReasonV1::WrongParent))?;
+            child_ceiling.validate()?;
+            let actions_within_parent = child_ceiling.actions.iter().all(|child_action| {
+                ceiling.actions.iter().any(|parent_action| {
+                    child_action.tool == parent_action.tool
+                        && child_action.action_digest == parent_action.action_digest
+                        && child_action.args_digest == parent_action.args_digest
+                        && child_action.effect == parent_action.effect
+                        && child_action.effect_digest == parent_action.effect_digest
+                        && child_action.executable_authority == parent_action.executable_authority
+                })
+            });
+            let audiences_within_parent = child_ceiling.audiences.iter().all(|child_audience| {
+                ceiling
+                    .actions
+                    .iter()
+                    .any(|parent_action| parent_action.tool == *child_audience)
+            });
+            let strict_subset = child_ceiling.actions.len() < ceiling.actions.len()
+                || child_ceiling.budget != ceiling.budget
+                || child_ceiling.not_before > ceiling.not_before
+                || child_ceiling.expires_at < ceiling.expires_at;
+            if !matches!(ceiling.transition, DelegationTransitionV1::ControlToControl)
+                || !ceiling.audiences.contains(&child_binding.tool)
+                || child_ceiling.actor != child_binding.actor
+                || child_ceiling.policy_version != child_binding.policy_version
+                || child_ceiling.run_id != child_binding.run_id
+                || child_ceiling.not_before < ceiling.not_before
+                || child_ceiling.expires_at > ceiling.expires_at
+                || !child_ceiling.budget.is_within(&ceiling.budget)
+                || !actions_within_parent
+                || !audiences_within_parent
+                || !strict_subset
+            {
+                return Err(rejected(child_id, PermitRejectionReasonV1::WrongParent));
+            }
+        }
     }
     Ok(())
 }
@@ -1373,6 +1556,7 @@ pub fn validate_delegation_evidence(
         binding: parent.binding.clone(),
         purpose: parent.purpose,
         delegation_ceiling: parent.delegation_ceiling.clone(),
+        delegation_identity: parent.delegation_identity.clone(),
         executable_authority: parent.executable_authority.clone(),
     };
     let child_permit = ExecutionPermitV1 {
@@ -1380,9 +1564,26 @@ pub fn validate_delegation_evidence(
         binding: child.binding.clone(),
         purpose: child.purpose,
         delegation_ceiling: child.delegation_ceiling.clone(),
+        delegation_identity: child.delegation_identity.clone(),
         executable_authority: child.executable_authority.clone(),
     };
-    validate_parent_permits(&child_permit, &parent_permit, true, at)
+    validate_parent_permits(
+        &child_permit,
+        &parent_permit,
+        matches!(parent.state, PermitEvidenceStateV1::Issued),
+        at,
+    )
+}
+
+/// Validate one persisted attenuation edge without creating a second authority store.
+/// The durable `DurablePermitStore::issue_effect` path derives and records the
+/// proof under its lock, so callers cannot supply an alternate identity or depth.
+pub fn validate_delegation_attenuation(
+    parent: &PermitEvidenceV1,
+    child: &PermitEvidenceV1,
+    at: DateTime<Utc>,
+) -> Result<(), PolicyError> {
+    validate_delegation_evidence(parent, child, at)
 }
 
 fn rejected(permit_id: &CurrentPermitId, reason: PermitRejectionReasonV1) -> PolicyError {

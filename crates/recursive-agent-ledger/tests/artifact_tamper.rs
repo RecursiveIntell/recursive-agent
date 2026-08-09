@@ -9,8 +9,8 @@ use recursive_agent_ledger::{
 };
 use recursive_agent_policy::{
     ActorPrincipalV1, DelegatedActionV1, DelegationCeilingV1, DelegationTransitionV1,
-    EffectScopeV1, ExecutionPermitV1, PermitBindingV1, PermitBudgetV1, PermitEvidenceV1,
-    PermitRecordV1, PermitRevocationReasonV1, PermitStateV1,
+    DurablePermitStore, EffectScopeV1, ExecutionPermitV1, PermitBindingV1, PermitBudgetV1,
+    PermitEvidenceV1, PermitRecordV1, PermitRevocationReasonV1, PermitStateV1,
 };
 
 type TestResult = Result<(), Box<dyn std::error::Error>>;
@@ -104,6 +104,7 @@ fn fixture() -> Result<Fixture, Box<dyn std::error::Error>> {
         policy_version: binding.policy_version.clone(),
         run_id: run.clone(),
         transition: DelegationTransitionV1::ControlToEffect,
+        audiences: vec![binding.tool.clone()],
         actions: vec![DelegatedActionV1 {
             tool: binding.tool.clone(),
             action_digest: binding.action_digest.clone(),
@@ -116,9 +117,12 @@ fn fixture() -> Result<Fixture, Box<dyn std::error::Error>> {
         not_before: time,
         expires_at: binding.expires_at,
     };
-    let control = ExecutionPermitV1::control(control_binding, ceiling)?;
+    let root = tempfile::tempdir()?;
+    let root_file = std::fs::File::open(root.path())?;
+    let store = DurablePermitStore::from_dir_fd(&root_file)?;
+    let control = store.issue_control(&control_binding, ceiling, time)?;
     binding.parent_permit_id = Some(control.permit_id.clone());
-    let permit = ExecutionPermitV1::effect(binding, Vec::new())?;
+    let permit = store.issue_effect(&binding, Vec::new(), time)?;
     let lineage_for = |permit: &ExecutionPermitV1| {
         [
             LineageOrigin::Request,

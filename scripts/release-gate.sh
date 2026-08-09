@@ -7,6 +7,11 @@ cd "$(dirname "$0")/.."
 LOG_DIR="docs/receipts"
 mkdir -p "$LOG_DIR"
 
+# The canonical run ID is deterministic. Keep release evidence isolated from
+# previous policy generations so a stale run cannot be mistaken for this build.
+RUN_ROOT=$(mktemp -d)
+trap 'rm -rf "$RUN_ROOT"' EXIT
+
 run() {
     local name="$1"
     shift
@@ -34,7 +39,7 @@ cargo run -q -p recursive-agent-cli -- doctor | tee "$LOG_DIR/ra-doctor.log"
 echo "::endgroup::"
 
 echo "::group::ra run fixtures/hello-run.json"
-RUN_OUT=$(cargo run -q -p recursive-agent-cli -- run --spec fixtures/hello-run.json)
+RUN_OUT=$(cargo run -q -p recursive-agent-cli -- run --spec fixtures/hello-run.json --out "$RUN_ROOT")
 echo "$RUN_OUT" | tee "$LOG_DIR/ra-run.log"
 RUN_DIR=$(printf '%s' "$RUN_OUT" | python3 -c '
 import json

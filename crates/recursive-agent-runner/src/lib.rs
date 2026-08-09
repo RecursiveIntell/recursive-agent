@@ -17,6 +17,7 @@ pub use runtime::{
 };
 pub use scheduler::{OperationRow, ProjectedState, SchedulerStore, SchedulerStoreError};
 
+use std::collections::{BTreeMap, BTreeSet};
 use std::fs::File;
 use std::os::fd::AsFd;
 use std::os::unix::fs::MetadataExt;
@@ -1173,7 +1174,7 @@ fn lifecycle_authority(
     prepared: &[Option<sandbox_engine::PreparedDispatch>],
 ) -> Result<(DelegationCeilingV1, PermitBindingV1), RunError> {
     let actor = ActorPrincipalV1::try_new("recursive-agent")?;
-    let mut actions = Vec::with_capacity(spec.steps.len());
+    let mut actions = BTreeMap::new();
     let mut total = PermitBudgetV1 {
         max_wall_time_ms: 0,
         max_output_bytes: 0,
@@ -1217,18 +1218,27 @@ fn lifecycle_authority(
             Vec::new,
             sandbox_engine::PreparedDispatch::executable_authority,
         );
-        actions.push(DelegatedActionV1 {
+        let action = DelegatedActionV1 {
             tool: step.call.tool.clone(),
             action_digest: content_digest(&step.call)?,
             args_digest: content_digest(&step.call.args)?,
             effect_digest: content_digest(&effect)?,
             effect,
             executable_authority,
-        });
+        };
+        let action_id = content_digest(&action)?.hex().to_owned();
+        actions.entry(action_id).or_insert(action);
     }
     if actions.is_empty() {
         return Err(PolicyError::InvalidLease("run spec must contain a step".into()).into());
     }
+    let audiences = actions
+        .values()
+        .map(|action| action.tool.clone())
+        .collect::<BTreeSet<_>>()
+        .into_iter()
+        .collect::<Vec<_>>();
+    let actions = actions.into_values().collect::<Vec<_>>();
     let validity_ms = total
         .max_wall_time_ms
         .checked_add(5_000)
@@ -1257,6 +1267,7 @@ fn lifecycle_authority(
         policy_version: policy_version.into(),
         run_id: run_id.clone(),
         transition: DelegationTransitionV1::ControlToEffect,
+        audiences,
         actions,
         budget: total.clone(),
         not_before: trusted_now,
