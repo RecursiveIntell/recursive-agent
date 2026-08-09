@@ -1,32 +1,54 @@
 # Phase 7.2 audit handoff
 
-## Verified source phase: 7.2A contracts and family policy
+## Current evidence state
 
-- V1 ingress now admits only direct root operations. A V2-tagged/delegated shape cannot enter through the V1 parser.
-- V2 child envelopes carry closed parent/root/permit/receipt/budget/digest proof. The child material digest excludes the proof to avoid circularity; the complete child operation ID binds the proof.
-- `FamilyAuthorityStore` is a separate descriptor-rooted store. It does not modify `DurablePermitStore` or scheduler semantics. It atomically reserves child budgets, retains idempotent child requests, rejects widened/over-budget/root-mismatched requests, and fails closed after parent revocation.
-- Phase 7.2A focused package checks passed on a stable source-status digest. See `CHANGE_RECEIPT.json` and `VALIDATION_MATRIX.csv`.
+**Implemented and workspace-verified, but not fully adversarially certified.**
 
-## Independent audit required before Phase 7.2B implementation
+The Phase 7.2 source sequence is now committed through:
 
-Read current source, not this handoff, then verify the blocker in `PHASE_7_2B_BLOCKED.md`:
+- `9388911` — attenuated family policy
+- `9cc7367` — V2 family-authority contracts
+- `ca00d31` — ledger links and scheduler projection
+- `66f9542` — authority-free pre-admission proposal
+- `8b7501c` — runtime-owned V2 live parent lifecycle
+- `01bd225` — cancelled live-parent terminal closure
 
-1. `RuntimeService::submit` is synchronous and its public `RuntimeHandleV1` exists only after terminal receipt verification.
-2. Runner finalizes the parent chain before returning the handle.
-3. Existing child effects are derived from a same-run `DurablePermitStore` control permit.
+`CHANGE_RECEIPT.json` is the current machine-readable evidence record.
 
-A child-runtime implementation is admissible only after a new V2 live-parent lifecycle creates appendable parent admission state and family-root authority before child dispatch. Reject any proposal that appends a child link after parent finalization, treats the family reservation as advisory, or lets scheduler state satisfy authority/closure verification.
+## Verified implementation boundaries
 
-## Auditor rerun commands
+- `RuntimeService::submit` remains the V1 synchronous terminal path.
+- `RuntimeService::begin_parent_v2` executes the direct root steps while retaining a runtime-owned appendable parent chain and family authority.
+- `submit_child` accepts only `ChildOperationProposalV2`. It appends `ChildAdmissionPrepared`, strictly reads it back, then derives the closed envelope and atomically reserves through `FamilyAuthorityStore`.
+- `ChildLinked` carries the immutable content-addressed link before child dispatch.
+- The child runner checks the family guard before and after every effect; the child chain is strictly verified from its canonical run directory before `ChildClosed` is appended.
+- `finalize` requires every prepared child to have exactly one verified closure. Parent cancellation revokes family authority, rejects new admission, writes `ParentCancelled`, and finalizes as `Cancelled` rather than success.
+- Scheduler parent/root/child fields remain projection-only and do not mint authority, reserve budget, or verify closure.
+
+## Verified commands
 
 ```bash
-cargo fmt --manifest-path crates/recursive-agent-contracts/Cargo.toml -- --check
-cargo fmt --manifest-path crates/recursive-agent-policy/Cargo.toml -- --check
-cargo test -p recursive-agent-contracts --tests
-cargo test -p recursive-agent-policy --tests
-cargo clippy -p recursive-agent-contracts -p recursive-agent-policy --all-targets -- -D warnings
+cargo test -p recursive-agent-contracts --tests --no-fail-fast
+cargo test -p recursive-agent-policy --tests --no-fail-fast
+cargo test -p recursive-agent-runner --test phase2_runtime_service --no-fail-fast
+cargo test --workspace --all-targets --no-fail-fast
+cargo clippy --workspace --all-targets -- -D warnings
+cargo fmt --all -- --check
 ```
+
+All commands exited zero on the frozen source generation preceding this handoff.
+
+## Remaining certification delta
+
+Do **not** mark Phase 7.2 complete yet. Add focused adversarial fixtures for:
+
+1. tampered `ChildRunLinkV1` artifact bytes;
+2. altered parent admission receipt ID;
+3. duplicate link and duplicate closure;
+4. missing closure;
+5. mismatched child terminal state and chain head;
+6. a queued or in-flight child cancellation race.
 
 ## Rollback
 
-Revert the Phase 7.2A checkpoint only; quarantine/delete new family-authority runtime roots; deny V2 child admission. Preserve all existing V1 evidence unchanged.
+Revert `01bd225` and `8b7501c` to remove the live-parent lane; revert earlier Phase 7.2 commits only for full feature rollback. Quarantine family-state directories under the selected runtime root. Preserve parent/child receipts and permits; deny new V2 admission rather than rewriting evidence.

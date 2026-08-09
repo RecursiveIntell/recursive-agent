@@ -1,12 +1,13 @@
 gate_id,claim_or_invariant,command_or_witness,required,status,evidence_ref,notes
-G-000,source identity and owner map reviewed,git status/log + source inspection,true,PASS,PRECHECK.json;OWNER_MAP.yaml,head 9388911 before Phase 7.2A checkpoint
-G-001,current single-run policy rejects cross-run child permits,validate_parent_permits source at policy lib lines 1436-1544,true,PASS,PHASE_CONTRACT.md,old single-run invariant preserved
-G-002,scheduler is not authority truth,scheduler module header and APIs,true,PASS,PHASE_CONTRACT.md,projection only; untouched
-G-003,contracts/policy phase is bounded,PHASE_7_2A_CONTRACTS_POLICY.md,true,PASS,PHASE_7_2A_CONTRACTS_POLICY.md,V1 preserved as direct-root-only; policy family store is separate
-G-004,Agent Graph council receipt,graph_create capacity response,false,BLOCKED,PHASE_CONTRACT.md,live registry capacity 256 exhausted with 259 registered graphs
-G-005,V1 ingress and V2 child contract,cargo test -p recursive-agent-contracts --tests,true,PASS,CHANGE_RECEIPT.json,33 tests pass; RED observed before V1 ingress repair
-G-006,family authority attenuation/reservation,cargo test -p recursive-agent-policy --tests,true,PASS,CHANGE_RECEIPT.json,20 tests pass; concurrency/retry/revocation covered
-G-007,package lint gate,cargo clippy -p recursive-agent-contracts -p recursive-agent-policy --all-targets -- -D warnings,true,PASS,CHANGE_RECEIPT.json,final frozen 7.2A source generation
-G-008,package format gate,cargo fmt --manifest-path package Cargo.toml -- --check,true,PASS,CHANGE_RECEIPT.json,contracts and policy checks pass
-G-009,runner/ledger causal child closure,PHASE_7_2B_BLOCKED.md,true,BLOCKED,PHASE_7_2B_BLOCKED.md,current terminal-only RuntimeHandle cannot satisfy required admission-before-finalization ordering
-G-010,workspace/release certification,workspace/release gate on final source,true,NOT_RUN,PHASE_7_2B_BLOCKED.md,dependent runner/ledger phase is not admitted
+G-000,source identity and owner map reviewed,git status/log + source inspection,true,PASS,PRECHECK.json;OWNER_MAP.yaml,phase began from 9388911 and source commits are recorded in CHANGE_RECEIPT.json
+G-001,V1 ingress and terminal submit semantics remain closed,cargo test -p recursive-agent-contracts --tests,true,PASS,CHANGE_RECEIPT.json,V1 remains direct-root-only; RuntimeService::submit does not create a live parent
+G-002,scheduler remains non-authoritative,scheduler source inspection and family-store ownership,true,PASS,CHANGE_RECEIPT.json,parent/root/children are derived projection fields only
+G-003,V2 live parent owns appendable parent chain and family authority,cargo test -p recursive-agent-runner --test phase2_runtime_service,true,PASS,CHANGE_RECEIPT.json,begin_parent_v2 is separate from V1 submit
+G-004,parent admission precedes reservation and link precedes dispatch,live_parent_v2_binds_child_admission_before_dispatch_and_finalizes_only_after_closure,true,PASS,CHANGE_RECEIPT.json,parent receipt lifecycle and source ordering verified by focused integration test
+G-005,V1 ingress and V2 child contract,cargo test -p recursive-agent-contracts --tests --no-fail-fast,true,PASS,CHANGE_RECEIPT.json,V2 proposal is authority-free; closed envelope is runtime-derived
+G-006,family authority attenuation/reservation,cargo test -p recursive-agent-policy --tests --no-fail-fast,true,PASS,CHANGE_RECEIPT.json,concurrency retry and revocation covered
+G-007,cancelled parent denies new child admission and closes cancelled,cargo test -p recursive-agent-runner --test phase2_runtime_service,true,PASS,CHANGE_RECEIPT.json,ParentCancelled precedes RunFinalized
+G-008,workspace test gate,cargo test --workspace --all-targets --no-fail-fast,true,PASS,CHANGE_RECEIPT.json,full workspace exit code 0
+G-009,workspace lint and format,cargo clippy --workspace --all-targets -- -D warnings && cargo fmt --all -- --check,true,PASS,CHANGE_RECEIPT.json,exit code 0
+G-010,link tamper matrix,dedicated regression fixtures,true,NOT_RUN,CHANGE_RECEIPT.json,missing altered parent receipt ID duplicate link missing closure terminal state and chain-head cases
+G-011,queued or in-flight cancellation race,dedicated concurrent lifecycle regression,true,NOT_RUN,CHANGE_RECEIPT.json,current live-parent child submission is synchronous; only pre-admission revocation is tested
