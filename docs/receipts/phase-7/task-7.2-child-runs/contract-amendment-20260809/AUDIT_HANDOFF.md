@@ -2,7 +2,7 @@
 
 ## Current evidence state
 
-**Implemented and workspace-verified; two decisive adversarial regressions are now passed, but the full semantic tamper matrix is still incomplete.**
+**Phase 7.2B is implementation-complete and workspace-verified, including the semantic child-link tamper matrix.**
 
 The Phase 7.2 source sequence is now committed through:
 
@@ -36,21 +36,17 @@ cargo clippy --workspace --all-targets -- -D warnings
 cargo fmt --all -- --check
 ```
 
-On 2026-08-09, the focused runner gate passed 12/12 tests after adding:
+On 2026-08-09, the focused runner gate passed 13/13 tests after adding:
 
 - `live_parent_strict_verification_rejects_tampered_link_and_closure_artifacts`, which corrupts the immutable artifacts referenced by both `ChildLinked` and `ChildClosed` and proves strict parent verification rejects them.
 - `live_parent_cancellation_during_child_effect_prevents_child_success_and_cancels_parent`, which holds a real admitted child effect in flight, revokes the parent family, releases the effect, and proves the post-effect guard prevents child success while the parent closes `Cancelled`.
+- `live_parent_strict_verification_rejects_semantic_child_link_matrix_with_valid_descriptors`, which covers altered admission ID, duplicate link/closure, missing closure, and mismatched terminal-state/chain-head. The test rebuilds parent receipt chains with content-addressed descriptors and valid chain digests: canonical append validation rejects semantically invalid records before persistence, and strict runtime verification rejects any such chain that survives construction.
 
 `cargo clippy --workspace --all-targets -- -D warnings`, `cargo test --workspace --all-targets --no-fail-fast`, `cargo fmt --all -- --check`, and `git diff --check` all exited zero on this source generation. The workspace crash-recovery test deliberately prints one losing child-process append race before its enclosing test confirms the expected race-safe pass.
 
-## Remaining certification delta
+## Certification state
 
-Do **not** mark Phase 7.2 complete yet. The immutable-artifact and in-flight race gates are covered; add focused semantic fixtures for:
-
-1. altered parent admission receipt ID;
-2. duplicate link and duplicate closure;
-3. missing closure receipt;
-4. mismatched child terminal state and chain head with otherwise valid artifact descriptors.
+No Phase 7.2 implementation or validation delta remains. The next authority gate is a bounded checkpoint commit containing only the semantic-matrix test and this updated receipt packet. The scope remains local-only: no push, release, provider, remote-worker, CLI/MCP delegation command, or `/home/sikmindz/Coding/Libraries` change is covered by this certification.
 
 ## Rollback
 

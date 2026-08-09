@@ -11,11 +11,14 @@ use llm_tool_runtime::{
 use recursive_agent_contracts::{
     content_digest, derive_operation_id, ActorAuthorityV1, AuthorityOriginV1, CausalLinkV1,
     ChildOperationProposalV2, ContentDigest, DeclaredEffectsV1, OperationBudgetV1,
-    OperationEnvelopeV1, OperationSchemaV1, ProvenanceRefV1, ReceiptKindV1, ReplayClassV1,
-    ReplayIntentV1, ReplaySpecV1, RunSpecV1, RunTerminalStateV1, RuntimeEventKindV1, StepSpecV1,
-    ToolCallSpecV1,
+    OperationEnvelopeV1, OperationSchemaV1, ProvenanceRefV1, ReceiptKindV1, ReceiptV1,
+    ReplayClassV1, ReplayIntentV1, ReplaySpecV1, RunSpecV1, RunTerminalStateV1, RuntimeEventKindV1,
+    StepSpecV1, ToolCallSpecV1,
 };
-use recursive_agent_ledger::{verified_snapshot_directory_bound, ArtifactStore, RunPaths};
+use recursive_agent_ledger::{
+    make_receipt, open, put_string, verified_snapshot_directory_bound, ArtifactStore,
+    ChildRunLinkV1, ReceiptDraftV1, RunPaths,
+};
 use recursive_agent_provider::{ProviderSpecV1, ValidatedEndpoint};
 use recursive_agent_runner::{
     Clock, RuntimeCancelResultV1, RuntimeDependencies, RuntimeDependencyError,
@@ -221,6 +224,63 @@ fn child_proposal(
         replay: parent.replay.clone(),
         run_spec,
     })
+}
+
+/// Rebuild a parent chain after replacing only a child-link artifact. This keeps
+/// every artifact descriptor and every receipt-chain digest valid, so rejection
+/// below proves semantic cross-run verification rather than byte-tamper detection.
+fn rebuild_parent_chain(
+    run_dir: &std::path::Path,
+    mutate: impl FnOnce(&mut Vec<ReceiptV1>, &ArtifactStore) -> Result<(), Box<dyn std::error::Error>>,
+) -> Result<(), Box<dyn std::error::Error>> {
+    let paths = RunPaths::new(run_dir);
+    let snapshot = verified_snapshot_directory_bound(&paths)?;
+    let root = std::fs::File::open(run_dir)?;
+    let store = ArtifactStore::from_run_root_fd(&root, false)?;
+    let mut receipts = snapshot.receipts().to_vec();
+    mutate(&mut receipts, &store)?;
+
+    std::fs::remove_file(paths.receipts_path())?;
+    std::fs::remove_file(paths.chain_meta_path())?;
+    let mut chain = open(&paths)?;
+    for receipt in receipts {
+        let replacement = make_receipt(
+            ReceiptDraftV1 {
+                run_id: receipt.run_id,
+                step_id: receipt.step_id,
+                kind: receipt.kind,
+                valid_time: receipt.valid_time,
+                lineage: receipt.lineage,
+                spec_digest: receipt.spec_digest,
+                args_digest: receipt.args_digest,
+                artifact_refs: receipt.artifact_refs,
+                outcome: receipt.outcome,
+            },
+            chain.head().clone(),
+        )?;
+        chain.append(replacement)?;
+    }
+    Ok(())
+}
+
+fn replace_child_link_artifact(
+    receipts: &mut [ReceiptV1],
+    store: &ArtifactStore,
+    receipt_kind: ReceiptKindV1,
+    mutate: impl FnOnce(&mut ChildRunLinkV1),
+) -> Result<(), Box<dyn std::error::Error>> {
+    let receipt = receipts
+        .iter_mut()
+        .find(|receipt| receipt.kind == receipt_kind)
+        .ok_or("missing child-link receipt")?;
+    let descriptor = receipt
+        .artifact_refs
+        .first()
+        .ok_or("missing child-link descriptor")?;
+    let mut link: ChildRunLinkV1 = serde_json::from_slice(&store.get(descriptor)?)?;
+    mutate(&mut link);
+    receipt.artifact_refs = vec![put_string(store, &serde_json::to_string(&link)?)?];
+    Ok(())
 }
 
 fn slow_shell_operation() -> Result<OperationEnvelopeV1, Box<dyn std::error::Error>> {
@@ -501,6 +561,87 @@ fn live_parent_strict_verification_rejects_tampered_link_and_closure_artifacts(
             service.verify(parent_handle.run_id()).is_err(),
             "strict verification must reject tampered {receipt_kind:?} bytes"
         );
+    }
+    Ok(())
+}
+
+#[test]
+fn live_parent_strict_verification_rejects_semantic_child_link_matrix_with_valid_descriptors(
+) -> Result<(), Box<dyn std::error::Error>> {
+    for case in [
+        "altered-admission",
+        "duplicate-link",
+        "duplicate-closure",
+        "missing-closure",
+        "terminal-state-mismatch",
+        "chain-head-mismatch",
+    ] {
+        let output_root = tempfile::tempdir()?;
+        let parent = sample_operation()?;
+        let child = child_proposal(&parent)?;
+        let service = RuntimeService::new(service_dependencies(output_root.path())?);
+        let mut live_parent = service.begin_parent_v2(&parent)?;
+        let _child_handle = live_parent.submit_child(&child)?;
+        let parent_handle = live_parent.finalize()?;
+
+        let result = rebuild_parent_chain(parent_handle.run_dir(), |receipts, store| {
+            match case {
+                "altered-admission" => {
+                    let unrelated_receipt_id = receipts
+                        .iter()
+                        .find(|receipt| receipt.kind == ReceiptKindV1::RunStarted)
+                        .ok_or("missing RunStarted receipt")?
+                        .receipt_id
+                        .clone();
+                    replace_child_link_artifact(
+                        receipts,
+                        store,
+                        ReceiptKindV1::ChildLinked,
+                        |link| link.parent_receipt_id = unrelated_receipt_id,
+                    )?;
+                }
+                "duplicate-link" | "duplicate-closure" => {
+                    let kind = if case == "duplicate-link" {
+                        ReceiptKindV1::ChildLinked
+                    } else {
+                        ReceiptKindV1::ChildClosed
+                    };
+                    let index = receipts
+                        .iter()
+                        .position(|receipt| receipt.kind == kind)
+                        .ok_or("missing child receipt to duplicate")?;
+                    receipts.insert(index + 1, receipts[index].clone());
+                }
+                "missing-closure" => {
+                    receipts.retain(|receipt| receipt.kind != ReceiptKindV1::ChildClosed);
+                }
+                "terminal-state-mismatch" => replace_child_link_artifact(
+                    receipts,
+                    store,
+                    ReceiptKindV1::ChildClosed,
+                    |link| link.child_terminal_state = Some(RunTerminalStateV1::Cancelled),
+                )?,
+                "chain-head-mismatch" => replace_child_link_artifact(
+                    receipts,
+                    store,
+                    ReceiptKindV1::ChildClosed,
+                    |link| link.child_chain_head = Some("00".repeat(32)),
+                )?,
+                _ => return Err(format!("unknown semantic child-link case: {case}").into()),
+            }
+            Ok(())
+        });
+
+        match result {
+            Ok(()) => assert!(
+                service.verify(parent_handle.run_id()).is_err(),
+                "strict verification must reject semantic child-link case {case} even when descriptors and chain are valid"
+            ),
+            Err(error) => assert!(
+                error.to_string().to_lowercase().contains("child"),
+                "receipt construction must reject semantic child-link case {case}: {error}"
+            ),
+        }
     }
     Ok(())
 }

@@ -2,19 +2,21 @@
   "schema": "ChangeReceiptV1",
   "version": 1,
   "task_id": "20260809T185635Z-phase-7-2-causal-family-child-run-contract-amendment",
-  "evidence_cutoff": "2026-08-09T22:10:44Z",
+  "evidence_cutoff": "2026-08-09T22:17:24Z",
   "goal": "Implement the V2 live-parent child-run lifecycle without widening V1 semantics or granting scheduler authority.",
   "source_identity": {
     "root": "/home/sikmindz/Coding/recursive-agent",
     "branch": "main",
-    "head": "01bd225",
+    "head": "9810ff7 + semantic-matrix working tree",
     "commits": [
       "9388911 feat(policy): enforce attenuated child authority",
       "9cc7367 feat(child-runs): add v2 family authority contracts",
       "ca00d31 feat(child-runs): add ledger links and scheduler projection",
       "66f9542 feat(child-runs): split pre-admission child proposal",
       "8b7501c feat(child-runs): add live parent lifecycle",
-      "01bd225 fix(child-runs): finalize cancelled live parents"
+      "01bd225 fix(child-runs): finalize cancelled live parents",
+      "e71215c docs(receipts): record phase 7.2 implementation state",
+      "9810ff7 test(child-runs): cover tamper and in-flight cancellation"
     ]
   },
   "changed_paths": [
@@ -57,7 +59,7 @@
       "command": "cargo test -p recursive-agent-runner --test phase2_runtime_service --no-fail-fast",
       "exit_code": 0,
       "status": "PASS",
-      "notes": "10 tests, including V2 parent/child closure and cancellation-before-admission."
+      "notes": "13 tests, including V2 parent/child closure, cancellation-before-admission, in-flight cancellation, byte-level artifact tampering, and the semantic link matrix."
     },
     {
       "gate_id": "G-010",
@@ -91,18 +93,23 @@
       "command": "git diff --check",
       "exit_code": 0,
       "status": "PASS"
+    },
+    {
+      "gate_id": "G-012",
+      "command": "cargo test -p recursive-agent-runner --test phase2_runtime_service live_parent_strict_verification_rejects_semantic_child_link_matrix_with_valid_descriptors -- --nocapture",
+      "exit_code": 0,
+      "status": "PASS",
+      "notes": "The matrix covers altered admission ID, duplicate link, duplicate closure, missing closure, terminal-state mismatch, and chain-head mismatch. It rebuilds test-only parent receipts with content-addressed descriptors and valid chain digests; canonical append validation rejects invalid lifecycle records before they can be persisted, otherwise strict runtime verification rejects them."
     }
   ],
-  "evidence_state": "verified for implemented package/workspace gates, immutable child-link/closure artifact tamper rejection, and the in-flight cancellation race; incomplete for the remaining semantic child-link matrix",
+  "evidence_state": "verified for all Phase 7.2B implementation, focused adversarial, lint/format, and workspace-test gates",
   "non_goals": [
     "provider, remote worker, CLI/MCP public delegation command, raw process scheduler, or /home/sikmindz/Coding/Libraries changes",
     "scheduler-owned authority, budget, or terminal verification",
     "V1 parser or RuntimeService::submit compatibility fallback"
   ],
-  "remaining_delta": [
-    "Add semantic ledger/runtime regressions using otherwise valid artifact descriptors for altered parent admission receipt ID, duplicate link/closure, missing closure receipt, mismatched child terminal state, and chain-head mismatch."
-  ],
+  "remaining_delta": [],
   "rollback": "Revert commits 01bd225 and 8b7501c, then the prior Phase 7.2 commits if a full rollback is required. Quarantine family-state directories below the runtime output root; preserve receipts and permits and deny new V2 admissions. Do not rewrite historical V1 evidence.",
-  "next_gate": "Implement and pass the remaining semantic child-link matrix before declaring Phase 7.2 fully certified.",
-  "complete": false
+  "next_gate": "Commit the bounded semantic-matrix test and updated Phase 7.2 receipt packet; no Phase 7.2 implementation delta remains.",
+  "complete": true
 }
