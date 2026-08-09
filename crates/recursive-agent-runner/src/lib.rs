@@ -29,9 +29,9 @@ use recursive_agent_contracts::{
     content_digest, derive_permit_id, derive_step_id, ActorAuthorityV1, ArtifactDescriptorV1,
     AuthorityOriginV1, CausalLinkV1, ContentDigest, ContractError, CurrentPermitId, CurrentRunId,
     CurrentStepId, DeclaredEffectsV1, OperationBudgetV1, OperationEnvelopeV1, OperationSchemaV1,
-    ProvenanceRefV1, ReceiptKindV1, ReceiptOutcomeV1, ReplayClassV1, ReplayIntentV1, ReplaySpecV1,
-    RunSpecV1, RunTerminalStateV1, StepSpecV1, ToolCallSpecV1, MAX_SHELL_OUTPUT_BYTES,
-    MAX_SHELL_TIMEOUT_MS,
+    ProvenanceRefV1, ReceiptKindV1, ReceiptOutcomeV1, RecordedReplayResultV1, ReplayClassV1,
+    ReplayIntentV1, ReplaySpecV1, RunSpecV1, RunTerminalStateV1, StepSpecV1, ToolCallSpecV1,
+    MAX_SHELL_OUTPUT_BYTES, MAX_SHELL_TIMEOUT_MS,
 };
 use recursive_agent_ledger::{
     make_receipt, open_from_dir_fd, put_string, ArtifactStore, ChainHandle, LedgerError,
@@ -1823,6 +1823,42 @@ pub fn replay(paths: &RunPaths) -> Result<ReplaySummary, RunError> {
             ReplayCapability::Unavailable
         },
     })
+}
+
+/// Replay recorded evidence from a portable Run Pack. The ledger first
+/// validates the manifest, filesystem safety, receipt chain, artifacts, and
+/// terminal lifecycle solely from the pack root. This projection has no
+/// executor, tool, provider, MCP, scheduler, or network dependency.
+pub fn replay_run_pack(pack_root: &Path) -> Result<RecordedReplayResultV1, RunError> {
+    let snapshot = recursive_agent_ledger::verified_run_pack_snapshot(pack_root)?;
+    let verification = snapshot.verification();
+    let source_run_id = verification.verified_run_id.clone().ok_or_else(|| {
+        RunError::Contract(ContractError::Malformed("missing run identity".into()))
+    })?;
+    let mut artifact_references = BTreeMap::<String, ArtifactDescriptorV1>::new();
+    for receipt in snapshot.receipts() {
+        for descriptor in &receipt.artifact_refs {
+            let key = descriptor.owner_id.to_string();
+            if let Some(existing) = artifact_references.insert(key.clone(), descriptor.clone()) {
+                if existing != *descriptor {
+                    return Err(RunError::Contract(ContractError::Malformed(format!(
+                        "verified pack has conflicting artifact descriptor {key}"
+                    ))));
+                }
+            }
+        }
+    }
+    let result = RecordedReplayResultV1 {
+        schema_version: RecordedReplayResultV1::SCHEMA_VERSION,
+        mode: RecordedReplayResultV1::MODE_RECORDED_EVIDENCE.into(),
+        source_run_id,
+        verification_manifest_digest: snapshot.pack_verification().manifest_digest.clone(),
+        verification_manifest_ref: RecordedReplayResultV1::VERIFICATION_MANIFEST_REF.into(),
+        terminal_classification: verification.terminal_state,
+        artifact_references: artifact_references.into_values().collect(),
+    };
+    result.validate()?;
+    Ok(result)
 }
 
 #[derive(Debug, Clone)]

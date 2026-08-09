@@ -364,6 +364,128 @@ impl RunSpecV1 {
     }
 }
 
+/// Portable, immutable projection of an already verified run. This is not a
+/// receipt manifest: it binds the complete exported filesystem and its source
+/// run identity, while the ledger remains authoritative for receipt semantics.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct RunPackFileEntryV1 {
+    pub path: String,
+    pub role: String,
+    pub byte_length: u64,
+    pub digest: ContentDigest,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct RunPackManifestV1 {
+    pub schema_version: u32,
+    pub source_run_id: CurrentRunId,
+    pub files: Vec<RunPackFileEntryV1>,
+}
+
+impl RunPackManifestV1 {
+    pub const SCHEMA_VERSION: u32 = 1;
+    pub fn validate(&self) -> Result<(), ContractError> {
+        if self.schema_version != Self::SCHEMA_VERSION || self.files.is_empty() {
+            return Err(ContractError::Malformed(
+                "unsupported or empty run-pack manifest".into(),
+            ));
+        }
+        let mut seen = std::collections::BTreeSet::new();
+        for entry in &self.files {
+            let p = std::path::Path::new(&entry.path);
+            if p.is_absolute()
+                || entry.path.is_empty()
+                || entry.path.contains('\\')
+                || entry.path.contains(':')
+                || entry.path.starts_with('/')
+                || entry
+                    .path
+                    .split('/')
+                    .any(|component| component.is_empty() || component == "." || component == "..")
+                || p.components().any(|component| {
+                    matches!(
+                        component,
+                        std::path::Component::ParentDir | std::path::Component::CurDir
+                    )
+                })
+                || !seen.insert(entry.path.clone())
+                || entry.role.is_empty()
+            {
+                return Err(ContractError::Malformed(format!(
+                    "unsafe or duplicate pack path: {}",
+                    entry.path
+                )));
+            }
+        }
+        Ok(())
+    }
+    pub fn canonical_bytes(&self) -> Result<Vec<u8>, ContractError> {
+        self.validate()?;
+        jcs_canonical(self)
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct PackVerificationResultV1 {
+    pub schema_version: u32,
+    pub ok: bool,
+    pub manifest_digest: ContentDigest,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct RecordedReplayResultV1 {
+    pub schema_version: u32,
+    pub mode: String,
+    pub source_run_id: CurrentRunId,
+    pub verification_manifest_digest: ContentDigest,
+    pub verification_manifest_ref: String,
+    pub terminal_classification: RunTerminalStateV1,
+    pub artifact_references: Vec<ArtifactDescriptorV1>,
+}
+
+impl RecordedReplayResultV1 {
+    pub const SCHEMA_VERSION: u32 = 1;
+    pub const MODE_RECORDED_EVIDENCE: &'static str = "recorded_evidence";
+    pub const VERIFICATION_MANIFEST_REF: &'static str = "PACK_MANIFEST.json";
+
+    pub fn validate(&self) -> Result<(), ContractError> {
+        if self.schema_version != Self::SCHEMA_VERSION
+            || self.mode != Self::MODE_RECORDED_EVIDENCE
+            || self.verification_manifest_ref != Self::VERIFICATION_MANIFEST_REF
+        {
+            return Err(ContractError::Malformed(
+                "unsupported recorded-evidence replay result".into(),
+            ));
+        }
+        let mut previous = None;
+        for descriptor in &self.artifact_references {
+            descriptor.validate()?;
+            let current = descriptor.owner_id.to_string();
+            if previous
+                .as_ref()
+                .is_some_and(|last: &String| last >= &current)
+            {
+                return Err(ContractError::Malformed(
+                    "recorded replay artifact references must be unique and ordered".into(),
+                ));
+            }
+            previous = Some(current);
+        }
+        Ok(())
+    }
+
+    /// JCS bytes suitable for an external `REPLAY_RESULT.json` projection.
+    /// The result is returned rather than written into the immutable pack.
+    pub fn canonical_bytes(&self) -> Result<Vec<u8>, ContractError> {
+        self.validate()?;
+        jcs_canonical(self)
+    }
+}
+
 pub const MAX_RUN_SPEC_INPUT_BYTES: u64 = 1024 * 1024;
 pub const MAX_RUN_SPEC_STEPS: usize = 4;
 pub const MAX_RUN_SPEC_MATERIAL_BYTES: usize = 512 * 1024;

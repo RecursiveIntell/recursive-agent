@@ -3,7 +3,7 @@
 use std::collections::{BTreeMap, BTreeSet};
 use std::fs::File;
 use std::io::{Read, Seek, SeekFrom, Write};
-use std::os::fd::AsFd;
+use std::os::fd::{AsFd, AsRawFd};
 #[cfg(unix)]
 use std::os::unix::fs::MetadataExt;
 use std::path::{Path, PathBuf};
@@ -14,10 +14,11 @@ use chrono::{DateTime, Utc};
 use recursive_agent_contracts::{
     content_digest, derive_artifact_id, derive_receipt_id, project_runtime_events,
     validate_receipt_sequence, ArtifactDescriptorV1, AuthorityLineageEntryV1, ContentDigest,
-    ContractError, CurrentRunId, CurrentStepId, LifecycleValidationMode, ReceiptIdentityMaterialV1,
-    ReceiptKindV1, ReceiptOutcomeV1, ReceiptV1, RunTerminalStateV1, RuntimeEventV1, GENESIS_SEED,
+    ContractError, CurrentRunId, CurrentStepId, LifecycleValidationMode, PackVerificationResultV1,
+    ReceiptIdentityMaterialV1, ReceiptKindV1, ReceiptOutcomeV1, ReceiptV1, RunPackFileEntryV1,
+    RunPackManifestV1, RunTerminalStateV1, RuntimeEventV1, GENESIS_SEED,
 };
-use rustix::fs::{FlockOperation, Mode, OFlags, ResolveFlags};
+use rustix::fs::{AtFlags, FlockOperation, Mode, OFlags, ResolveFlags};
 use thiserror::Error;
 
 pub const MAX_ARTIFACT_SIZE: u64 = 16 * 1024 * 1024;
@@ -63,8 +64,28 @@ pub enum LedgerError {
     },
     #[error("injected append interruption after {0:?}")]
     InjectedInterruption(AppendStage),
+    #[error("injected run pack export interruption after {0:?}")]
+    InjectedRunPackExportInterruption(RunPackExportStage),
     #[error("child link verification failed: {0}")]
     ChildLinkInvalid(String),
+    #[error("run pack is invalid: {0}")]
+    RunPackInvalid(String),
+}
+
+#[derive(Debug, Clone)]
+pub struct RunPackPlan {
+    pub source_run_id: CurrentRunId,
+    pub files: Vec<RunPackFileEntryV1>,
+}
+
+impl RunPackPlan {
+    pub fn manifest(&self) -> RunPackManifestV1 {
+        RunPackManifestV1 {
+            schema_version: RunPackManifestV1::SCHEMA_VERSION,
+            source_run_id: self.source_run_id.clone(),
+            files: self.files.clone(),
+        }
+    }
 }
 
 /// Durable cross-chain binding emitted by a live parent before child dispatch.
@@ -148,6 +169,14 @@ pub enum AppendStage {
     MetadataFsync,
     MetadataRename,
     DirectoryFsync,
+}
+
+/// Deterministic interruption points for testing transactional Run Pack export.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum RunPackExportStage {
+    /// Every planned source entry has been copied and re-digested, but the
+    /// manifest has not yet been written or published.
+    CopyComplete,
 }
 
 fn genesis_digest() -> ContentDigest {
@@ -559,6 +588,15 @@ pub struct VerifiedReceiptSnapshot {
     receipts: Arc<[ReceiptV1]>,
 }
 
+/// A read-only receipt projection admitted only after strict Run Pack
+/// verification from the pack's own filesystem bytes. It deliberately holds
+/// no source-run path, runtime service, or artifact-store handle.
+#[derive(Debug, Clone)]
+pub struct VerifiedRunPackSnapshot {
+    pack_verification: PackVerificationResultV1,
+    receipt_snapshot: VerifiedReceiptSnapshot,
+}
+
 /// Read a verified but not-yet-terminal parent transcript. This is the only
 /// snapshot admitted while a live parent is still appending child lifecycle
 /// receipts; it applies the same canonical, artifact, permit, and run-binding
@@ -614,6 +652,20 @@ impl VerifiedReceiptSnapshot {
 
     pub fn receipts(&self) -> &[ReceiptV1] {
         &self.receipts
+    }
+}
+
+impl VerifiedRunPackSnapshot {
+    pub fn pack_verification(&self) -> &PackVerificationResultV1 {
+        &self.pack_verification
+    }
+
+    pub fn verification(&self) -> &ChainVerification {
+        self.receipt_snapshot.verification()
+    }
+
+    pub fn receipts(&self) -> &[ReceiptV1] {
+        self.receipt_snapshot.receipts()
     }
 }
 
@@ -897,6 +949,481 @@ pub fn verified_snapshot_directory_bound(
             receipts: Arc::from(scan.receipts),
         })
     })
+}
+
+fn pack_entry(path: &str, role: &str, bytes: &[u8]) -> RunPackFileEntryV1 {
+    RunPackFileEntryV1 {
+        path: path.into(),
+        role: role.into(),
+        byte_length: bytes.len() as u64,
+        digest: ContentDigest::compute(bytes),
+    }
+}
+
+fn scan_existing_read_only(root: &File) -> Result<LogScan, LedgerError> {
+    let bytes = read_bounded_regular_at(root, "receipts.ndjson", MAX_RECEIPT_LOG_BYTES)?;
+    scan_complete_bytes(&bytes)
+}
+
+fn validate_chain_metadata_read_only(root: &File, scan: &LogScan) -> Result<(), LedgerError> {
+    let bytes =
+        read_bounded_regular_at(root, "chain.meta", MAX_CHAIN_META_BYTES).map_err(|error| {
+            if error.kind() == std::io::ErrorKind::NotFound {
+                LedgerError::MetadataMissing
+            } else {
+                LedgerError::Io(error)
+            }
+        })?;
+    let metadata: ChainMeta = serde_json::from_slice(&bytes)?;
+    if recursive_agent_contracts::jcs_canonical(&metadata)? != bytes {
+        return Err(LedgerError::MetadataMismatch(
+            "chain metadata is not canonical JCS".into(),
+        ));
+    }
+    if metadata != metadata_for(scan, metadata.created_at) {
+        return Err(LedgerError::MetadataMismatch(
+            "chain metadata does not bind the receipt chain".into(),
+        ));
+    }
+    Ok(())
+}
+
+fn strict_pack_snapshot(
+    root: &File,
+    paths: &RunPaths,
+) -> Result<VerifiedReceiptSnapshot, LedgerError> {
+    let scan = scan_existing_read_only(root)?;
+    validate_chain_metadata_read_only(root, &scan)?;
+    let verification = verify_scan_locked(root, &scan, VerificationMode::StrictCurrent)?;
+    validate_directory_binding(paths, &verification)?;
+    Ok(VerifiedReceiptSnapshot {
+        verification,
+        receipts: Arc::from(scan.receipts),
+    })
+}
+
+fn pack_plan_from_snapshot(
+    root: &File,
+    snapshot: &VerifiedReceiptSnapshot,
+    store: &ArtifactStore,
+) -> Result<RunPackPlan, LedgerError> {
+    let receipts = read_bounded_regular_at(root, "receipts.ndjson", MAX_RECEIPT_LOG_BYTES)?;
+    let meta = read_bounded_regular_at(root, "chain.meta", MAX_RECEIPT_LOG_BYTES)?;
+    let mut files = vec![
+        pack_entry("receipts.ndjson", "receipts", &receipts),
+        pack_entry("chain.meta", "chain-meta", &meta),
+    ];
+    let mut descriptors = BTreeMap::<String, ArtifactDescriptorV1>::new();
+    for receipt in snapshot.receipts() {
+        for descriptor in &receipt.artifact_refs {
+            let name = artifact_name(descriptor)?;
+            if let Some(previous) = descriptors.insert(name.clone(), descriptor.clone()) {
+                if previous != *descriptor {
+                    return Err(LedgerError::RunPackInvalid(format!(
+                        "conflicting artifact descriptor {name}"
+                    )));
+                }
+            }
+        }
+    }
+    for (name, descriptor) in descriptors {
+        store.verify_descriptor(&descriptor)?;
+        let bytes = store.get(&descriptor)?;
+        files.push(pack_entry(&format!("artifacts/{name}"), "artifact", &bytes));
+        let metadata =
+            read_bounded_regular_at(&store.dir, &format!("{name}.meta"), MAX_ARTIFACT_META_BYTES)?;
+        files.push(pack_entry(
+            &format!("artifacts/{name}.meta"),
+            "artifact-descriptor",
+            &metadata,
+        ));
+    }
+    files.sort_by(|a, b| a.path.cmp(&b.path));
+    Ok(RunPackPlan {
+        source_run_id: snapshot
+            .verification()
+            .verified_run_id
+            .clone()
+            .ok_or_else(|| LedgerError::RunPackInvalid("missing run identity".into()))?,
+        files,
+    })
+}
+
+pub fn plan_run_pack(paths: &RunPaths) -> Result<RunPackPlan, LedgerError> {
+    let root = open_directory_tree(&paths.root, false)?;
+    with_exclusive_lock(&root, |root| {
+        let snapshot = strict_pack_snapshot(root, paths)?;
+        let store = ArtifactStore::from_run_root_fd(root, false)?;
+        pack_plan_from_snapshot(root, &snapshot, &store)
+    })
+}
+
+fn validate_pack_path(path: &str) -> Result<Vec<&str>, LedgerError> {
+    if path.is_empty() || path.contains('\\') || path.contains(':') || Path::new(path).is_absolute()
+    {
+        return Err(LedgerError::RunPackInvalid(format!("unsafe path {path}")));
+    }
+    let p: Vec<_> = path.split('/').collect();
+    if p.iter().any(|x| x.is_empty() || *x == "." || *x == "..") {
+        return Err(LedgerError::RunPackInvalid(format!("unsafe path {path}")));
+    }
+    Ok(p)
+}
+fn read_pack_entry(root: &File, e: &RunPackFileEntryV1) -> Result<Vec<u8>, LedgerError> {
+    let p = validate_pack_path(&e.path)?;
+    let mut d = root.try_clone()?;
+    for x in &p[..p.len() - 1] {
+        d = open_child_directory(&d, x, false)?;
+    }
+    let b = read_bounded_regular_at(&d, p[p.len() - 1], MAX_RECEIPT_LOG_BYTES)?;
+    if b.len() as u64 != e.byte_length || ContentDigest::compute(&b) != e.digest {
+        return Err(LedgerError::RunPackInvalid(format!(
+            "digest mismatch {}",
+            e.path
+        )));
+    }
+    Ok(b)
+}
+
+fn validate_pack_entry_role(entry: &RunPackFileEntryV1) -> Result<(), LedgerError> {
+    let expected_role = match entry.path.as_str() {
+        "receipts.ndjson" => "receipts",
+        "chain.meta" => "chain-meta",
+        _ => {
+            let name = entry.path.strip_prefix("artifacts/").ok_or_else(|| {
+                LedgerError::RunPackInvalid(format!("unexpected pack path {}", entry.path))
+            })?;
+            if name.contains('/') {
+                return Err(LedgerError::RunPackInvalid(format!(
+                    "artifact path is not a single file {}",
+                    entry.path
+                )));
+            }
+            let (digest, role) = if let Some(digest) = name.strip_suffix(".meta") {
+                (digest, "artifact-descriptor")
+            } else {
+                (name, "artifact")
+            };
+            if digest.len() != 64
+                || !digest.chars().all(|character| {
+                    character.is_ascii_hexdigit() && !character.is_ascii_uppercase()
+                })
+            {
+                return Err(LedgerError::RunPackInvalid(format!(
+                    "artifact path does not contain a content digest {}",
+                    entry.path
+                )));
+            }
+            role
+        }
+    };
+    if entry.role != expected_role {
+        return Err(LedgerError::RunPackInvalid(format!(
+            "role does not match path {}",
+            entry.path
+        )));
+    }
+    Ok(())
+}
+
+fn collect_pack_entries(
+    d: &File,
+    pre: &str,
+    out: &mut BTreeSet<String>,
+) -> Result<(), LedgerError> {
+    for i in std::fs::read_dir(format!("/proc/self/fd/{}", d.as_raw_fd()))? {
+        let i = i?;
+        let n = i
+            .file_name()
+            .to_str()
+            .ok_or_else(|| LedgerError::RunPackInvalid("non-UTF8 name".into()))?
+            .to_owned();
+        if n == "PACK_MANIFEST.json" && pre.is_empty() {
+            continue;
+        }
+        let r = if pre.is_empty() {
+            n.clone()
+        } else {
+            format!("{pre}/{n}")
+        };
+        let t = i.file_type()?;
+        if t.is_symlink() {
+            return Err(LedgerError::RunPackInvalid(format!("symlink {r}")));
+        }
+        if t.is_dir() {
+            let c = open_child_directory(d, &n, false)?;
+            collect_pack_entries(&c, &r, out)?;
+        } else if t.is_file() {
+            out.insert(r);
+        } else {
+            return Err(LedgerError::RunPackInvalid(format!(
+                "non-regular entry {r}"
+            )));
+        }
+    }
+    Ok(())
+}
+
+fn verified_run_pack_snapshot_from_dir_fd(
+    root: &File,
+) -> Result<VerifiedRunPackSnapshot, LedgerError> {
+    let mb = read_bounded_regular_at(root, "PACK_MANIFEST.json", MAX_RECEIPT_LOG_BYTES)?;
+    let m: RunPackManifestV1 = serde_json::from_slice(&mb)?;
+    m.validate()?;
+    if recursive_agent_contracts::jcs_canonical(&m)? != mb {
+        return Err(LedgerError::RunPackInvalid(
+            "manifest is not canonical JCS".into(),
+        ));
+    }
+    let mut expected = BTreeSet::new();
+    let mut has_receipts = false;
+    let mut has_chain_meta = false;
+    for entry in &m.files {
+        validate_pack_entry_role(entry)?;
+        if !expected.insert(entry.path.clone()) {
+            return Err(LedgerError::RunPackInvalid("duplicate path".into()));
+        }
+        has_receipts |= entry.path == "receipts.ndjson";
+        has_chain_meta |= entry.path == "chain.meta";
+        read_pack_entry(root, entry)?;
+    }
+    if !has_receipts || !has_chain_meta {
+        return Err(LedgerError::RunPackInvalid(
+            "manifest omits canonical receipt evidence".into(),
+        ));
+    }
+    let mut actual = BTreeSet::new();
+    collect_pack_entries(root, "", &mut actual)?;
+    if actual != expected {
+        return Err(LedgerError::RunPackInvalid("missing or extra files".into()));
+    }
+    let scan = scan_existing_read_only(root)?;
+    validate_chain_metadata_read_only(root, &scan)?;
+    let verification = verify_scan_locked(root, &scan, VerificationMode::StrictCurrent)?;
+    if verification.verified_run_id.as_ref() != Some(&m.source_run_id) {
+        return Err(LedgerError::RunPackInvalid(
+            "manifest source run identity mismatch".into(),
+        ));
+    }
+    Ok(VerifiedRunPackSnapshot {
+        pack_verification: PackVerificationResultV1 {
+            schema_version: RunPackManifestV1::SCHEMA_VERSION,
+            ok: true,
+            manifest_digest: ContentDigest::compute(&mb),
+        },
+        receipt_snapshot: VerifiedReceiptSnapshot {
+            verification,
+            receipts: Arc::from(scan.receipts),
+        },
+    })
+}
+
+fn verify_run_pack_from_dir_fd(root: &File) -> Result<PackVerificationResultV1, LedgerError> {
+    Ok(verified_run_pack_snapshot_from_dir_fd(root)?
+        .pack_verification
+        .clone())
+}
+
+pub fn verify_run_pack(root: &Path) -> Result<PackVerificationResultV1, LedgerError> {
+    let rf = open_directory_tree(root, false)?;
+    with_exclusive_lock(&rf, verify_run_pack_from_dir_fd)
+}
+
+/// Verify a Run Pack from its own bytes and expose only the resulting
+/// verified receipt evidence for recorded replay projections.
+pub fn verified_run_pack_snapshot(root: &Path) -> Result<VerifiedRunPackSnapshot, LedgerError> {
+    let root = open_directory_tree(root, false)?;
+    with_exclusive_lock(&root, verified_run_pack_snapshot_from_dir_fd)
+}
+
+fn write_new_pack_file(root: &File, path: &str, bytes: &[u8]) -> Result<(), LedgerError> {
+    let components = validate_pack_path(path)?;
+    let (leaf, parents) = components
+        .split_last()
+        .ok_or_else(|| LedgerError::RunPackInvalid("empty pack path".into()))?;
+    let mut directory = root.try_clone()?;
+    for parent in parents {
+        directory = open_child_directory(&directory, parent, true)?;
+    }
+    let fd = secure_open_at(
+        &directory,
+        leaf,
+        OFlags::WRONLY | OFlags::CREATE | OFlags::EXCL | OFlags::NOFOLLOW | OFlags::CLOEXEC,
+        Mode::RUSR | Mode::WUSR,
+    )?;
+    let mut file = File::from(fd);
+    file.write_all(bytes)?;
+    file.sync_all()?;
+    directory.sync_all()?;
+    Ok(())
+}
+
+fn create_unique_pack_directory(parent: &File) -> Result<(String, File), LedgerError> {
+    for _ in 0..1024 {
+        let sequence = TEMP_SEQUENCE.fetch_add(1, Ordering::Relaxed);
+        let name = format!(".run-pack.{}.{}", std::process::id(), sequence);
+        match rustix::fs::mkdirat(parent.as_fd(), &name, Mode::RUSR | Mode::WUSR | Mode::XUSR) {
+            Ok(()) => return Ok((name.clone(), open_child_directory(parent, &name, false)?)),
+            Err(error)
+                if std::io::Error::from(error).kind() == std::io::ErrorKind::AlreadyExists => {}
+            Err(error) => return Err(std::io::Error::from(error).into()),
+        }
+    }
+    Err(LedgerError::RunPackInvalid(
+        "unable to allocate a destination temporary directory".into(),
+    ))
+}
+
+fn remove_directory_contents(directory: &File) -> Result<(), LedgerError> {
+    for entry in std::fs::read_dir(format!("/proc/self/fd/{}", directory.as_raw_fd()))? {
+        let entry = entry?;
+        let name = entry.file_name();
+        let name = name
+            .to_str()
+            .ok_or_else(|| LedgerError::RunPackInvalid("non-UTF8 temporary entry".into()))?;
+        let kind = entry.file_type()?;
+        if kind.is_dir() {
+            let child = open_child_directory(directory, name, false)?;
+            remove_directory_contents(&child)?;
+            rustix::fs::unlinkat(directory.as_fd(), name, AtFlags::REMOVEDIR)
+                .map_err(std::io::Error::from)?;
+        } else {
+            rustix::fs::unlinkat(directory.as_fd(), name, AtFlags::empty())
+                .map_err(std::io::Error::from)?;
+        }
+    }
+    directory.sync_all()?;
+    Ok(())
+}
+
+fn remove_temp_pack_directory(parent: &File, name: &str) -> Result<(), LedgerError> {
+    let directory = open_child_directory(parent, name, false)?;
+    remove_directory_contents(&directory)?;
+    rustix::fs::unlinkat(parent.as_fd(), name, AtFlags::REMOVEDIR).map_err(std::io::Error::from)?;
+    parent.sync_all()?;
+    Ok(())
+}
+
+struct TempPackGuard {
+    parent: File,
+    name: Option<String>,
+}
+
+impl TempPackGuard {
+    fn new(parent: &File, name: String) -> Result<Self, LedgerError> {
+        Ok(Self {
+            parent: parent.try_clone()?,
+            name: Some(name),
+        })
+    }
+
+    fn disarm(&mut self) {
+        self.name = None;
+    }
+}
+
+impl Drop for TempPackGuard {
+    fn drop(&mut self) {
+        if let Some(name) = self.name.take() {
+            let _ = remove_temp_pack_directory(&self.parent, &name);
+        }
+    }
+}
+
+fn destination_parent_and_name(destination: &Path) -> Result<(File, String), LedgerError> {
+    let parent_path = destination
+        .parent()
+        .filter(|parent| !parent.as_os_str().is_empty())
+        .ok_or_else(|| LedgerError::RunPackInvalid("destination has no parent".into()))?;
+    let name = destination
+        .file_name()
+        .and_then(std::ffi::OsStr::to_str)
+        .filter(|name| !name.is_empty() && *name != "." && *name != "..")
+        .ok_or_else(|| LedgerError::RunPackInvalid("destination has an unsafe name".into()))?
+        .to_owned();
+    Ok((open_directory_tree(parent_path, false)?, name))
+}
+
+fn ensure_destination_absent(parent: &File, name: &str) -> Result<(), LedgerError> {
+    match secure_open_at(
+        parent,
+        name,
+        OFlags::RDONLY | OFlags::NOFOLLOW | OFlags::CLOEXEC | OFlags::NONBLOCK,
+        Mode::empty(),
+    ) {
+        Ok(_) => Err(LedgerError::RunPackInvalid(
+            "destination already exists".into(),
+        )),
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(()),
+        Err(error) => Err(LedgerError::RunPackInvalid(format!(
+            "destination is existing or unsafe: {error}"
+        ))),
+    }
+}
+
+pub fn export_run_pack(
+    paths: &RunPaths,
+    destination: &Path,
+) -> Result<PackVerificationResultV1, LedgerError> {
+    export_run_pack_with_interruption(paths, destination, None)
+}
+
+/// Export a pack with an optional deterministic interruption point. The
+/// interruption surface proves that incomplete packs are cleaned up before
+/// publication.
+pub fn export_run_pack_with_interruption(
+    paths: &RunPaths,
+    destination: &Path,
+    interrupt_after: Option<RunPackExportStage>,
+) -> Result<PackVerificationResultV1, LedgerError> {
+    let (parent, destination_name) = destination_parent_and_name(destination)?;
+    ensure_destination_absent(&parent, &destination_name)?;
+    let (temporary_name, temporary_root) = create_unique_pack_directory(&parent)?;
+    let mut guard = TempPackGuard::new(&parent, temporary_name.clone())?;
+    let source_root = open_directory_tree(&paths.root, false)?;
+    let result = with_exclusive_lock(&source_root, |source_root| {
+        let snapshot = strict_pack_snapshot(source_root, paths)?;
+        let store = ArtifactStore::from_run_root_fd(source_root, false)?;
+        let plan = pack_plan_from_snapshot(source_root, &snapshot, &store)?;
+        for entry in &plan.files {
+            let bytes = read_pack_entry(source_root, entry)?;
+            write_new_pack_file(&temporary_root, &entry.path, &bytes)?;
+            if read_pack_entry(&temporary_root, entry)? != bytes {
+                return Err(LedgerError::RunPackInvalid(format!(
+                    "copied bytes changed while exporting {}",
+                    entry.path
+                )));
+            }
+        }
+        if interrupt_after == Some(RunPackExportStage::CopyComplete) {
+            return Err(LedgerError::InjectedRunPackExportInterruption(
+                RunPackExportStage::CopyComplete,
+            ));
+        }
+        let manifest = plan.manifest();
+        let manifest_bytes = manifest.canonical_bytes()?;
+        write_new_pack_file(&temporary_root, "PACK_MANIFEST.json", &manifest_bytes)?;
+        if read_bounded_regular_at(&temporary_root, "PACK_MANIFEST.json", MAX_RECEIPT_LOG_BYTES)?
+            != manifest_bytes
+        {
+            return Err(LedgerError::RunPackInvalid(
+                "pack manifest changed while exporting".into(),
+            ));
+        }
+        temporary_root.sync_all()?;
+        with_exclusive_lock(&temporary_root, verify_run_pack_from_dir_fd)
+    })?;
+    parent.sync_all()?;
+    rustix::fs::renameat(
+        parent.as_fd(),
+        &temporary_name,
+        parent.as_fd(),
+        &destination_name,
+    )
+    .map_err(std::io::Error::from)?;
+    parent.sync_all()?;
+    guard.disarm();
+    Ok(result)
 }
 
 /// Open one strictly verified directory-bound snapshot and its artifact store
