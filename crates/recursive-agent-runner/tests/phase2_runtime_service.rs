@@ -1,4 +1,5 @@
 use std::sync::Arc;
+use std::sync::{mpsc, Mutex};
 
 use async_trait::async_trait;
 use chrono::{TimeZone, Utc};
@@ -97,6 +98,52 @@ fn fake_tool_runtime(tool_names: &[&str]) -> Arc<ToolRuntime> {
     for name in tool_names {
         registry.register(FakeEchoTool::named(name));
     }
+    Arc::new(ToolRuntime::new(registry))
+}
+
+/// A test-only gate that makes cancellation land while a real admitted child
+/// effect is executing. The runner's second family check must then prevent the
+/// child from committing success.
+struct BlockingTool {
+    descriptor: ToolDescriptor,
+    started: mpsc::Sender<()>,
+    release: Mutex<mpsc::Receiver<()>>,
+}
+
+#[async_trait]
+impl Tool for BlockingTool {
+    fn descriptor(&self) -> &ToolDescriptor {
+        &self.descriptor
+    }
+
+    async fn invoke(
+        &self,
+        _ctx: &ToolCtx,
+        call: &llm_tool_runtime::ToolCall,
+    ) -> Result<ToolResult, ToolError> {
+        if call.arguments.get("text") == Some(&serde_json::Value::String("child".into())) {
+            let _ = self.started.send(());
+            if let Ok(release) = self.release.lock() {
+                let _ = release.recv_timeout(std::time::Duration::from_secs(5));
+            }
+        }
+        Ok(ToolResult::json(serde_json::json!({
+            "owner": "blocking-child-fixture",
+            "arguments": call.arguments.clone()
+        })))
+    }
+}
+
+fn blocking_tool_runtime(
+    started: mpsc::Sender<()>,
+    release: mpsc::Receiver<()>,
+) -> Arc<ToolRuntime> {
+    let mut registry = ToolRegistry::new();
+    registry.register(BlockingTool {
+        descriptor: FakeEchoTool::named("echo").descriptor,
+        started,
+        release: Mutex::new(release),
+    });
     Arc::new(ToolRuntime::new(registry))
 }
 
@@ -208,10 +255,17 @@ fn service_dependencies_with_tools(
     output_root: &std::path::Path,
     tool_names: &[&str],
 ) -> Result<RuntimeDependencies, Box<dyn std::error::Error>> {
+    service_dependencies_with_runtime(output_root, fake_tool_runtime(tool_names))
+}
+
+fn service_dependencies_with_runtime(
+    output_root: &std::path::Path,
+    tool_runtime: Arc<ToolRuntime>,
+) -> Result<RuntimeDependencies, Box<dyn std::error::Error>> {
     Ok(RuntimeDependencies::builder()
         .policy(RuntimePolicyDependencyV1::Native)
         .sandbox(RuntimeSandboxDependencyV1::Native)
-        .tool_runtime(fake_tool_runtime(tool_names))
+        .tool_runtime(tool_runtime)
         .provider(RuntimeProviderDependencyV1::Configured(
             ProviderSpecV1::Ollama {
                 base_url: ValidatedEndpoint::try_new("http://127.0.0.1:1")?,
@@ -373,6 +427,81 @@ fn live_parent_cancellation_revokes_family_before_child_admission_and_closes_par
     let verification = service.verify(parent_handle.run_id())?;
     assert_eq!(verification.terminal_state, RunTerminalStateV1::Cancelled);
     assert!(verification.current_strict_success);
+    Ok(())
+}
+
+#[test]
+fn live_parent_cancellation_during_child_effect_prevents_child_success_and_cancels_parent(
+) -> Result<(), Box<dyn std::error::Error>> {
+    let output_root = tempfile::tempdir()?;
+    let parent = sample_operation()?;
+    let child = child_proposal(&parent)?;
+    let (started_tx, started_rx) = mpsc::channel();
+    let (release_tx, release_rx) = mpsc::channel();
+    let service = RuntimeService::new(service_dependencies_with_runtime(
+        output_root.path(),
+        blocking_tool_runtime(started_tx, release_rx),
+    )?);
+    let mut live_parent = service.begin_parent_v2(&parent)?;
+    let parent_run_id = live_parent.run_id().clone();
+
+    let child_handle = std::thread::scope(|scope| -> Result<_, Box<dyn std::error::Error>> {
+        let worker = scope.spawn(|| live_parent.submit_child(&child));
+        started_rx.recv_timeout(std::time::Duration::from_secs(2))?;
+        assert!(matches!(
+            service.cancel(&parent_run_id)?,
+            RuntimeCancelResultV1::CancellationRequested { .. }
+        ));
+        release_tx.send(())?;
+        Ok(worker
+            .join()
+            .map_err(|_| std::io::Error::other("child worker panicked"))??)
+    })?;
+
+    let child_verification = service.verify(child_handle.run_id())?;
+    assert_ne!(
+        child_verification.terminal_state,
+        RunTerminalStateV1::Succeeded,
+        "the post-effect family guard must prevent a revoked child from reporting success"
+    );
+    let parent_handle = live_parent.finalize()?;
+    assert_eq!(
+        service.verify(parent_handle.run_id())?.terminal_state,
+        RunTerminalStateV1::Cancelled
+    );
+    Ok(())
+}
+
+#[test]
+fn live_parent_strict_verification_rejects_tampered_link_and_closure_artifacts(
+) -> Result<(), Box<dyn std::error::Error>> {
+    for receipt_kind in [ReceiptKindV1::ChildLinked, ReceiptKindV1::ChildClosed] {
+        let output_root = tempfile::tempdir()?;
+        let parent = sample_operation()?;
+        let child = child_proposal(&parent)?;
+        let service = RuntimeService::new(service_dependencies(output_root.path())?);
+        let mut live_parent = service.begin_parent_v2(&parent)?;
+        let _child_handle = live_parent.submit_child(&child)?;
+        let parent_handle = live_parent.finalize()?;
+        let snapshot = verified_snapshot_directory_bound(&RunPaths::new(parent_handle.run_dir()))?;
+        let descriptor = snapshot
+            .receipts()
+            .iter()
+            .find(|receipt| receipt.kind == receipt_kind)
+            .and_then(|receipt| receipt.artifact_refs.first())
+            .ok_or("missing child link artifact")?;
+        std::fs::write(
+            parent_handle
+                .run_dir()
+                .join("artifacts")
+                .join(descriptor.digest.hex()),
+            b"tampered-child-link",
+        )?;
+        assert!(
+            service.verify(parent_handle.run_id()).is_err(),
+            "strict verification must reject tampered {receipt_kind:?} bytes"
+        );
+    }
     Ok(())
 }
 

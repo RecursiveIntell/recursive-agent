@@ -2,7 +2,7 @@
   "schema": "ChangeReceiptV1",
   "version": 1,
   "task_id": "20260809T185635Z-phase-7-2-causal-family-child-run-contract-amendment",
-  "evidence_cutoff": "2026-08-09T20:00:00Z",
+  "evidence_cutoff": "2026-08-09T22:10:44Z",
   "goal": "Implement the V2 live-parent child-run lifecycle without widening V1 semantics or granting scheduler authority.",
   "source_identity": {
     "root": "/home/sikmindz/Coding/recursive-agent",
@@ -67,29 +67,42 @@
       "notes": "The crash-recovery test intentionally emits one losing child-process race failure before the harness confirms the parent test passes."
     },
     {
-      "gate_id": "G-011",
+      "gate_id": "G-009",
       "command": "cargo clippy --workspace --all-targets -- -D warnings && cargo fmt --all -- --check",
       "exit_code": 0,
       "status": "PASS"
     },
     {
-      "gate_id": "G-012",
+      "gate_id": "G-010",
+      "command": "cargo test -p recursive-agent-runner --test phase2_runtime_service live_parent_strict_verification_rejects_tampered_link_and_closure_artifacts -- --nocapture",
+      "exit_code": 0,
+      "status": "PASS",
+      "notes": "The strict parent verifier rejects a byte-level corruption of either the ChildLinked or ChildClosed immutable content-addressed artifact."
+    },
+    {
+      "gate_id": "G-011",
+      "command": "cargo test -p recursive-agent-runner --test phase2_runtime_service live_parent_cancellation_during_child_effect_prevents_child_success_and_cancels_parent -- --nocapture",
+      "exit_code": 0,
+      "status": "PASS",
+      "notes": "A blocking child effect is released only after parent-family cancellation; the post-effect guard prevents child success and finalization records a cancelled parent."
+    },
+    {
+      "gate_id": "G-013",
       "command": "git diff --check",
       "exit_code": 0,
       "status": "PASS"
     }
   ],
-  "evidence_state": "verified for implemented package and workspace gates; incomplete for the unimplemented dedicated adversarial child-link matrix",
+  "evidence_state": "verified for implemented package/workspace gates, immutable child-link/closure artifact tamper rejection, and the in-flight cancellation race; incomplete for the remaining semantic child-link matrix",
   "non_goals": [
     "provider, remote worker, CLI/MCP public delegation command, raw process scheduler, or /home/sikmindz/Coding/Libraries changes",
     "scheduler-owned authority, budget, or terminal verification",
     "V1 parser or RuntimeService::submit compatibility fallback"
   ],
   "remaining_delta": [
-    "Add dedicated ledger/runtime regressions for tampered ChildRunLinkV1 bytes, altered parent receipt ID, duplicate link, missing closure, mismatched child terminal state, and chain-head mismatch.",
-    "Exercise a real queued/in-flight child cancellation race; the current public live-parent API is synchronous and the admitted cancellation regression covers revocation before child admission."
+    "Add semantic ledger/runtime regressions using otherwise valid artifact descriptors for altered parent admission receipt ID, duplicate link/closure, missing closure receipt, mismatched child terminal state, and chain-head mismatch."
   ],
   "rollback": "Revert commits 01bd225 and 8b7501c, then the prior Phase 7.2 commits if a full rollback is required. Quarantine family-state directories below the runtime output root; preserve receipts and permits and deny new V2 admissions. Do not rewrite historical V1 evidence.",
-  "next_gate": "Implement and pass the dedicated adversarial child-link/cancellation-race tests before declaring Phase 7.2 fully certified.",
+  "next_gate": "Implement and pass the remaining semantic child-link matrix before declaring Phase 7.2 fully certified.",
   "complete": false
 }
