@@ -1,6 +1,6 @@
 //! Locked, crash-recoverable receipt chain and descriptor-relative artifact store.
 
-use std::collections::BTreeSet;
+use std::collections::{BTreeMap, BTreeSet};
 use std::fs::File;
 use std::io::{Read, Seek, SeekFrom, Write};
 use std::os::fd::AsFd;
@@ -559,6 +559,48 @@ pub struct VerifiedReceiptSnapshot {
     receipts: Arc<[ReceiptV1]>,
 }
 
+/// Read a verified but not-yet-terminal parent transcript. This is the only
+/// snapshot admitted while a live parent is still appending child lifecycle
+/// receipts; it applies the same canonical, artifact, permit, and run-binding
+/// checks as strict verification except for the final `RunFinalized` receipt.
+pub fn appendable_snapshot_expected_run_from_dir_fd(
+    root: &File,
+    expected_run_id: &CurrentRunId,
+) -> Result<VerifiedReceiptSnapshot, LedgerError> {
+    with_exclusive_lock(root, |root| {
+        let (scan, _) = reconcile_locked(root)?;
+        let (lifecycle, verified_artifacts) = validate_authoritative_sequence(
+            root,
+            &scan.receipts,
+            LifecycleValidationMode::AppendInProgress,
+        )?;
+        if lifecycle.run_id.as_ref() != Some(expected_run_id) {
+            return Err(LedgerError::ExpectedRunMismatch {
+                expected: expected_run_id.to_string(),
+                observed: lifecycle
+                    .run_id
+                    .as_ref()
+                    .map_or_else(|| "none".into(), ToString::to_string),
+            });
+        }
+        Ok(VerifiedReceiptSnapshot {
+            verification: ChainVerification {
+                ok: true,
+                current_strict_success: false,
+                length: scan.length,
+                final_head: scan.head.to_string(),
+                verified_artifacts,
+                terminal_state: lifecycle
+                    .terminal_state
+                    .unwrap_or(RunTerminalStateV1::LegacyUnknown),
+                verified_run_id: lifecycle.run_id,
+                first_divergence: None,
+            },
+            receipts: Arc::from(scan.receipts),
+        })
+    })
+}
+
 #[derive(Debug, Clone)]
 pub struct LegacyIntegrityInspection {
     pub length: u64,
@@ -619,6 +661,184 @@ pub fn verify_child_links(
     Ok(())
 }
 
+/// Strictly validate every durable child admission/link/closure tuple in a
+/// parent snapshot. The parent remains appendable until finalization, so the
+/// caller chooses whether each prepared child must already have a closure.
+/// Child terminal evidence is always read from the canonical sibling run
+/// directory, never accepted from an adapter return value.
+pub fn verify_child_links_in_runtime_root(
+    parent: &VerifiedReceiptSnapshot,
+    parent_store: &ArtifactStore,
+    output_root: &Path,
+    require_closure: bool,
+) -> Result<(), LedgerError> {
+    let parent_id = parent
+        .verification
+        .verified_run_id
+        .as_ref()
+        .ok_or_else(|| LedgerError::ChildLinkInvalid("parent run is unverified".into()))?;
+    let mut prepared = BTreeMap::new();
+    let mut linked = BTreeMap::new();
+    let mut closed = BTreeMap::new();
+    let mut child_runs = BTreeSet::new();
+
+    for receipt in parent.receipts() {
+        let proposal = receipt.args_digest.to_string();
+        match receipt.kind {
+            ReceiptKindV1::ChildAdmissionPrepared => {
+                if prepared
+                    .insert(proposal, receipt.receipt_id.clone())
+                    .is_some()
+                {
+                    return Err(LedgerError::ChildLinkInvalid(
+                        "duplicate child admission preparation".into(),
+                    ));
+                }
+            }
+            ReceiptKindV1::ChildLinked => {
+                let link = child_link_from_receipt(parent_store, receipt)?;
+                validate_admission_link(parent_id, receipt, &prepared, &link, false)?;
+                if !child_runs.insert(link.child_run_id.to_string()) {
+                    return Err(LedgerError::ChildLinkInvalid(format!(
+                        "duplicate child run {}",
+                        link.child_run_id
+                    )));
+                }
+                if linked.insert(proposal, link).is_some() {
+                    return Err(LedgerError::ChildLinkInvalid("duplicate child link".into()));
+                }
+            }
+            ReceiptKindV1::ChildClosed => {
+                let link = child_link_from_receipt(parent_store, receipt)?;
+                validate_admission_link(parent_id, receipt, &prepared, &link, true)?;
+                if closed.insert(proposal, link).is_some() {
+                    return Err(LedgerError::ChildLinkInvalid(
+                        "duplicate child closure".into(),
+                    ));
+                }
+            }
+            _ => {}
+        }
+    }
+
+    for (proposal, admission_receipt_id) in &prepared {
+        let link = linked.get(proposal).ok_or_else(|| {
+            LedgerError::ChildLinkInvalid(format!(
+                "prepared child {} has no immutable link",
+                admission_receipt_id
+            ))
+        })?;
+        let closure = closed.get(proposal);
+        if require_closure && closure.is_none() {
+            return Err(LedgerError::ChildLinkInvalid(format!(
+                "prepared child {} lacks a terminal closure",
+                admission_receipt_id
+            )));
+        }
+        let Some(closure) = closure else {
+            continue;
+        };
+        if !same_child_link_admission(link, closure) {
+            return Err(LedgerError::ChildLinkInvalid(
+                "child closure changes immutable link material".into(),
+            ));
+        }
+        let terminal_receipt_id = closure.child_terminal_receipt_id.as_ref().ok_or_else(|| {
+            LedgerError::ChildLinkInvalid("child closure omits terminal receipt".into())
+        })?;
+        let terminal_state = closure.child_terminal_state.ok_or_else(|| {
+            LedgerError::ChildLinkInvalid("child closure omits terminal state".into())
+        })?;
+        let chain_head = closure.child_chain_head.as_ref().ok_or_else(|| {
+            LedgerError::ChildLinkInvalid("child closure omits chain head".into())
+        })?;
+        let child_paths =
+            RunPaths::new(output_root.join(content_digest(&link.child_run_id)?.to_string()));
+        let child = verified_snapshot_directory_bound(&child_paths)?;
+        let child_verification = child.verification();
+        let child_terminal = child
+            .receipts()
+            .last()
+            .ok_or_else(|| LedgerError::ChildLinkInvalid("child transcript is empty".into()))?;
+        if child_terminal.kind != ReceiptKindV1::RunFinalized
+            || child_terminal.receipt_id != *terminal_receipt_id
+            || child_verification.terminal_state != terminal_state
+            || child_verification.final_head != *chain_head
+        {
+            return Err(LedgerError::ChildLinkInvalid(
+                "child terminal evidence does not match closure".into(),
+            ));
+        }
+    }
+    if require_closure && (prepared.len() != linked.len() || prepared.len() != closed.len()) {
+        return Err(LedgerError::ChildLinkInvalid(
+            "parent child lifecycle is incomplete".into(),
+        ));
+    }
+    Ok(())
+}
+
+fn child_link_from_receipt(
+    store: &ArtifactStore,
+    receipt: &ReceiptV1,
+) -> Result<ChildRunLinkV1, LedgerError> {
+    if receipt.artifact_refs.len() != 1 {
+        return Err(LedgerError::ChildLinkInvalid(
+            "child link receipt requires exactly one artifact".into(),
+        ));
+    }
+    let descriptor = receipt
+        .artifact_refs
+        .first()
+        .ok_or_else(|| LedgerError::ChildLinkInvalid("child link artifact is absent".into()))?;
+    serde_json::from_slice(&store.get(descriptor)?).map_err(|error| {
+        LedgerError::ChildLinkInvalid(format!("child link artifact is malformed: {error}"))
+    })
+}
+
+fn validate_admission_link(
+    parent_id: &CurrentRunId,
+    receipt: &ReceiptV1,
+    prepared: &BTreeMap<String, recursive_agent_contracts::CurrentReceiptId>,
+    link: &ChildRunLinkV1,
+    closure: bool,
+) -> Result<(), LedgerError> {
+    let proposal = receipt.args_digest.to_string();
+    let admission = prepared.get(&proposal).ok_or_else(|| {
+        LedgerError::ChildLinkInvalid("child link has no prepared proposal".into())
+    })?;
+    if link.parent_run_id != *parent_id
+        || link.parent_receipt_id != *admission
+        || link.root_operation_id != *parent_id
+        || link.child_run_id == *parent_id
+        || (closure
+            && (link.child_terminal_receipt_id.is_none()
+                || link.child_terminal_state.is_none()
+                || link.child_chain_head.is_none()))
+        || (!closure
+            && (link.child_terminal_receipt_id.is_some()
+                || link.child_terminal_state.is_some()
+                || link.child_chain_head.is_some()))
+    {
+        return Err(LedgerError::ChildLinkInvalid(
+            "child link does not bind its parent admission".into(),
+        ));
+    }
+    Ok(())
+}
+
+fn same_child_link_admission(left: &ChildRunLinkV1, right: &ChildRunLinkV1) -> bool {
+    left.parent_run_id == right.parent_run_id
+        && left.parent_receipt_id == right.parent_receipt_id
+        && left.parent_control_permit_id == right.parent_control_permit_id
+        && left.child_run_id == right.child_run_id
+        && left.child_control_permit_id == right.child_control_permit_id
+        && left.root_operation_id == right.root_operation_id
+        && left.reserved_budget == right.reserved_budget
+        && left.child_envelope_digest == right.child_envelope_digest
+        && left.cancelled == right.cancelled
+}
+
 pub fn verify_expected_run(
     paths: &RunPaths,
     expected_run_id: &CurrentRunId,
@@ -676,6 +896,29 @@ pub fn verified_snapshot_directory_bound(
             verification,
             receipts: Arc::from(scan.receipts),
         })
+    })
+}
+
+/// Open one strictly verified directory-bound snapshot and its artifact store
+/// from the same pinned run-root descriptor. Consumers that must interpret
+/// receipt-referenced artifacts after verification use this rather than
+/// reopening the path and creating a verification-to-artifact TOCTOU window.
+pub fn verified_snapshot_with_artifact_store_directory_bound(
+    paths: &RunPaths,
+) -> Result<(VerifiedReceiptSnapshot, ArtifactStore), LedgerError> {
+    let root = open_directory_tree(&paths.root, false)?;
+    with_exclusive_lock(&root, |root| {
+        let (scan, _) = reconcile_locked(root)?;
+        let verification = verify_scan_locked(root, &scan, VerificationMode::StrictCurrent)?;
+        validate_directory_binding(paths, &verification)?;
+        let store = ArtifactStore::from_run_root_fd(root, false)?;
+        Ok((
+            VerifiedReceiptSnapshot {
+                verification,
+                receipts: Arc::from(scan.receipts),
+            },
+            store,
+        ))
     })
 }
 

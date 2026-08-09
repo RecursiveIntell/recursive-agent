@@ -1091,6 +1091,43 @@ impl FamilyAuthorityStore {
         })
     }
 
+    /// Check the family authority immediately around one child effect.
+    ///
+    /// This deliberately reads the durable family state for both checks: a
+    /// cancellation that races an already-reserved child must prevent a later
+    /// dispatch, and must also prevent that effect from being reported as a
+    /// success after it returns.
+    pub fn guard_child_dispatch(
+        &self,
+        child_run_id: &CurrentRunId,
+        child_control_permit_id: &CurrentPermitId,
+        trusted_now: DateTime<Utc>,
+    ) -> Result<(), PolicyError> {
+        self.with_lock(|| {
+            let state = self.read_state()?;
+            let ceiling = &state.grant.child_run_ceiling;
+            let child = state.children.get(child_run_id).ok_or_else(|| {
+                PolicyError::InvalidLease("child dispatch has no family reservation".into())
+            })?;
+            if state.parent_revoked_at.is_some()
+                || trusted_now < ceiling.not_before
+                || trusted_now >= ceiling.expires_at
+                || !matches!(child.state, FamilyChildPermitStateV1::Issued)
+                || child.child_control_permit_id != *child_control_permit_id
+            {
+                return Err(PolicyError::InvalidLease(
+                    "child dispatch is no longer authorized by its family".into(),
+                ));
+            }
+            Ok(())
+        })
+    }
+
+    /// Whether this family has been durably revoked by its live parent.
+    pub fn parent_is_revoked(&self) -> Result<bool, PolicyError> {
+        self.with_lock(|| Ok(self.read_state()?.parent_revoked_at.is_some()))
+    }
+
     /// The root effect power is immutable and separate from child reservations.
     pub fn effect_budget(&self) -> Result<PermitBudgetV1, PolicyError> {
         self.with_lock(|| Ok(self.read_state()?.grant.effect_budget))

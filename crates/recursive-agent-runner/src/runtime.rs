@@ -1,4 +1,4 @@
-use std::collections::BTreeSet;
+use std::collections::{BTreeMap, BTreeSet};
 use std::sync::Mutex;
 
 use llm_tool_runtime::{
@@ -6,19 +6,26 @@ use llm_tool_runtime::{
     ToolRuntime,
 };
 use recursive_agent_contracts::{
-    content_digest, derive_operation_id, ContractError, CurrentRunId, OperationEnvelopeV1,
-    RunTerminalStateV1, RuntimeEventV1,
+    content_digest, derive_child_operation_id, derive_child_operation_proposal_digest,
+    derive_operation_id, derive_step_id, ChildOperationEnvelopeV2, ChildOperationProposalV2,
+    ChildRunAuthorityV1, ContractError, CurrentRunId, OperationEnvelopeV1, ReceiptKindV1,
+    RunTerminalStateV1, RuntimeEventV1, ToolCallSpecV1,
 };
 use recursive_agent_ledger::{
-    committed_events_directory_bound, verify_directory_bound, ChainVerification, LedgerError,
-    RunPaths,
+    committed_events_directory_bound, verified_snapshot_directory_bound,
+    verified_snapshot_with_artifact_store_directory_bound, verify_child_links_in_runtime_root,
+    verify_directory_bound, ChainVerification, ChildRunLinkV1, LedgerError, RunPaths,
 };
-use recursive_agent_policy::PermitEvidenceV1;
+use recursive_agent_policy::{
+    ActorPrincipalV1, ChildRunCeilingV1, FamilyAuthorityStore, FamilyChildRequestV1,
+    FamilyRootGrantV1, PermitBudgetV1, PermitEvidenceV1,
+};
 use stack_ids::{AttemptId, TraceCtx, TrialId};
 use thiserror::Error;
 
 use crate::{
-    run_spec_internal_with_run_id, NoopRunnerHook, RunError, RunnerToolExecutor, RunnerToolOutput,
+    run_child_spec_with_run_id, run_live_parent_spec_with_run_id, run_spec_internal_with_run_id,
+    LiveParentRun, NoopRunnerHook, RunError, RunnerToolExecutor, RunnerToolOutput,
     RuntimeDependencies,
 };
 
@@ -64,6 +71,16 @@ impl RuntimeHandleV1 {
     pub fn run_dir(&self) -> &std::path::Path {
         &self.run_dir
     }
+}
+
+/// Runtime-owned V2 parent lifecycle. It retains the pinned appendable parent
+/// chain and family authority; callers can submit only pre-admission child
+/// proposals and must explicitly finalize the parent.
+pub struct RuntimeLiveParentV2<'a> {
+    service: &'a RuntimeService,
+    parent: LiveParentRun,
+    finalized: bool,
+    _active: ActiveOperationGuard<'a>,
 }
 
 /// Ledger-derived runtime state. No adapter-supplied terminal state is accepted.
@@ -147,6 +164,16 @@ pub enum RuntimeServiceError {
     /// No scheduler projection is attached, so idempotent submission is unavailable.
     #[error("idempotent submission requires the Phase-5 durable scheduler")]
     IdempotentSubmissionUnavailable,
+    /// A live parent has already reached a non-success terminal condition in
+    /// its own declared steps, so it cannot admit children.
+    #[error("live parent cannot admit children after terminal state {state:?}")]
+    LiveParentNotAdmissible { state: RunTerminalStateV1 },
+    /// The proposal does not bind exactly to the runtime-owned parent family.
+    #[error("child proposal causal lineage does not bind the live parent")]
+    ChildParentMismatch,
+    /// The live parent is already finalized and cannot receive another call.
+    #[error("live parent lifecycle has already been finalized")]
+    LiveParentFinalized,
 }
 
 struct AdmittedToolExecutor<'a> {
@@ -285,6 +312,9 @@ fn admitted_tool_arguments(
 pub struct RuntimeService {
     dependencies: RuntimeDependencies,
     active_operations: Mutex<BTreeSet<String>>,
+    /// Live-parent cancellation reaches the family authority directly; this is
+    /// authority state, not a scheduler projection.
+    live_families: Mutex<BTreeMap<String, FamilyAuthorityStore>>,
     /// Optional durable scheduler control projection (Phase 5). When present,
     /// cancellation and admission are persisted across restarts.
     scheduler: std::sync::Mutex<Option<crate::SchedulerStore>>,
@@ -296,6 +326,7 @@ impl RuntimeService {
         Self {
             dependencies,
             active_operations: Mutex::new(BTreeSet::new()),
+            live_families: Mutex::new(BTreeMap::new()),
             scheduler: std::sync::Mutex::new(None),
         }
     }
@@ -310,6 +341,74 @@ impl RuntimeService {
         *guard = Some(store);
         drop(guard);
         Ok(self)
+    }
+
+    /// Execute a direct V1 root operation's own declared steps, then retain
+    /// its lifecycle permit and parent chain as an appendable, runtime-owned
+    /// V2 child-admission session. `submit` deliberately does not use this
+    /// path and keeps its terminal-only V1 contract.
+    pub fn begin_parent_v2(
+        &self,
+        operation: &OperationEnvelopeV1,
+    ) -> Result<RuntimeLiveParentV2<'_>, RuntimeServiceError> {
+        operation.validate()?;
+        self.require_registered_tools(&operation.run_spec.steps)?;
+        let operation_id = derive_operation_id(operation)?;
+        let active_key = operation_id.to_string();
+        {
+            let mut active = self
+                .active_operations
+                .lock()
+                .map_err(|_| RuntimeServiceError::StatePoisoned)?;
+            if !active.insert(active_key.clone()) {
+                return Err(RuntimeServiceError::OperationAlreadyActive {
+                    operation_id: active_key,
+                });
+            }
+        }
+        let active = ActiveOperationGuard {
+            active_operations: &self.active_operations,
+            active_key,
+            released: false,
+        };
+        let executor = AdmittedToolExecutor {
+            runtime: self.dependencies.tool_runtime(),
+        };
+        let mut parent = run_live_parent_spec_with_run_id(
+            operation,
+            self.dependencies.output_root(),
+            self.dependencies.clock(),
+            operation_id.clone(),
+            &executor,
+        )?;
+        let (not_before, expires_at) = parent.parent_control_window()?;
+        let budget = permit_budget(&operation.budget);
+        parent.configure_family(
+            self.dependencies.output_root(),
+            FamilyRootGrantV1 {
+                root_operation_id: operation_id.clone(),
+                parent_control_permit_id: parent.lifecycle_permit_id().clone(),
+                actor: ActorPrincipalV1::try_new(operation.actor.principal.clone())
+                    .map_err(RunError::Policy)?,
+                policy_version: operation.run_spec.policy_version.clone(),
+                effect_budget: budget.clone(),
+                child_run_ceiling: ChildRunCeilingV1 {
+                    max_depth: 1,
+                    max_children: operation.budget.max_steps,
+                    family_budget: budget,
+                    not_before,
+                    expires_at,
+                },
+            },
+        )?;
+        let family = parent.family_store()?;
+        self.register_live_family(&operation_id, family)?;
+        Ok(RuntimeLiveParentV2 {
+            service: self,
+            parent,
+            finalized: false,
+            _active: active,
+        })
     }
 
     /// Validate and synchronously execute one native V1 operation.
@@ -351,6 +450,7 @@ impl RuntimeService {
         let _guard = ActiveOperationGuard {
             active_operations: &self.active_operations,
             active_key,
+            released: false,
         };
 
         let tool_executor = AdmittedToolExecutor {
@@ -486,6 +586,20 @@ impl RuntimeService {
                 Ok(RuntimeCancelResultV1::AlreadyTerminal { state })
             }
             RuntimeStatusV1::Active => {
+                if let Some(family) = self
+                    .live_families
+                    .lock()
+                    .map_err(|_| RuntimeServiceError::StatePoisoned)?
+                    .get(&run_id.to_string())
+                    .cloned()
+                {
+                    family
+                        .revoke_parent(self.dependencies.clock().now())
+                        .map_err(RunError::Policy)?;
+                    return Ok(RuntimeCancelResultV1::CancellationRequested {
+                        run_id: run_id.to_string(),
+                    });
+                }
                 // Persist a durable cancellation request if a scheduler store
                 // is attached; otherwise active cancellation is unavailable.
                 let mut guard = self
@@ -508,7 +622,8 @@ impl RuntimeService {
 
     /// Strictly verify the authoritative receipt chain, artifacts, permits, and run binding.
     pub fn verify(&self, run_id: &CurrentRunId) -> Result<ChainVerification, RuntimeServiceError> {
-        let verification = verify_directory_bound(&self.run_paths(run_id)?)?;
+        let paths = self.run_paths(run_id)?;
+        let verification = verify_directory_bound(&paths)?;
         if verification.verified_run_id.as_ref() != Some(run_id) {
             return Err(RuntimeServiceError::RunIdentityMismatch {
                 expected: run_id.to_string(),
@@ -518,6 +633,13 @@ impl RuntimeService {
                     .map_or_else(|| "none".into(), ToString::to_string),
             });
         }
+        let (snapshot, store) = verified_snapshot_with_artifact_store_directory_bound(&paths)?;
+        verify_child_links_in_runtime_root(
+            &snapshot,
+            &store,
+            self.dependencies.output_root(),
+            true,
+        )?;
         Ok(verification)
     }
 
@@ -536,17 +658,303 @@ impl RuntimeService {
             .map_err(|_| RuntimeServiceError::StatePoisoned)?;
         Ok(active.contains(&run_id.to_string()))
     }
+
+    fn require_registered_tools(
+        &self,
+        steps: &[recursive_agent_contracts::StepSpecV1],
+    ) -> Result<(), RuntimeServiceError> {
+        for step in steps {
+            if self
+                .dependencies
+                .tool_runtime()
+                .registry()
+                .get(&step.call.tool)
+                .is_none()
+            {
+                return Err(RuntimeServiceError::ToolNotRegistered {
+                    name: step.call.tool.clone(),
+                });
+            }
+        }
+        Ok(())
+    }
+
+    fn register_live_family(
+        &self,
+        parent_id: &CurrentRunId,
+        family: FamilyAuthorityStore,
+    ) -> Result<(), RuntimeServiceError> {
+        let mut families = self
+            .live_families
+            .lock()
+            .map_err(|_| RuntimeServiceError::StatePoisoned)?;
+        if families.insert(parent_id.to_string(), family).is_some() {
+            return Err(RuntimeServiceError::OperationAlreadyActive {
+                operation_id: parent_id.to_string(),
+            });
+        }
+        Ok(())
+    }
+
+    fn unregister_live_family(&self, parent_id: &CurrentRunId) -> Result<(), RuntimeServiceError> {
+        let mut families = self
+            .live_families
+            .lock()
+            .map_err(|_| RuntimeServiceError::StatePoisoned)?;
+        families.remove(&parent_id.to_string());
+        Ok(())
+    }
+}
+
+impl RuntimeLiveParentV2<'_> {
+    /// Durably admit, reserve, link, execute, strictly verify, and close one
+    /// V2 child. The proposal has no parent receipt ID, preventing the
+    /// self-referential receipt/artifact identity cycle.
+    pub fn submit_child(
+        &mut self,
+        proposal: &ChildOperationProposalV2,
+    ) -> Result<RuntimeHandleV1, RuntimeServiceError> {
+        if self.finalized {
+            return Err(RuntimeServiceError::LiveParentFinalized);
+        }
+        proposal.validate()?;
+        if self.parent.terminal_state() != RunTerminalStateV1::Succeeded {
+            return Err(RuntimeServiceError::LiveParentNotAdmissible {
+                state: self.parent.terminal_state(),
+            });
+        }
+        let parent_id = self.parent.run_id().clone();
+        if proposal.actor.principal != self.parent.parent_actor
+            || proposal.causality.parent_operation_id.as_ref() != Some(&parent_id)
+            || proposal.causality.root_operation_id.as_ref() != Some(&parent_id)
+        {
+            return Err(RuntimeServiceError::ChildParentMismatch);
+        }
+        self.service
+            .require_registered_tools(&proposal.run_spec.steps)?;
+        self.parent.appendable_snapshot()?;
+
+        let proposal_digest = derive_child_operation_proposal_digest(proposal)?;
+        let proposal_spec_digest = content_digest(proposal)?;
+        let admission_step = child_receipt_step_id(&parent_id, &proposal_digest, "admission")?;
+        let admission = self.parent.append_child_receipt(
+            ReceiptKindV1::ChildAdmissionPrepared,
+            admission_step,
+            proposal_spec_digest,
+            proposal_digest.clone(),
+            Vec::new(),
+            self.service.dependencies.clock().now(),
+        )?;
+
+        let reread = self.parent.appendable_snapshot()?;
+        if !reread.receipts().iter().any(|receipt| {
+            receipt.receipt_id == admission.receipt_id
+                && receipt.kind == ReceiptKindV1::ChildAdmissionPrepared
+                && receipt.args_digest == proposal_digest
+        }) {
+            return Err(RuntimeServiceError::Ledger(LedgerError::ChildLinkInvalid(
+                "parent admission receipt did not survive strict readback".into(),
+            )));
+        }
+
+        let child_authority = ChildRunAuthorityV1 {
+            parent_operation_id: parent_id.clone(),
+            root_operation_id: parent_id.clone(),
+            parent_control_permit_id: self.parent.lifecycle_permit_id().clone(),
+            parent_admission_receipt_id: admission.receipt_id.clone(),
+            requested_budget: proposal.budget.clone(),
+            child_operation_digest: proposal_digest.clone(),
+        };
+        let child = ChildOperationEnvelopeV2 {
+            schema: proposal.schema,
+            actor: proposal.actor.clone(),
+            causality: proposal.causality.clone(),
+            child_authority,
+            budget: proposal.budget.clone(),
+            effects: proposal.effects.clone(),
+            provenance: proposal.provenance.clone(),
+            replay: proposal.replay.clone(),
+            run_spec: proposal.run_spec.clone(),
+        };
+        child.validate()?;
+        let child_run_id = derive_child_operation_id(&child)?;
+        let request = FamilyChildRequestV1 {
+            child_run_id: child_run_id.clone(),
+            parent_operation_id: parent_id.clone(),
+            root_operation_id: parent_id.clone(),
+            parent_control_permit_id: self.parent.lifecycle_permit_id().clone(),
+            parent_admission_receipt_id: admission.receipt_id.clone(),
+            requested_budget: permit_budget(&proposal.budget),
+            child_operation_digest: proposal_digest.clone(),
+            depth: 1,
+        };
+        let child_control_permit_id = self
+            .parent
+            .reserve_child(&request, self.service.dependencies.clock().now())?;
+        let child_envelope_digest = content_digest(&child)?;
+        let link = ChildRunLinkV1 {
+            parent_run_id: parent_id.clone(),
+            parent_receipt_id: admission.receipt_id,
+            parent_control_permit_id: self.parent.lifecycle_permit_id().clone(),
+            child_run_id: child_run_id.clone(),
+            child_control_permit_id: child_control_permit_id.clone(),
+            root_operation_id: parent_id,
+            reserved_budget: proposal.budget.clone(),
+            child_envelope_digest,
+            child_terminal_receipt_id: None,
+            child_terminal_state: None,
+            child_chain_head: None,
+            cancelled: false,
+        };
+        let link_descriptor = recursive_agent_ledger::put_string(
+            self.parent.store(),
+            &serde_json::to_string(&link).map_err(RunError::Json)?,
+        )?;
+        self.parent.append_child_receipt(
+            ReceiptKindV1::ChildLinked,
+            child_receipt_step_id(&link.parent_run_id, &proposal_digest, "link")?,
+            link.child_envelope_digest.clone(),
+            proposal_digest.clone(),
+            vec![link_descriptor],
+            self.service.dependencies.clock().now(),
+        )?;
+        self.parent.appendable_snapshot()?;
+
+        let executor = AdmittedToolExecutor {
+            runtime: self.service.dependencies.tool_runtime(),
+        };
+        let summary = run_child_spec_with_run_id(
+            &child.run_spec,
+            self.service.dependencies.output_root(),
+            self.service.dependencies.clock(),
+            child_run_id.clone(),
+            &executor,
+            self.parent.family_store()?,
+            child_control_permit_id,
+        )?;
+        let verification = self.service.verify(&child_run_id)?;
+        let child_snapshot =
+            verified_snapshot_directory_bound(&self.service.run_paths(&child_run_id)?)?;
+        let child_terminal = child_snapshot.receipts().last().ok_or_else(|| {
+            RuntimeServiceError::Ledger(LedgerError::ChildLinkInvalid(
+                "strictly verified child transcript is empty".into(),
+            ))
+        })?;
+        if child_terminal.kind != ReceiptKindV1::RunFinalized {
+            return Err(RuntimeServiceError::Ledger(LedgerError::ChildLinkInvalid(
+                "strictly verified child lacks terminal receipt".into(),
+            )));
+        }
+        let closure = ChildRunLinkV1 {
+            child_terminal_receipt_id: Some(child_terminal.receipt_id.clone()),
+            child_terminal_state: Some(verification.terminal_state),
+            child_chain_head: Some(verification.final_head.clone()),
+            ..link
+        };
+        let closure_descriptor = recursive_agent_ledger::put_string(
+            self.parent.store(),
+            &serde_json::to_string(&closure).map_err(RunError::Json)?,
+        )?;
+        self.parent.append_child_receipt(
+            ReceiptKindV1::ChildClosed,
+            child_receipt_step_id(&closure.parent_run_id, &proposal_digest, "closure")?,
+            closure.child_envelope_digest.clone(),
+            proposal_digest,
+            vec![closure_descriptor],
+            self.service.dependencies.clock().now(),
+        )?;
+        self.parent
+            .verify_child_links(self.service.dependencies.output_root(), true)?;
+        Ok(RuntimeHandleV1 {
+            operation_id: child_run_id,
+            run_id: summary.run_id,
+            run_dir: summary.run_dir,
+        })
+    }
+
+    /// Reject incomplete, duplicated, or unverified child closure evidence
+    /// before revoking the parent lifecycle permit and appending `RunFinalized`.
+    pub fn finalize(&mut self) -> Result<RuntimeHandleV1, RuntimeServiceError> {
+        if self.finalized {
+            return Err(RuntimeServiceError::LiveParentFinalized);
+        }
+        self.parent
+            .verify_child_links(self.service.dependencies.output_root(), true)?;
+        let family = self.parent.family_store()?;
+        if family.parent_is_revoked().map_err(RunError::Policy)? {
+            return Err(RuntimeServiceError::LiveParentNotAdmissible {
+                state: RunTerminalStateV1::Cancelled,
+            });
+        }
+        family
+            .revoke_parent(self.service.dependencies.clock().now())
+            .map_err(RunError::Policy)?;
+        let summary = self
+            .parent
+            .finish_chain(self.service.dependencies.clock())?;
+        self.service.verify(&summary.run_id)?;
+        self.service.unregister_live_family(&summary.run_id)?;
+        self.finalized = true;
+        self._active.release();
+        Ok(RuntimeHandleV1 {
+            operation_id: summary.run_id.clone(),
+            run_id: summary.run_id,
+            run_dir: summary.run_dir,
+        })
+    }
+}
+
+impl Drop for RuntimeLiveParentV2<'_> {
+    fn drop(&mut self) {
+        if !self.finalized {
+            if let Ok(family) = self.parent.family_store() {
+                let _ = family.revoke_parent(self.service.dependencies.clock().now());
+            }
+        }
+        let _ = self.service.unregister_live_family(self.parent.run_id());
+    }
+}
+
+fn permit_budget(budget: &recursive_agent_contracts::OperationBudgetV1) -> PermitBudgetV1 {
+    PermitBudgetV1 {
+        max_wall_time_ms: budget.max_wall_time_ms,
+        max_output_bytes: budget.max_output_bytes,
+        max_artifact_bytes: budget.max_artifact_bytes,
+    }
+}
+
+fn child_receipt_step_id(
+    parent_run_id: &CurrentRunId,
+    proposal_digest: &recursive_agent_contracts::ContentDigest,
+    phase: &str,
+) -> Result<recursive_agent_contracts::CurrentStepId, ContractError> {
+    let call = ToolCallSpecV1 {
+        tool: format!("runner.child.{phase}"),
+        args: serde_json::json!({"proposal_digest": proposal_digest}),
+        frozen_clock: None,
+    };
+    derive_step_id(parent_run_id, usize::MAX, &format!("child-{phase}"), &call)
 }
 
 struct ActiveOperationGuard<'a> {
     active_operations: &'a Mutex<BTreeSet<String>>,
     active_key: String,
+    released: bool,
+}
+
+impl ActiveOperationGuard<'_> {
+    fn release(&mut self) {
+        if !self.released {
+            if let Ok(mut active) = self.active_operations.lock() {
+                active.remove(&self.active_key);
+            }
+            self.released = true;
+        }
+    }
 }
 
 impl Drop for ActiveOperationGuard<'_> {
     fn drop(&mut self) {
-        if let Ok(mut active) = self.active_operations.lock() {
-            active.remove(&self.active_key);
-        }
+        self.release();
     }
 }

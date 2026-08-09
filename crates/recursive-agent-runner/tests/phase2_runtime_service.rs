@@ -9,9 +9,10 @@ use llm_tool_runtime::{
 };
 use recursive_agent_contracts::{
     content_digest, derive_operation_id, ActorAuthorityV1, AuthorityOriginV1, CausalLinkV1,
-    ContentDigest, DeclaredEffectsV1, OperationBudgetV1, OperationEnvelopeV1, OperationSchemaV1,
-    ProvenanceRefV1, ReceiptKindV1, ReplayClassV1, ReplayIntentV1, ReplaySpecV1, RunSpecV1,
-    RunTerminalStateV1, RuntimeEventKindV1, StepSpecV1, ToolCallSpecV1,
+    ChildOperationProposalV2, ContentDigest, DeclaredEffectsV1, OperationBudgetV1,
+    OperationEnvelopeV1, OperationSchemaV1, ProvenanceRefV1, ReceiptKindV1, ReplayClassV1,
+    ReplayIntentV1, ReplaySpecV1, RunSpecV1, RunTerminalStateV1, RuntimeEventKindV1, StepSpecV1,
+    ToolCallSpecV1,
 };
 use recursive_agent_ledger::{verified_snapshot_directory_bound, ArtifactStore, RunPaths};
 use recursive_agent_provider::{ProviderSpecV1, ValidatedEndpoint};
@@ -147,6 +148,34 @@ fn sample_operation() -> Result<OperationEnvelopeV1, Box<dyn std::error::Error>>
     })
 }
 
+fn child_proposal(
+    parent: &OperationEnvelopeV1,
+) -> Result<ChildOperationProposalV2, Box<dyn std::error::Error>> {
+    let parent_id = derive_operation_id(parent)?;
+    let mut run_spec = parent.run_spec.clone();
+    run_spec.name = "runtime-service-child".into();
+    run_spec.steps[0].call.args = serde_json::json!({"text": "child"});
+    Ok(ChildOperationProposalV2 {
+        schema: OperationSchemaV1::V2,
+        actor: ActorAuthorityV1 {
+            principal: parent.actor.principal.clone(),
+            origin: AuthorityOriginV1::Delegated,
+        },
+        causality: CausalLinkV1 {
+            parent_operation_id: Some(parent_id.clone()),
+            root_operation_id: Some(parent_id),
+        },
+        budget: parent.budget.clone(),
+        effects: DeclaredEffectsV1 {
+            action_digest: content_digest(&run_spec)?,
+            ..parent.effects.clone()
+        },
+        provenance: parent.provenance.clone(),
+        replay: parent.replay.clone(),
+        run_spec,
+    })
+}
+
 fn slow_shell_operation() -> Result<OperationEnvelopeV1, Box<dyn std::error::Error>> {
     let mut operation = sample_operation()?;
     operation.run_spec.name = "runtime-service-concurrent-duplicate".into();
@@ -269,6 +298,54 @@ fn runtime_service_submit_uses_operation_identity_for_the_authoritative_run(
     assert_eq!(handle.run_id(), handle.operation_id());
     assert_eq!(handle.run_dir(), expected_run_directory);
     assert!(handle.run_dir().is_dir());
+    Ok(())
+}
+
+#[test]
+fn live_parent_v2_binds_child_admission_before_dispatch_and_finalizes_only_after_closure(
+) -> Result<(), Box<dyn std::error::Error>> {
+    let output_root = tempfile::tempdir()?;
+    let parent = sample_operation()?;
+    let child = child_proposal(&parent)?;
+    let service = RuntimeService::new(service_dependencies(output_root.path())?);
+
+    let mut live_parent = service.begin_parent_v2(&parent)?;
+    let child_handle = live_parent.submit_child(&child)?;
+    let parent_handle = live_parent.finalize()?;
+
+    assert!(
+        service
+            .verify(child_handle.run_id())?
+            .current_strict_success
+    );
+    assert!(
+        service
+            .verify(parent_handle.run_id())?
+            .current_strict_success
+    );
+    let parent_snapshot =
+        verified_snapshot_directory_bound(&RunPaths::new(parent_handle.run_dir()))?;
+    assert!(
+        parent_snapshot
+            .receipts()
+            .iter()
+            .any(|receipt| receipt.kind == ReceiptKindV1::ChildAdmissionPrepared),
+        "a durable parent admission receipt must precede every child dispatch"
+    );
+    assert!(
+        parent_snapshot
+            .receipts()
+            .iter()
+            .any(|receipt| receipt.kind == ReceiptKindV1::ChildLinked),
+        "the parent must record a content-addressed child link"
+    );
+    assert!(
+        parent_snapshot
+            .receipts()
+            .iter()
+            .any(|receipt| receipt.kind == ReceiptKindV1::ChildClosed),
+        "the parent must record verified child terminal closure"
+    );
     Ok(())
 }
 

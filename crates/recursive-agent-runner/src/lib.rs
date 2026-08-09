@@ -13,7 +13,8 @@ pub use deps::{
 };
 pub use error::RuntimeDependencyError;
 pub use runtime::{
-    RuntimeCancelResultV1, RuntimeHandleV1, RuntimeService, RuntimeServiceError, RuntimeStatusV1,
+    RuntimeCancelResultV1, RuntimeHandleV1, RuntimeLiveParentV2, RuntimeService,
+    RuntimeServiceError, RuntimeStatusV1,
 };
 pub use scheduler::{OperationRow, ProjectedState, SchedulerStore, SchedulerStoreError};
 
@@ -25,11 +26,12 @@ use std::path::{Path, PathBuf};
 
 use chrono::{DateTime, TimeDelta, Utc};
 use recursive_agent_contracts::{
-    content_digest, derive_permit_id, derive_step_id, ActorAuthorityV1, AuthorityOriginV1,
-    CausalLinkV1, ContractError, CurrentPermitId, CurrentRunId, CurrentStepId, DeclaredEffectsV1,
-    OperationBudgetV1, OperationEnvelopeV1, OperationSchemaV1, ProvenanceRefV1, ReceiptKindV1,
-    ReceiptOutcomeV1, ReplayClassV1, ReplayIntentV1, ReplaySpecV1, RunSpecV1, RunTerminalStateV1,
-    StepSpecV1, ToolCallSpecV1, MAX_SHELL_OUTPUT_BYTES, MAX_SHELL_TIMEOUT_MS,
+    content_digest, derive_permit_id, derive_step_id, ActorAuthorityV1, ArtifactDescriptorV1,
+    AuthorityOriginV1, CausalLinkV1, ContentDigest, ContractError, CurrentPermitId, CurrentRunId,
+    CurrentStepId, DeclaredEffectsV1, OperationBudgetV1, OperationEnvelopeV1, OperationSchemaV1,
+    ProvenanceRefV1, ReceiptKindV1, ReceiptOutcomeV1, ReplayClassV1, ReplayIntentV1, ReplaySpecV1,
+    RunSpecV1, RunTerminalStateV1, StepSpecV1, ToolCallSpecV1, MAX_SHELL_OUTPUT_BYTES,
+    MAX_SHELL_TIMEOUT_MS,
 };
 use recursive_agent_ledger::{
     make_receipt, open_from_dir_fd, put_string, ArtifactStore, ChainHandle, LedgerError,
@@ -37,8 +39,9 @@ use recursive_agent_ledger::{
 };
 use recursive_agent_policy::{
     build_lineage, ActorPrincipalV1, Allowlist, DelegatedActionV1, DelegationCeilingV1,
-    DelegationTransitionV1, DurablePermitStore, EffectScopeV1, PermitBindingV1, PermitBudgetV1,
-    PermitEvidenceV1, PermitRejectionReasonV1, PermitRevocationReasonV1, PolicyError,
+    DelegationTransitionV1, DurablePermitStore, EffectScopeV1, FamilyAuthorityStore,
+    FamilyChildRequestV1, FamilyRootGrantV1, PermitBindingV1, PermitBudgetV1, PermitEvidenceV1,
+    PermitRejectionReasonV1, PermitRevocationReasonV1, PolicyError,
 };
 use thiserror::Error;
 
@@ -132,6 +135,10 @@ pub enum RunError {
         /// Why the parent boundary could not be trusted.
         reason: String,
     },
+    #[error("live parent cannot be recovered from an existing or terminal chain")]
+    LiveParentUnavailable,
+    #[error("live parent lifecycle: {0}")]
+    LiveParent(String),
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Error)]
@@ -446,6 +453,149 @@ fn run_spec_internal_with_run_id(
     run_id: CurrentRunId,
     tool_executor: &dyn RunnerToolExecutor,
 ) -> Result<RunSummary, RunError> {
+    match execute_spec_with_run_id(
+        spec,
+        out_root,
+        clock,
+        hook,
+        run_id,
+        tool_executor,
+        ExecutionMode::Finalized { family_guard: None },
+    )? {
+        RunExecution::Finalized(summary) => Ok(summary),
+        RunExecution::Live(_) => Err(RunError::LiveParentUnavailable),
+    }
+}
+
+pub(crate) fn run_live_parent_spec_with_run_id(
+    operation: &OperationEnvelopeV1,
+    out_root: &Path,
+    clock: &dyn Clock,
+    run_id: CurrentRunId,
+    tool_executor: &dyn RunnerToolExecutor,
+) -> Result<LiveParentRun, RunError> {
+    match execute_spec_with_run_id(
+        &operation.run_spec,
+        out_root,
+        clock,
+        &NoopRunnerHook,
+        run_id,
+        tool_executor,
+        ExecutionMode::LiveParent,
+    )? {
+        RunExecution::Live(parent) => {
+            let mut parent = *parent;
+            parent.parent_actor = operation.actor.principal.clone();
+            Ok(parent)
+        }
+        RunExecution::Finalized(_) => Err(RunError::LiveParentUnavailable),
+    }
+}
+
+pub(crate) fn run_child_spec_with_run_id(
+    spec: &RunSpecV1,
+    out_root: &Path,
+    clock: &dyn Clock,
+    run_id: CurrentRunId,
+    tool_executor: &dyn RunnerToolExecutor,
+    family_store: FamilyAuthorityStore,
+    child_control_permit_id: CurrentPermitId,
+) -> Result<RunSummary, RunError> {
+    let family_guard =
+        FamilyDispatchGuardV1::new(family_store, run_id.clone(), child_control_permit_id);
+    match execute_spec_with_run_id(
+        spec,
+        out_root,
+        clock,
+        &NoopRunnerHook,
+        run_id,
+        tool_executor,
+        ExecutionMode::Finalized {
+            family_guard: Some(&family_guard),
+        },
+    )? {
+        RunExecution::Finalized(summary) => Ok(summary),
+        RunExecution::Live(_) => Err(RunError::LiveParentUnavailable),
+    }
+}
+
+/// The family-level control permit checked around every child effect. The
+/// local child run still has its own receipt-bearing permits; this guard is
+/// the non-bypassable cross-run attenuation layer.
+pub(crate) struct FamilyDispatchGuardV1 {
+    family_store: FamilyAuthorityStore,
+    child_run_id: CurrentRunId,
+    child_control_permit_id: CurrentPermitId,
+}
+
+impl FamilyDispatchGuardV1 {
+    pub(crate) fn new(
+        family_store: FamilyAuthorityStore,
+        child_run_id: CurrentRunId,
+        child_control_permit_id: CurrentPermitId,
+    ) -> Self {
+        Self {
+            family_store,
+            child_run_id,
+            child_control_permit_id,
+        }
+    }
+
+    fn check(&self, trusted_now: DateTime<Utc>) -> Result<(), PolicyError> {
+        self.family_store.guard_child_dispatch(
+            &self.child_run_id,
+            &self.child_control_permit_id,
+            trusted_now,
+        )
+    }
+}
+
+/// State retained while a V2 parent remains appendable. It is only created by
+/// the canonical runner and only consumed by the runtime-owned live handle.
+pub(crate) struct LiveParentRun {
+    run_id: CurrentRunId,
+    run_dir: PathBuf,
+    parent_actor: String,
+    pinned_root: PinnedRunRoot,
+    chain: ChainHandle,
+    store: ArtifactStore,
+    permit_store: DurablePermitStore,
+    lifecycle_permit_id: CurrentPermitId,
+    lifecycle_step_id: CurrentStepId,
+    lifecycle_lineage: Vec<recursive_agent_contracts::AuthorityLineageEntryV1>,
+    lifecycle_call_digest: ContentDigest,
+    lifecycle_args_digest: ContentDigest,
+    spec_digest: ContentDigest,
+    terminal_state: RunTerminalStateV1,
+    family_store: Option<FamilyAuthorityStore>,
+    finalized: bool,
+}
+
+enum RunExecution {
+    Finalized(RunSummary),
+    Live(Box<LiveParentRun>),
+}
+
+enum ExecutionMode<'a> {
+    Finalized {
+        family_guard: Option<&'a FamilyDispatchGuardV1>,
+    },
+    LiveParent,
+}
+
+fn execute_spec_with_run_id(
+    spec: &RunSpecV1,
+    out_root: &Path,
+    clock: &dyn Clock,
+    hook: &dyn RunnerHook,
+    run_id: CurrentRunId,
+    tool_executor: &dyn RunnerToolExecutor,
+    mode: ExecutionMode<'_>,
+) -> Result<RunExecution, RunError> {
+    let (family_guard, leave_appendable) = match mode {
+        ExecutionMode::Finalized { family_guard } => (family_guard, false),
+        ExecutionMode::LiveParent => (None, true),
+    };
     let allowlist = Allowlist::default();
     allowlist.validate_phase_one_boundary(spec)?;
     for step in &spec.steps {
@@ -469,7 +619,10 @@ fn run_spec_internal_with_run_id(
 
     let mut chain = open_from_dir_fd(&paths, &pinned_root.root)?;
     if chain.length() != 0 {
-        return verified_summary(&pinned_root, run_id, run_dir);
+        if leave_appendable {
+            return Err(RunError::LiveParentUnavailable);
+        }
+        return verified_summary(&pinned_root, run_id, run_dir).map(RunExecution::Finalized);
     }
 
     let store = chain.artifact_store()?;
@@ -572,6 +725,7 @@ fn run_spec_internal_with_run_id(
                 .ok_or_else(|| ContractError::Malformed("prepared step index missing".into()))?
                 .take(),
             tool_executor,
+            family_guard,
             hook,
             pinned_root: &pinned_root,
         })? {
@@ -586,6 +740,26 @@ fn run_spec_internal_with_run_id(
         lifecycle.transition_terminal(RunTerminalStateV1::Succeeded)?;
     }
     let terminal = lifecycle.terminal()?;
+    if leave_appendable {
+        return Ok(RunExecution::Live(Box::new(LiveParentRun {
+            run_id,
+            run_dir,
+            parent_actor: String::new(),
+            pinned_root,
+            chain,
+            store,
+            permit_store,
+            lifecycle_permit_id: lifecycle_permit.permit_id,
+            lifecycle_step_id,
+            lifecycle_lineage,
+            lifecycle_call_digest,
+            lifecycle_args_digest,
+            spec_digest,
+            terminal_state: terminal,
+            family_store: None,
+            finalized: false,
+        })));
+    }
     let revocation_reason = if terminal == RunTerminalStateV1::Succeeded {
         PermitRevocationReasonV1::Operator
     } else {
@@ -627,7 +801,7 @@ fn run_spec_internal_with_run_id(
     if summary.terminal_state != terminal {
         return Err(RunError::SplitRunRoot);
     }
-    Ok(summary)
+    Ok(RunExecution::Finalized(summary))
 }
 
 fn verified_summary(
@@ -662,6 +836,172 @@ pub struct RunSummary {
     pub run_root_identity: RunRootIdentity,
 }
 
+impl LiveParentRun {
+    pub(crate) fn run_id(&self) -> &CurrentRunId {
+        &self.run_id
+    }
+
+    pub(crate) fn lifecycle_permit_id(&self) -> &CurrentPermitId {
+        &self.lifecycle_permit_id
+    }
+
+    pub(crate) fn parent_control_window(&self) -> Result<(DateTime<Utc>, DateTime<Utc>), RunError> {
+        let record = self.permit_store.state(&self.lifecycle_permit_id)?;
+        Ok((
+            record.permit.binding.not_before,
+            record.permit.binding.expires_at,
+        ))
+    }
+
+    pub(crate) fn terminal_state(&self) -> RunTerminalStateV1 {
+        self.terminal_state
+    }
+
+    pub(crate) fn configure_family(
+        &mut self,
+        output_root: &Path,
+        grant: FamilyRootGrantV1,
+    ) -> Result<(), RunError> {
+        if self.family_store.is_some() || self.finalized {
+            return Err(RunError::LiveParentUnavailable);
+        }
+        let output = open_directory_tree(output_root, true)?;
+        let families = open_named_directory(&output, std::ffi::OsStr::new("families"), true)?;
+        let family_key = content_digest(&grant.root_operation_id)?.to_string();
+        let family_root = open_named_directory(&families, std::ffi::OsStr::new(&family_key), true)?;
+        self.family_store = Some(FamilyAuthorityStore::from_dir_fd(&family_root, grant)?);
+        Ok(())
+    }
+
+    pub(crate) fn reserve_child(
+        &self,
+        request: &FamilyChildRequestV1,
+        trusted_now: DateTime<Utc>,
+    ) -> Result<CurrentPermitId, RunError> {
+        let family = self
+            .family_store
+            .as_ref()
+            .ok_or(RunError::LiveParentUnavailable)?;
+        Ok(family
+            .reserve_child(request, trusted_now)?
+            .child_control_permit_id)
+    }
+
+    pub(crate) fn append_child_receipt(
+        &mut self,
+        kind: ReceiptKindV1,
+        step_id: CurrentStepId,
+        spec_digest: ContentDigest,
+        proposal_digest: ContentDigest,
+        artifact_refs: Vec<ArtifactDescriptorV1>,
+        valid_time: DateTime<Utc>,
+    ) -> Result<recursive_agent_contracts::ReceiptV1, RunError> {
+        if self.finalized {
+            return Err(RunError::LiveParentUnavailable);
+        }
+        self.pinned_root.ensure_locator_matches()?;
+        let receipt = make_receipt(
+            ReceiptDraftV1 {
+                run_id: self.run_id.clone(),
+                step_id,
+                kind,
+                valid_time,
+                lineage: self.lifecycle_lineage.clone(),
+                spec_digest,
+                args_digest: proposal_digest,
+                artifact_refs,
+                outcome: ReceiptOutcomeV1::Ok,
+            },
+            self.chain.head().clone(),
+        )?;
+        recursive_agent_policy::assert_lineage_for_receipt(&receipt)?;
+        self.chain.append(receipt.clone())?;
+        Ok(receipt)
+    }
+
+    pub(crate) fn store(&self) -> &ArtifactStore {
+        &self.store
+    }
+
+    pub(crate) fn family_store(&self) -> Result<FamilyAuthorityStore, RunError> {
+        self.family_store
+            .clone()
+            .ok_or(RunError::LiveParentUnavailable)
+    }
+
+    pub(crate) fn appendable_snapshot(
+        &self,
+    ) -> Result<recursive_agent_ledger::VerifiedReceiptSnapshot, RunError> {
+        self.pinned_root.ensure_locator_matches()?;
+        Ok(
+            recursive_agent_ledger::appendable_snapshot_expected_run_from_dir_fd(
+                &self.pinned_root.root,
+                &self.run_id,
+            )?,
+        )
+    }
+
+    pub(crate) fn verify_child_links(
+        &self,
+        output_root: &Path,
+        require_closure: bool,
+    ) -> Result<(), RunError> {
+        let snapshot = self.appendable_snapshot()?;
+        recursive_agent_ledger::verify_child_links_in_runtime_root(
+            &snapshot,
+            &self.store,
+            output_root,
+            require_closure,
+        )?;
+        Ok(())
+    }
+
+    pub(crate) fn finish_chain(&mut self, clock: &dyn Clock) -> Result<RunSummary, RunError> {
+        let revocation_reason = if self.terminal_state == RunTerminalStateV1::Succeeded {
+            PermitRevocationReasonV1::Operator
+        } else {
+            PermitRevocationReasonV1::OperationCancelled
+        };
+        let revoke_time = clock.now();
+        let revoked =
+            self.permit_store
+                .revoke(&self.lifecycle_permit_id, revocation_reason, revoke_time)?;
+        let revocation_evidence = put_string(
+            &self.store,
+            &serde_json::to_string(&PermitEvidenceV1::from_record(&revoked)?)?,
+        )?;
+        append_receipt!(
+            &mut self.chain,
+            self.run_id.clone(),
+            self.lifecycle_step_id.clone(),
+            ReceiptKindV1::PermitRevoked,
+            revoke_time,
+            self.lifecycle_lineage.clone(),
+            self.lifecycle_call_digest.clone(),
+            self.lifecycle_args_digest.clone(),
+            vec![revocation_evidence],
+            ReceiptOutcomeV1::Ok,
+        )?;
+        append_receipt!(
+            &mut self.chain,
+            self.run_id.clone(),
+            self.lifecycle_step_id.clone(),
+            ReceiptKindV1::RunFinalized,
+            clock.now(),
+            self.lifecycle_lineage.clone(),
+            self.spec_digest.clone(),
+            self.spec_digest.clone(),
+            vec![],
+            self.terminal_state
+                .receipt_outcome("live parent finalized after verified child closure"),
+        )?;
+        let summary =
+            verified_summary(&self.pinned_root, self.run_id.clone(), self.run_dir.clone())?;
+        self.finalized = true;
+        Ok(summary)
+    }
+}
+
 struct RunStepContext<'a> {
     chain: &'a mut ChainHandle,
     store: &'a ArtifactStore,
@@ -679,6 +1019,7 @@ struct RunStepContext<'a> {
     parent_expires_at: DateTime<Utc>,
     prepared_dispatch: Option<sandbox_engine::PreparedDispatch>,
     tool_executor: &'a dyn RunnerToolExecutor,
+    family_guard: Option<&'a FamilyDispatchGuardV1>,
     hook: &'a dyn RunnerHook,
     pinned_root: &'a PinnedRunRoot,
 }
@@ -701,6 +1042,7 @@ fn run_step(context: RunStepContext<'_>) -> Result<Option<(RunTerminalStateV1, S
         parent_expires_at,
         prepared_dispatch,
         tool_executor,
+        family_guard,
         hook,
         pinned_root,
     } = context;
@@ -966,6 +1308,9 @@ fn run_step(context: RunStepContext<'_>) -> Result<Option<(RunTerminalStateV1, S
     )?;
     hook.fire(RunHookPoint::ChildConsumeBeforeDispatch, pinned_root)?;
     let dispatch_monotonic = clock.monotonic_now();
+    let family_before_dispatch = family_guard
+        .map(|guard| guard.check(clock.now()))
+        .transpose();
     let tool_result = if dispatch_monotonic < consume_monotonic
         || dispatch_monotonic >= permit_monotonic_deadline
         || dispatch_monotonic >= parent_monotonic_deadline
@@ -973,6 +1318,10 @@ fn run_step(context: RunStepContext<'_>) -> Result<Option<(RunTerminalStateV1, S
         Err(recursive_agent_tools::ToolError::LeaseExpired(
             "monotonic execution lease expired or rolled back before dispatch".into(),
         ))
+    } else if let Err(error) = family_before_dispatch {
+        Err(recursive_agent_tools::ToolError::LeaseExpired(format!(
+            "family authority denied child effect before dispatch: {error}"
+        )))
     } else {
         permit_store.validate_parent_authority(&permit.permit_id, clock.now())?;
         dispatch_tool(
@@ -987,6 +1336,18 @@ fn run_step(context: RunStepContext<'_>) -> Result<Option<(RunTerminalStateV1, S
                 })?,
             prepared_dispatch,
         )
+    };
+
+    // A family revocation may race the effect. Re-check before committing a
+    // successful observation so a revoked child can never report success.
+    let tool_result = match family_guard
+        .map(|guard| guard.check(clock.now()))
+        .transpose()
+    {
+        Ok(_) => tool_result,
+        Err(error) => Err(recursive_agent_tools::ToolError::LeaseExpired(format!(
+            "family authority ended during child effect execution: {error}"
+        ))),
     };
 
     let parent_after_dispatch = clock.monotonic_now();
@@ -1508,37 +1869,6 @@ pub fn resume_from_verified_boundary(
         parent_run_id,
         verified: true,
     })
-}
-
-/// Build a causally-linked continuation envelope for the given step set,
-/// bound to a previously verified parent boundary. No in-place mutation of the
-/// parent run occurs; the continuation is a fresh run carrying parent lineage.
-pub fn continuation_envelope(
-    boundary: &VerifiedBoundary,
-    name: &str,
-    steps: Vec<StepSpecV1>,
-    policy_version: &str,
-) -> Result<OperationEnvelopeV1, RunError> {
-    let parent_run_id = CurrentRunId::try_new(&boundary.parent_run_id).map_err(|_| {
-        ContractError::Malformed("parent boundary run id is not a canonical run id".into())
-    })?;
-    let run_spec = RunSpecV1 {
-        name: name.into(),
-        steps,
-        frozen_clock: None,
-        policy_version: policy_version.into(),
-    };
-    let mut operation = legacy_operation_envelope(&run_spec)?;
-    // A continuation is inherently a child: it must carry parent/root lineage,
-    // which the contract only permits for Delegated authority.
-    operation.actor = ActorAuthorityV1 {
-        principal: "continuation".into(),
-        origin: AuthorityOriginV1::Delegated,
-    };
-    operation.causality.parent_operation_id = Some(parent_run_id.clone());
-    operation.causality.root_operation_id = Some(parent_run_id);
-    operation.validate()?;
-    Ok(operation)
 }
 
 #[cfg(test)]

@@ -1,14 +1,15 @@
 //! Task 5.3 — resume only from a strictly-verified step boundary.
 //!
-//! A parent run that verifies cleanly yields a causally-linked continuation;
+//! A parent run that verifies cleanly yields an inspectable strict boundary;
 //! a tampered/unverified parent is a typed error (never a silent resume), and
-//! the parent's evidence is never mutated.
+//! the parent's evidence is never mutated. Fresh child work must use the V2
+//! live-parent admission lane, not a terminal V1 continuation envelope.
 #![allow(clippy::unwrap_used, clippy::expect_used)]
 mod support;
 
 use recursive_agent_contracts::{RunSpecV1, RunTerminalStateV1, StepSpecV1, ToolCallSpecV1};
 use recursive_agent_ledger::RunPaths;
-use recursive_agent_runner::{continuation_envelope, resume_from_verified_boundary};
+use recursive_agent_runner::resume_from_verified_boundary;
 use support::run_spec;
 
 type TestResult = Result<(), Box<dyn std::error::Error>>;
@@ -49,7 +50,7 @@ fn newest_run_root(out_root: &std::path::Path) -> std::io::Result<std::path::Pat
 }
 
 #[test]
-fn verified_parent_yields_causally_linked_continuation() -> TestResult {
+fn verified_parent_yields_a_strict_boundary_without_mutating_parent_evidence() -> TestResult {
     let tmp = tempfile::tempdir()?;
     run_parent(tmp.path())?;
     let parent_root = newest_run_root(tmp.path())?;
@@ -59,32 +60,8 @@ fn verified_parent_yields_causally_linked_continuation() -> TestResult {
     let boundary = resume_from_verified_boundary(&parent_paths)?;
     assert!(boundary.verified);
 
-    // Build a continuation envelope carrying parent lineage.
-    let continuation = continuation_envelope(
-        &boundary,
-        "resume-child",
-        vec![echo_step("child-step")],
-        "m0-2",
-    )?;
-    let parent_id = boundary.parent_run_id;
-    assert_eq!(
-        continuation
-            .causality
-            .parent_operation_id
-            .as_ref()
-            .unwrap()
-            .to_string(),
-        parent_id
-    );
-    assert_eq!(
-        continuation
-            .causality
-            .root_operation_id
-            .as_ref()
-            .unwrap()
-            .to_string(),
-        parent_id
-    );
+    assert!(boundary.verified);
+    assert!(!boundary.parent_run_id.is_empty());
     Ok(())
 }
 
