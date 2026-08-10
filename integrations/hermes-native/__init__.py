@@ -7,6 +7,7 @@ behavior is configured through new environment variables.
 
 from __future__ import annotations
 
+import json
 import os
 from pathlib import Path
 
@@ -65,7 +66,12 @@ def check_recursive_agent_available_stub(socket_path: str) -> bool:
 
 
 def _handler(ctx, args, **kwargs) -> str:
-    """Submit a canonical envelope (from the daemon emitter) and return status."""
+    """Submit a canonical envelope and return daemon-derived terminal facts.
+
+    Successful results use a versioned JSON response because callers may need
+    the exact daemon-owned ``run_dir`` for a CLI-owned Run Pack operation.
+    Presentation text is not an interchange format.
+    """
     socket_path = _resolve_socket(ctx) if ctx is not None else DEFAULT_SOCKET_PATH
     envelope_path = str((args or {}).get("envelope_path", ""))
     if envelope_path:
@@ -82,9 +88,28 @@ def _handler(ctx, args, **kwargs) -> str:
         result = submit_and_status(socket_path, envelope)
     except DaemonClientError as error:
         return f"recursive_agent_execute: unavailable: {error}"
-    return (
-        f"recursive_agent_execute: state={result['state']} "
-        f"run_id={result['run_id']} receipt={result['receipt_ref']}"
+    try:
+        verification = result["verification"]
+        state = result["state"]
+        run_id = result["run_id"]
+        run_dir = result["run_dir"]
+        verified = verification["ok"]
+        chain_length = verification["length"]
+        final_head = verification["final_head"]
+    except (KeyError, TypeError):
+        return "recursive_agent_execute: unavailable: daemon verification facts missing"
+    return json.dumps(
+        {
+            "schema": "recursive-agent.hermes-result/v1",
+            "state": state,
+            "run_id": run_id,
+            "run_dir": run_dir,
+            "verified": verified,
+            "chain_length": chain_length,
+            "final_head": final_head,
+        },
+        separators=(",", ":"),
+        sort_keys=True,
     )
 
 
@@ -98,7 +123,7 @@ def register(ctx) -> None:
         check_fn=check_recursive_agent_available,
         description=(
             "Submit one bounded recursive-agent native action and return "
-            "terminal status plus a receipt reference."
+            "daemon-derived terminal status plus strict verification facts."
         ),
         emoji="\u2699\ufe0f",
     )

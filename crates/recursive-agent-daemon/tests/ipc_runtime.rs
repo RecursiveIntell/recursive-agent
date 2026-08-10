@@ -179,6 +179,16 @@ fn status_request(request_id: &str, run_id: &str) -> Vec<u8> {
     frame(&serde_json::to_vec(&payload).unwrap())
 }
 
+fn verify_request(request_id: &str, run_id: &str) -> Vec<u8> {
+    let payload = serde_json::json!({
+        "schema": IPC_REQUEST_SCHEMA_V1,
+        "protocol_version": IPC_PROTOCOL_VERSION_V1,
+        "request_id": request_id,
+        "request": {"kind": "verify", "run_id": run_id},
+    });
+    frame(&serde_json::to_vec(&payload).unwrap())
+}
+
 fn submit_request(request_id: &str, operation: &OperationEnvelopeV1) -> Vec<u8> {
     let payload = serde_json::json!({
         "schema": IPC_REQUEST_SCHEMA_V1,
@@ -222,6 +232,17 @@ fn daemon_submits_and_verifies_phase_two_action_over_ipc() -> TestResult {
         status["status"]["terminal_state"],
         serde_json::json!("succeeded")
     );
+
+    // Verification is daemon-derived from RuntimeService; the client only
+    // supplies the authoritative run identifier.
+    stream.write_all(&verify_request("req-verify", &run_id))?;
+    stream.flush()?;
+    let verification = read_response(&mut stream)?;
+    assert_eq!(verification["request_id"], "req-verify");
+    assert_eq!(verification["run_id"], run_id);
+    assert_eq!(verification["verification"]["ok"], true);
+    assert_eq!(verification["verification"]["current_strict_success"], true);
+    assert!(verification["verification"]["length"].as_u64().is_some());
     Ok(())
 }
 

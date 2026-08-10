@@ -1,0 +1,51 @@
+{
+  "schema": "RepositoryPrecheckV1",
+  "version": 1,
+  "evidence_state": "observed",
+  "captured_at": "2026-08-09T20:33:47-05:00",
+  "repo_root": "/home/sikmindz/Coding/recursive-agent",
+  "branch": "main",
+  "head": "e644c468ef91a45a5d61f916da94e816dc4a50d2",
+  "upstream": "origin/main",
+  "instructions": ["AGENTS.md", "README.md", "Cargo.toml"],
+  "goal": "Witnessed Workbench v0: one native Hermes submission yields a runtime-verified result and portable offline Run Pack; Gloss excluded",
+  "allowed_paths": [
+    "crates/recursive-agent-daemon/src/protocol.rs",
+    "crates/recursive-agent-daemon/src/server.rs",
+    "crates/recursive-agent-daemon/tests/",
+    "integrations/hermes-native/",
+    "scripts/verify-hermes-native.sh",
+    "docs/receipts/witnessed-workbench/2026-08-09-v0/"
+  ],
+  "forbidden_paths": [
+    "/home/sikmindz/Coding/Libraries/",
+    "Gloss",
+    "Hermes core",
+    "new database or adapter-owned durable evidence"
+  ],
+  "canonical_owners": [
+    "Hermes: interaction/tool routing",
+    "recursive-agent-daemon: strict authenticated IPC",
+    "recursive-agent-runner::RuntimeService: execution/lifecycle/strict verification",
+    "recursive-agent-ledger plus runner/CLI: receipt/artifact chain and Run Pack"
+  ],
+  "required_checks": [
+    "cargo fmt --all -- --check",
+    "cargo test -p recursive-agent-daemon --tests",
+    "scripts/verify-hermes-native.sh",
+    "scripts/verify-run-pack.sh",
+    "cargo test --workspace",
+    "cargo clippy --workspace --all-targets -- -D warnings",
+    "independent read-only hostile review"
+  ],
+  "foreign_dirty_boundary": [
+    ".hermes/runs/",
+    "docs/portfolio-pairing-audit-2026-08-09.md",
+    "docs/receipts/phase-5/",
+    "docs/receipts/phase-6/",
+    "docs/receipts/phase-7/",
+    "integrations/hermes-native/__pycache__/",
+    "integrations/hermes-native/tests/__pycache__/"
+  ],
+  "blockers": []
+}

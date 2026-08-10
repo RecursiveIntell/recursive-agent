@@ -1,0 +1,12 @@
+gate_id,claim_or_invariant,command_or_witness,required,status,evidence_ref,notes
+G-000,source identity and owner map reviewed,git rev-parse/status plus AGENTS.md,true,PASS,PRECHECK.json,Base HEAD e644c468ef91a45a5d61f916da94e816dc4a50d2; foreign dirty state preserved
+G-001,daemon strict verify is wire-admitted and runtime-derived,cargo test -p recursive-agent-daemon --test ipc_runtime daemon_submits_and_verifies_phase_two_action_over_ipc -- --exact,true,PASS,FINAL_VALIDATION.log,Verify validates CurrentRunId and calls RuntimeService::verify
+G-002,all daemon IPC/safety/protocol tests pass,cargo test -p recursive-agent-daemon --tests,true,PASS,FINAL_VALIDATION.log,Daemon unit and integration targets passed including concurrency and malformed ingress lanes
+G-003,Hermes handler drives real daemon and same run exports/verifies/replays a pack,scripts/verify-hermes-native.sh,true,PASS,FINAL_VALIDATION.log,7 tests; E2E uses real daemon and CLI pack operations with a space-containing run root
+G-004,portable pack clean-process verification/replay remains offline,scripts/verify-run-pack.sh,true,PASS,FINAL_VALIDATION.log,Copied pack verifies and replays from clean root after source removal
+G-005,workspace regression suite,cargo test --workspace --all-targets,true,PASS,FINAL_VALIDATION.log,All workspace targets passed
+G-006,formatting,cargo fmt --all -- --check,true,PASS,FINAL_VALIDATION.log,Passed
+G-007,lint,cargo clippy --workspace --all-targets -- -D warnings,true,PASS,FINAL_VALIDATION.log,Passed
+G-008,manual CLI run/verify/export/verify/replay artifact,existing captured proof plus manifest hashes,true,PASS,proof/PACK_MANIFEST.sha256,Artifact hash recorded in CHANGE_RECEIPT.json
+G-009,independent read-only hostile review,deleg_5cc91530,true,PASS,AUDIT_HANDOFF.md,Reviewer found space-path tokenization defect; fixed and focused plus full gates rerun
+G-010,no whitespace-delimited parsing of operator-visible run_dir,focused real E2E with runs-root containing spaces,true,PASS,FINAL_VALIDATION.log,Successful handler response is recursive-agent.hermes-result/v1 JSON and exact run_dir feeds CLI pack export

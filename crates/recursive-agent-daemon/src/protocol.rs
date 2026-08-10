@@ -114,6 +114,13 @@ pub enum IpcRequestV1 {
         /// Authoritative run identifier.
         run_id: String,
     },
+    /// Strictly verify the authoritative receipt/artifact chain for one run.
+    /// The client supplies no verification facts; those are computed by the
+    /// runtime owner after the request is admitted.
+    Verify {
+        /// Authoritative run identifier.
+        run_id: String,
+    },
     /// Submit one canonical native V1 operation for execution.
     Submit {
         /// Complete canonical operation envelope.

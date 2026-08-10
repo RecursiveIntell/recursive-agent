@@ -1,0 +1,36 @@
+schema: OwnerMapV1
+version: 1
+source_root: /home/sikmindz/Coding/recursive-agent
+owners:
+  - surface: Hermes interaction and tool routing
+    canonical_owner: Hermes Agent plugin host
+    paths:
+      - integrations/hermes-native/__init__.py
+      - integrations/hermes-native/plugin.yaml
+    adapter_constraint: Must not own evidence, run lifecycle, pack bytes, or verification semantics.
+  - surface: authenticated native IPC protocol
+    canonical_owner: recursive-agent-daemon
+    paths:
+      - crates/recursive-agent-daemon/src/protocol.rs
+      - crates/recursive-agent-daemon/src/server.rs
+    adapter_constraint: All ingress stays strict, versioned, bounded, and peer-authenticated.
+  - surface: execution lifecycle and strict verification
+    canonical_owner: recursive-agent-runner::RuntimeService
+    paths:
+      - crates/recursive-agent-runner/src/runtime.rs
+    adapter_constraint: Daemon translates only; client cannot supply outcomes.
+  - surface: receipt/artifact chain and Run Pack
+    canonical_owner: recursive-agent-ledger plus runner/CLI pack owners
+    paths:
+      - crates/recursive-agent-ledger/src/lib.rs
+      - crates/recursive-agent-runner
+      - crates/recursive-agent-cli/src/main.rs
+    adapter_constraint: Hermes adapter cannot emit, rewrite, pack, or validate evidence.
+foreign_dirty_boundary:
+  - .hermes/runs/
+  - docs/portfolio-pairing-audit-2026-08-09.md
+  - docs/receipts/phase-5/
+  - docs/receipts/phase-6/
+  - docs/receipts/phase-7/
+  - integrations/hermes-native/__pycache__/
+  - integrations/hermes-native/tests/__pycache__/

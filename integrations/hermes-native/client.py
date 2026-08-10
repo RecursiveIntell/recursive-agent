@@ -112,21 +112,53 @@ def status_of_run(socket_path: str, run_id: str) -> dict:
         raise DaemonClientError(f"cannot reach daemon: {error}") from error
 
 
-def submit_and_status(socket_path: str, envelope: dict) -> dict:
-    """Submit a canonical envelope and return terminal status plus the handle.
+def verify_run(socket_path: str, run_id: str) -> dict:
+    """Return daemon-computed strict verification for an authoritative run."""
+    try:
+        conn = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
+        try:
+            conn.settimeout(5.0)
+            conn.connect(socket_path)
+            return _request(conn, "plugin-verify-1", {"kind": "verify", "run_id": run_id})
+        finally:
+            conn.close()
+    except (OSError, ConnectionError) as error:
+        raise DaemonClientError(f"cannot reach daemon: {error}") from error
 
-    Raises ``DaemonClientError`` if the daemon does not report terminal state.
+
+def submit_and_status(socket_path: str, envelope: dict) -> dict:
+    """Submit, observe terminal status, then require daemon strict verification.
+
+    The returned verification mapping is copied from the daemon response after
+    structural validation. This client never derives a receipt reference or a
+    verification outcome from a run identifier.
     """
     submitted = submit_envelope(socket_path, envelope)
     run_id = str(submitted.get("run_id", ""))
+    run_dir = submitted.get("run_dir")
     if not run_id:
         raise DaemonClientError("submit did not return a run id")
+    if not isinstance(run_dir, str) or not run_dir:
+        raise DaemonClientError("submit did not return a run directory")
     status = status_of_run(socket_path, run_id)
     state = status.get("status", {}).get("state", "unknown")
     if state != "terminal":
         raise DaemonClientError(f"daemon did not report terminal state: {state}")
+    verification_response = verify_run(socket_path, run_id)
+    if verification_response.get("run_id") != run_id:
+        raise DaemonClientError("verification response run id mismatch")
+    verification = verification_response.get("verification")
+    if not isinstance(verification, dict):
+        raise DaemonClientError("verification response missing verification object")
+    if verification.get("ok") is not True or verification.get("current_strict_success") is not True:
+        raise DaemonClientError("daemon strict verification did not succeed")
+    if not isinstance(verification.get("length"), int) or verification["length"] < 1:
+        raise DaemonClientError("verification response has invalid chain length")
+    if not isinstance(verification.get("final_head"), str) or not verification["final_head"]:
+        raise DaemonClientError("verification response missing final chain head")
     return {
         "state": state,
         "run_id": run_id,
-        "receipt_ref": f"run:{run_id}",  # receipt chain verified in Phase 5
+        "run_dir": run_dir,
+        "verification": verification,
     }

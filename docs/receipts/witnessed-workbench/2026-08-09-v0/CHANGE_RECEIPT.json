@@ -1,0 +1,63 @@
+{
+  "schema": "ChangeReceiptV1",
+  "version": 1,
+  "task_id": "20260810T012542Z-witnessed-workbench-v0-one-native-hermes-submission-yields-a-run",
+  "evidence_cutoff": "2026-08-10T02:12:36Z",
+  "evidence_state": "verified",
+  "source_identity": {
+    "root": "/home/sikmindz/Coding/recursive-agent",
+    "branch": "main",
+    "base_head": "e644c468ef91a45a5d61f916da94e816dc4a50d2",
+    "tree_state": "intentionally dirty; foreign paths excluded by PRECHECK.json"
+  },
+  "goal": "Witnessed Workbench v0: one native Hermes submission yields a runtime-verified result and portable offline Run Pack; Gloss excluded.",
+  "non_goals": [
+    "packaged Hermes GUI or plugin-loader execution",
+    "MCP, Gloss, provider-backed, remote, or production execution",
+    "general security certification"
+  ],
+  "changed_paths": [
+    "crates/recursive-agent-daemon/src/protocol.rs",
+    "crates/recursive-agent-daemon/src/server.rs",
+    "crates/recursive-agent-daemon/tests/ipc_runtime.rs",
+    "integrations/hermes-native/__init__.py",
+    "integrations/hermes-native/client.py",
+    "integrations/hermes-native/plugin.yaml",
+    "integrations/hermes-native/tests/test_e2e.py",
+    "scripts/verify-hermes-native.sh",
+    "docs/receipts/witnessed-workbench/2026-08-09-v0/"
+  ],
+  "verification": {
+    "mode": "local reproducible working-tree validation",
+    "log": {
+      "path": "docs/receipts/witnessed-workbench/2026-08-09-v0/FINAL_VALIDATION.log",
+      "sha256": "5a5eaf3fc6a511a8f0757ffef8d7f0584c0bbe4fde958f2b9e1706dda29ae38e"
+    },
+    "commands": [
+      {"command": "cargo test -p recursive-agent-daemon --tests", "exit_code": 0},
+      {"command": "scripts/verify-hermes-native.sh", "exit_code": 0, "result": "7 passed"},
+      {"command": "scripts/verify-run-pack.sh", "exit_code": 0},
+      {"command": "cargo test --workspace --all-targets", "exit_code": 0},
+      {"command": "cargo clippy --workspace --all-targets -- -D warnings", "exit_code": 0},
+      {"command": "cargo fmt --all -- --check", "exit_code": 0},
+      {"command": "git diff --check", "exit_code": 0}
+    ],
+    "artifact_hashes": {
+      "proof/PACK_MANIFEST.sha256": "771ad6736807bea0b31699588749f85e7e2dbfec204b6a880b34640e6aeeb520",
+      "proof/run-pack/PACK_MANIFEST.json": "bb09eb7b801fc1921fddf5f5ae0f019e754201b2da71c8bfaa6e6119f7fefd1a"
+    }
+  },
+  "hostile_review": {
+    "independent_read_only_review": "deleg_5cc91530",
+    "result": "one medium portability defect found, fixed, and regression-tested with a space-containing daemon run root; no blocking defect remained for the bounded local claim",
+    "degraded_attempt": "Agent Graph run-19fe96b1ef0-2 timed out before analyst outputs and is not used as review evidence"
+  },
+  "remaining_delta": [
+    "Graceful daemon shutdown/drain semantics are a separate operational enhancement.",
+    "The reachability probe is not a protocol-version handshake.",
+    "No installed Hermes GUI/plugin-loader invocation was exercised; only the real plugin handler and daemon IPC boundary were exercised."
+  ],
+  "rollback": "Revert the listed implementation paths as one compatibility unit. Preserve proof/run and proof/run-pack evidence. Do not reset, clean, stage, or alter foreign paths listed in PRECHECK.json.",
+  "next_gate": "A separate authorization and acceptance plan is required before any packaged Hermes, provider-backed, remote, or production claim.",
+  "complete": true
+}

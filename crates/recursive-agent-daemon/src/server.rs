@@ -87,11 +87,10 @@ pub fn serve(
         let runtime = Arc::clone(&runtime);
         // Non-blocking spawn: if at capacity, drop the connection with a typed
         // signal instead of queuing unbounded work.
-        if active.load(Ordering::SeqCst) >= max {
+        if !try_reserve_connection_slot(&active, max) {
             let _ = write_denial(&stream, "daemon at capacity");
             continue;
         }
-        active.fetch_add(1, Ordering::SeqCst);
         std::thread::spawn(move || {
             let _guard = ActiveGuard(&active);
             if let Err(error) = handle_connection(stream, runtime) {
@@ -103,6 +102,27 @@ pub fn serve(
 }
 
 struct ActiveGuard<'a>(&'a AtomicUsize);
+
+/// Atomically reserve one bounded worker slot. A separate load then increment
+/// can oversubscribe `max` when acceptors race.
+fn try_reserve_connection_slot(active: &AtomicUsize, max: usize) -> bool {
+    let mut observed = active.load(Ordering::SeqCst);
+    loop {
+        if observed >= max {
+            return false;
+        }
+        match active.compare_exchange_weak(
+            observed,
+            observed + 1,
+            Ordering::SeqCst,
+            Ordering::SeqCst,
+        ) {
+            Ok(_) => return true,
+            Err(current) => observed = current,
+        }
+    }
+}
+
 impl Drop for ActiveGuard<'_> {
     fn drop(&mut self) {
         self.0.fetch_sub(1, Ordering::SeqCst);
@@ -230,6 +250,24 @@ fn dispatch(
                 "status": status_value,
             }))
         }
+        IpcRequestV1::Verify { run_id } => {
+            let run = CurrentRunId::try_new(run_id)
+                .map_err(|_| ServerError::InvalidRunId(run_id.clone()))?;
+            let verification = runtime.verify(&run)?;
+            Ok(serde_json::json!({
+                "request_id": request.request_id,
+                "run_id": run_id,
+                "verification": {
+                    "ok": verification.ok,
+                    "current_strict_success": verification.current_strict_success,
+                    "length": verification.length,
+                    "final_head": verification.final_head,
+                    "verified_artifacts": verification.verified_artifacts,
+                    "terminal_state": serde_json::to_value(verification.terminal_state)
+                        .map_err(ServerError::Json)?,
+                },
+            }))
+        }
         IpcRequestV1::Submit { operation } => {
             let handle = runtime.submit(operation)?;
             Ok(serde_json::json!({
@@ -239,5 +277,40 @@ fn dispatch(
                 "submitted": true,
             }))
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use std::sync::atomic::{AtomicUsize, Ordering};
+    use std::sync::{Arc, Barrier};
+
+    use super::try_reserve_connection_slot;
+
+    #[test]
+    fn concurrent_slot_reservations_never_exceed_the_bound() {
+        const CONTENDERS: usize = 32;
+        let active = Arc::new(AtomicUsize::new(0));
+        let barrier = Arc::new(Barrier::new(CONTENDERS));
+        let mut workers = Vec::new();
+        for _ in 0..CONTENDERS {
+            let active = Arc::clone(&active);
+            let barrier = Arc::clone(&barrier);
+            workers.push(std::thread::spawn(move || {
+                barrier.wait();
+                try_reserve_connection_slot(&active, 1)
+            }));
+        }
+        let outcomes: Vec<_> = workers
+            .into_iter()
+            .map(|worker| match worker.join() {
+                Ok(admitted) => (true, admitted),
+                Err(_) => (false, false),
+            })
+            .collect();
+        assert!(outcomes.iter().all(|(joined, _)| *joined));
+        let admitted = outcomes.iter().filter(|(_, admitted)| *admitted).count();
+        assert_eq!(admitted, 1);
+        assert_eq!(active.load(Ordering::SeqCst), 1);
     }
 }
