@@ -21,11 +21,8 @@ mod valid_chain_fixture {
     }
 }
 
-use recursive_agent_contracts::{
-    content_digest, RunPackManifestV1, RunPackProjectionOriginV1, RunPackRetentionStateV1,
-    RunPackVaultRefV1, RunPackVerificationOutcomeV1, RunPackVerificationV1,
-};
-use recursive_agent_ledger::{export_run_pack, verified_run_pack_snapshot, verify_run_pack};
+use recursive_agent_contracts::{content_digest, RunPackManifestV1, RunPackProjectionOriginV1};
+use recursive_agent_ledger::{export_run_pack, verify_run_pack, PackVault};
 
 type TestResult = Result<(), Box<dyn std::error::Error>>;
 
@@ -86,29 +83,19 @@ fn copied_pack_verifies_when_its_original_run_is_unavailable() -> TestResult {
 }
 
 #[test]
-fn verified_snapshot_builds_projection_from_pack_evidence_only() -> TestResult {
+fn verified_admission_builds_projection_from_pack_evidence_only() -> TestResult {
     let (_root, _run, pack) = exported_pack()?;
-    let snapshot = verified_run_pack_snapshot(&pack)?;
+    let vault_root = tempfile::tempdir()?;
+    let vault = PackVault::new(vault_root.path())?;
+    let admission = vault.admit(&pack)?;
     let time = "2026-08-10T00:00:00Z".parse()?;
-    let projection = snapshot.build_evidence_projection(
-        RunPackVerificationV1 {
-            verifier_contract_version: "recursive-agent.run-pack-verifier/v1".into(),
-            verified_at: time,
-            verification_receipt_digest: content_digest(&"admission-receipt")?,
-            outcome: RunPackVerificationOutcomeV1::Verified,
-        },
-        RunPackVaultRefV1 {
-            object_id: "vault-object-1".into(),
-            relative_ref: "objects/pack-1".into(),
-            retention_state: RunPackRetentionStateV1::Available,
-        },
-        RunPackProjectionOriginV1 {
-            operator_adapter: "hermes-native".into(),
-            source_device_ref: None,
-            observed_at: Some(time),
-            recorded_at: time,
-        },
-    )?;
+    let projection = admission.build_evidence_projection(RunPackProjectionOriginV1 {
+        operator_adapter: "hermes-native".into(),
+        source_device_ref: None,
+        observed_at: Some(time),
+        recorded_at: time,
+    })?;
+    let snapshot = vault.verify(admission.object_id())?;
     assert_eq!(
         projection.run_id,
         snapshot
@@ -192,6 +179,97 @@ fn verifier_rejects_chain_metadata_rebound_by_a_tampered_manifest() -> TestResul
     })?;
 
     assert!(verify_run_pack(&pack).is_err());
+    Ok(())
+}
+
+#[test]
+fn pack_vault_admits_then_verifies_after_source_is_deleted() -> TestResult {
+    let (_root, run, pack) = exported_pack()?;
+    let vault_root = tempfile::tempdir()?;
+    let vault = PackVault::new(vault_root.path())?;
+    let admitted = vault.admit(&pack)?;
+    let retried = vault.admit(&pack)?;
+    assert_eq!(retried.object_id(), admitted.object_id());
+    std::fs::remove_dir_all(&run.paths.root)?;
+    let reopened = PackVault::new(vault_root.path())?;
+    let recovered = reopened.admission(admitted.object_id())?;
+    assert_eq!(recovered.recorded_at(), admitted.recorded_at());
+    let snapshot = reopened.verify(admitted.object_id())?;
+    assert!(snapshot.pack_verification().ok);
+    assert_eq!(vault.get(admitted.object_id())?, admitted.path());
+    Ok(())
+}
+
+#[test]
+fn pack_vault_quarantines_tampering_and_rejects_escape() -> TestResult {
+    let (_root, _run, pack) = exported_pack()?;
+    let vault_root = tempfile::tempdir()?;
+    let vault = PackVault::new(vault_root.path())?;
+    let admitted = vault.admit(&pack)?;
+    std::fs::write(admitted.path().join("receipts.ndjson"), b"tampered\\n")?;
+    assert!(vault.verify(admitted.object_id()).is_err());
+    assert!(vault.quarantine(admitted.object_id())?.exists());
+    assert!(PackVault::validate_relative_ref("../escape").is_err());
+    Ok(())
+}
+
+#[test]
+fn pack_vault_persists_distinct_server_admission_facts() -> TestResult {
+    let (_root, _run, pack) = exported_pack()?;
+    let vault_root = tempfile::tempdir()?;
+    let vault = PackVault::new(vault_root.path())?;
+    let admission = vault.admit(&pack)?;
+
+    assert_ne!(
+        admission.object_id(),
+        admission.manifest_digest().to_string()
+    );
+    let receipt_path = vault_root
+        .path()
+        .join("admissions")
+        .join(format!("{}.json", admission.object_id()));
+    let receipts = std::fs::read_to_string(receipt_path)?;
+    let receipt: serde_json::Value = serde_json::from_str(receipts.trim())?;
+    assert_ne!(
+        receipt["source_pack_digest"], receipt["final_manifest_digest"],
+        "source input identity must not alias the manifest identity"
+    );
+    assert_eq!(receipt["object_id"], admission.object_id());
+
+    let forged_time = "2000-01-01T00:00:00Z".parse()?;
+    let projection = admission.build_evidence_projection(RunPackProjectionOriginV1 {
+        operator_adapter: "hermes-native".into(),
+        source_device_ref: None,
+        observed_at: Some(forged_time),
+        recorded_at: forged_time,
+    })?;
+    assert_eq!(projection.origin.recorded_at, admission.recorded_at());
+    assert_eq!(
+        projection.vault.relative_ref,
+        format!("objects/{}", admission.object_id())
+    );
+    Ok(())
+}
+
+#[test]
+fn pack_vault_rejects_invalid_candidate_without_publication() -> TestResult {
+    let (_root, _run, pack) = exported_pack()?;
+    std::fs::write(pack.join("receipts.ndjson"), b"tampered\\n")?;
+    let vault_root = tempfile::tempdir()?;
+    let vault = PackVault::new(vault_root.path())?;
+    assert!(vault.admit(&pack).is_err());
+    assert!(vault.object_ids()?.is_empty());
+    assert!(!vault_root.path().join("admissions.ndjson").exists());
+    Ok(())
+}
+
+#[test]
+fn pack_vault_interrupted_staging_is_not_published() -> TestResult {
+    let (_root, _run, pack) = exported_pack()?;
+    let vault_root = tempfile::tempdir()?;
+    let vault = PackVault::new(vault_root.path())?;
+    assert!(vault.admit_with_interruption(&pack)?.is_err());
+    assert!(vault.object_ids()?.is_empty());
     Ok(())
 }
 

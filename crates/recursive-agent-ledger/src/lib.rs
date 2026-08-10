@@ -20,6 +20,7 @@ use recursive_agent_contracts::{
     RunPackVaultRefV1, RunPackVerificationV1, RunTerminalStateV1, RuntimeEventV1, GENESIS_SEED,
 };
 use rustix::fs::{AtFlags, FlockOperation, Mode, OFlags, RenameFlags, ResolveFlags};
+use serde::{Deserialize, Serialize};
 use thiserror::Error;
 
 pub const MAX_ARTIFACT_SIZE: u64 = 16 * 1024 * 1024;
@@ -28,6 +29,331 @@ const MAX_CHAIN_META_BYTES: u64 = 16 * 1024;
 const MAX_ARTIFACT_META_BYTES: u64 = 16 * 1024;
 const MAX_RECEIPT_LOG_BYTES: u64 = 64 * 1024 * 1024;
 static TEMP_SEQUENCE: AtomicU64 = AtomicU64::new(0);
+
+/// Server-owned opaque storage for verified Run Packs.
+#[derive(Debug, Clone)]
+pub struct PackVault {
+    root: PathBuf,
+}
+
+#[derive(Debug, Clone)]
+pub struct VaultAdmission {
+    object_id: String,
+    path: PathBuf,
+    receipt: VaultAdmissionReceipt,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct VaultAdmissionReceipt {
+    source_pack_digest: ContentDigest,
+    final_manifest_digest: ContentDigest,
+    final_content_digest: ContentDigest,
+    object_id: String,
+    recorded_at: DateTime<Utc>,
+}
+
+impl VaultAdmission {
+    pub fn object_id(&self) -> &str {
+        &self.object_id
+    }
+    pub fn path(&self) -> &Path {
+        &self.path
+    }
+    pub fn manifest_digest(&self) -> &ContentDigest {
+        &self.receipt.final_manifest_digest
+    }
+    pub fn recorded_at(&self) -> DateTime<Utc> {
+        self.receipt.recorded_at
+    }
+
+    /// Construct projection facts only from this server-admitted, reverified object.
+    pub fn build_evidence_projection(
+        &self,
+        mut origin: RunPackProjectionOriginV1,
+    ) -> Result<RunPackEvidenceProjectionV1, LedgerError> {
+        origin.recorded_at = self.receipt.recorded_at;
+        let snapshot = verified_run_pack_snapshot(&self.path)?;
+        if snapshot.pack_verification().manifest_digest != self.receipt.final_manifest_digest
+            || content_digest(&snapshot.manifest.files)? != self.receipt.final_content_digest
+        {
+            return Err(LedgerError::RunPackInvalid(
+                "vault admission binding mismatch".into(),
+            ));
+        }
+        let relative_ref = format!("objects/{}", self.object_id);
+        let verification_receipt_digest = content_digest(&self.receipt)?;
+        snapshot.build_evidence_projection_from_metadata(
+            RunPackVerificationV1 {
+                verifier_contract_version: "recursive-agent.run-pack-verifier/v1".into(),
+                verified_at: self.receipt.recorded_at,
+                verification_receipt_digest,
+                outcome: recursive_agent_contracts::RunPackVerificationOutcomeV1::Verified,
+            },
+            RunPackVaultRefV1 {
+                object_id: self.object_id.clone(),
+                relative_ref,
+                retention_state: recursive_agent_contracts::RunPackRetentionStateV1::Available,
+            },
+            origin,
+        )
+    }
+}
+
+impl PackVault {
+    pub fn new(root: impl Into<PathBuf>) -> Result<Self, LedgerError> {
+        let root = root.into();
+        std::fs::create_dir_all(root.join("objects"))?;
+        std::fs::create_dir_all(root.join("admissions"))?;
+        std::fs::create_dir_all(root.join("quarantine"))?;
+        Ok(Self { root })
+    }
+
+    fn admission_receipt_path(&self, object_id: &str) -> Result<PathBuf, LedgerError> {
+        Self::validate_relative_ref(object_id)?;
+        Ok(self
+            .root
+            .join("admissions")
+            .join(format!("{object_id}.json")))
+    }
+
+    fn persist_admission_receipt(
+        &self,
+        receipt: &VaultAdmissionReceipt,
+    ) -> Result<(), LedgerError> {
+        let path = self.admission_receipt_path(&receipt.object_id)?;
+        let bytes = recursive_agent_contracts::jcs_canonical(receipt)?;
+        let mut file = std::fs::OpenOptions::new()
+            .create_new(true)
+            .write(true)
+            .open(path)?;
+        file.write_all(&bytes)?;
+        file.sync_all()?;
+        Ok(())
+    }
+
+    fn admission_receipts(&self) -> Result<Vec<VaultAdmissionReceipt>, LedgerError> {
+        let mut receipts = Vec::new();
+        for entry in std::fs::read_dir(self.root.join("admissions"))? {
+            let entry = entry?;
+            if !entry.file_type()?.is_file() {
+                return Err(LedgerError::RunPackInvalid(
+                    "vault admission receipt is not a regular file".into(),
+                ));
+            }
+            let bytes = std::fs::read(entry.path())?;
+            let receipt =
+                serde_json::from_slice::<VaultAdmissionReceipt>(&bytes).map_err(|error| {
+                    LedgerError::RunPackInvalid(format!("invalid admission receipt: {error}"))
+                })?;
+            if recursive_agent_contracts::jcs_canonical(&receipt)? != bytes {
+                return Err(LedgerError::RunPackInvalid(
+                    "admission receipt is not canonical".into(),
+                ));
+            }
+            receipts.push(receipt);
+        }
+        Ok(receipts)
+    }
+
+    fn admission_receipt(&self, object_id: &str) -> Result<VaultAdmissionReceipt, LedgerError> {
+        let path = self.admission_receipt_path(object_id)?;
+        let bytes = std::fs::read(path).map_err(|_| {
+            LedgerError::RunPackInvalid("vault object has no admission receipt".into())
+        })?;
+        let receipt = serde_json::from_slice::<VaultAdmissionReceipt>(&bytes).map_err(|error| {
+            LedgerError::RunPackInvalid(format!("invalid admission receipt: {error}"))
+        })?;
+        if receipt.object_id != object_id
+            || recursive_agent_contracts::jcs_canonical(&receipt)? != bytes
+        {
+            return Err(LedgerError::RunPackInvalid(
+                "vault admission receipt binding mismatch".into(),
+            ));
+        }
+        Ok(receipt)
+    }
+
+    pub fn validate_relative_ref(value: &str) -> Result<(), LedgerError> {
+        if value.is_empty()
+            || value.contains('\\')
+            || value.starts_with('/')
+            || value
+                .split('/')
+                .any(|p| p.is_empty() || p == "." || p == "..")
+        {
+            return Err(LedgerError::RunPackInvalid(
+                "unsafe vault relative reference".into(),
+            ));
+        }
+        Ok(())
+    }
+    pub fn admit(&self, source: &Path) -> Result<VaultAdmission, LedgerError> {
+        let lock = std::fs::OpenOptions::new()
+            .create(true)
+            .read(true)
+            .write(true)
+            .truncate(false)
+            .open(self.root.join(".admission.lock"))?;
+        rustix::fs::flock(lock.as_fd(), FlockOperation::LockExclusive)
+            .map_err(std::io::Error::from)?;
+        let result = self.admit_locked(source);
+        let unlock = rustix::fs::flock(lock.as_fd(), FlockOperation::Unlock);
+        match (result, unlock) {
+            (Ok(admission), Ok(())) => Ok(admission),
+            (Err(error), _) => Err(error),
+            (Ok(_), Err(error)) => Err(std::io::Error::from(error).into()),
+        }
+    }
+
+    fn admit_locked(&self, source: &Path) -> Result<VaultAdmission, LedgerError> {
+        let source_snapshot = verified_run_pack_snapshot(source)?;
+        let source_content_digest = content_digest(&source_snapshot.manifest.files)?;
+        let source_pack_digest = content_digest(&(
+            "recursive-agent-vault-source-pack/v1",
+            source_snapshot.pack_verification().manifest_digest.clone(),
+            source_content_digest,
+        ))?;
+        if let Some(receipt) = self.admission_receipts()?.into_iter().find(|receipt| {
+            receipt.source_pack_digest == source_pack_digest
+                && receipt.final_manifest_digest
+                    == source_snapshot.pack_verification().manifest_digest
+        }) {
+            let destination = self.root.join("objects").join(&receipt.object_id);
+            if destination.is_dir() {
+                return Ok(VaultAdmission {
+                    object_id: receipt.object_id.clone(),
+                    path: destination,
+                    receipt,
+                });
+            }
+            std::fs::remove_file(self.admission_receipt_path(&receipt.object_id)?)?;
+        }
+        let object_id = new_vault_object_id()?;
+        let relative = format!("objects/{object_id}");
+        Self::validate_relative_ref(&relative)?;
+        let destination = self.root.join(&relative);
+        if destination.exists() {
+            return Err(LedgerError::RunPackInvalid("vault object collision".into()));
+        }
+        let stage = self.root.join(format!(".stage-{object_id}"));
+        copy_pack_tree(source, &stage)?;
+        if let Err(error) = verify_run_pack(&stage) {
+            let _ = std::fs::remove_dir_all(&stage);
+            return Err(error);
+        }
+        let snapshot = verified_run_pack_snapshot(&stage)?;
+        let final_content_digest = content_digest(&snapshot.manifest.files)?;
+        let staged_source_pack_digest = content_digest(&(
+            "recursive-agent-vault-source-pack/v1",
+            snapshot.pack_verification().manifest_digest.clone(),
+            final_content_digest.clone(),
+        ))?;
+        let recorded_at = Utc::now();
+        let receipt = VaultAdmissionReceipt {
+            source_pack_digest: staged_source_pack_digest,
+            final_manifest_digest: snapshot.pack_verification().manifest_digest.clone(),
+            final_content_digest,
+            object_id: object_id.clone(),
+            recorded_at,
+        };
+        self.persist_admission_receipt(&receipt)?;
+        std::fs::rename(&stage, &destination)?;
+        Ok(VaultAdmission {
+            object_id,
+            path: destination,
+            receipt,
+        })
+    }
+    pub fn admit_with_interruption(
+        &self,
+        source: &Path,
+    ) -> Result<Result<VaultAdmission, LedgerError>, LedgerError> {
+        let _ = verified_run_pack_snapshot(source)?;
+        let stage = self.root.join(format!(
+            ".stage-{}",
+            TEMP_SEQUENCE.fetch_add(1, Ordering::Relaxed)
+        ));
+        copy_pack_tree(source, &stage)?;
+        let verification = verify_run_pack(&stage);
+        std::fs::remove_dir_all(&stage)?;
+        verification?;
+        Ok(Err(LedgerError::InjectedRunPackExportInterruption(
+            RunPackExportStage::CopyComplete,
+        )))
+    }
+    pub fn admission(&self, object_id: &str) -> Result<VaultAdmission, LedgerError> {
+        let receipt = self.admission_receipt(object_id)?;
+        let path = self.root.join("objects").join(object_id);
+        if !path.is_dir() {
+            return Err(LedgerError::ArtifactMissing(object_id.into()));
+        }
+        let snapshot = verified_run_pack_snapshot(&path)?;
+        if snapshot.pack_verification().manifest_digest != receipt.final_manifest_digest
+            || content_digest(&snapshot.manifest.files)? != receipt.final_content_digest
+        {
+            return Err(LedgerError::RunPackInvalid(
+                "vault object no longer matches admission receipt".into(),
+            ));
+        }
+        Ok(VaultAdmission {
+            object_id: object_id.into(),
+            path,
+            receipt,
+        })
+    }
+
+    pub fn get(&self, object_id: &str) -> Result<PathBuf, LedgerError> {
+        Ok(self.admission(object_id)?.path)
+    }
+    pub fn verify(&self, object_id: &str) -> Result<VerifiedRunPackSnapshot, LedgerError> {
+        verified_run_pack_snapshot(&self.admission(object_id)?.path)
+    }
+    pub fn quarantine(&self, object_id: &str) -> Result<PathBuf, LedgerError> {
+        let _receipt = self.admission_receipt(object_id)?;
+        let source = self.root.join("objects").join(object_id);
+        if !source.is_dir() {
+            return Err(LedgerError::ArtifactMissing(object_id.into()));
+        }
+        let destination = self.root.join("quarantine").join(object_id);
+        std::fs::rename(source, &destination)?;
+        Ok(destination)
+    }
+    pub fn object_ids(&self) -> Result<Vec<String>, LedgerError> {
+        Ok(std::fs::read_dir(self.root.join("objects"))?
+            .filter_map(Result::ok)
+            .filter(|e| e.path().is_dir())
+            .filter_map(|e| e.file_name().into_string().ok())
+            .collect())
+    }
+}
+
+fn new_vault_object_id() -> Result<String, LedgerError> {
+    let mut entropy = [0_u8; 32];
+    getrandom::fill(&mut entropy).map_err(|error| {
+        LedgerError::RunPackInvalid(format!("vault entropy unavailable: {error}"))
+    })?;
+    Ok(format!("vault-{}", hex::encode(entropy)))
+}
+
+fn copy_pack_tree(source: &Path, destination: &Path) -> Result<(), LedgerError> {
+    std::fs::create_dir_all(destination)?;
+    for entry in std::fs::read_dir(source)? {
+        let entry = entry?;
+        let kind = entry.file_type()?;
+        let target = destination.join(entry.file_name());
+        if kind.is_dir() {
+            copy_pack_tree(&entry.path(), &target)?;
+        } else if kind.is_file() {
+            std::fs::copy(entry.path(), target)?;
+        } else {
+            return Err(LedgerError::RunPackInvalid(
+                "pack contains non-regular entry".into(),
+            ));
+        }
+    }
+    Ok(())
+}
 
 #[derive(Debug, Error)]
 pub enum LedgerError {
@@ -671,10 +997,7 @@ impl VerifiedRunPackSnapshot {
         self.receipt_snapshot.receipts()
     }
 
-    /// Build a projection only from this verifier-created snapshot. Caller
-    /// metadata is validated, while all execution and pack binding fields are
-    /// derived from immutable pack and receipt evidence.
-    pub fn build_evidence_projection(
+    fn build_evidence_projection_from_metadata(
         &self,
         verification: RunPackVerificationV1,
         vault: RunPackVaultRefV1,
