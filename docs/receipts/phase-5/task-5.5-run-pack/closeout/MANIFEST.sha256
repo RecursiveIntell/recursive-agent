@@ -1,0 +1,14 @@
+a82baa01f66eda3bbe04b68718e1810a56b9130aa3389029b9a77d2187ade5fc  README.md
+b102b377ada5acf44d96c85f01f920655ef4adae2d3e04a94e1ed563b364707d  docs/capability-status.md
+5b04c562c09cc167f99c2803603377e6f4481f585fed66b06f3e2f20b926a728  scripts/verify-run-pack.sh
+5c751e28591c3bd8319057f9858b3e0c617f8d3ff202b96d479257b15f9bb786  crates/recursive-agent-cli/src/main.rs
+b2c8961f86119628ae38271f44767b1abd707c0da190dc39fb76532e2e8f1b92  crates/recursive-agent-cli/tests/run_pack_cli.rs
+d6b4fd76c1680031329074d9ce548ffcbdf4ce1b30d7e172adb3d9f219a2e816  crates/recursive-agent-cli/tests/run_pack_clean_process.rs
+6e7224e0f9356c9205499f26ba222e5917e17f51297b226ceb76bca99421a27c  crates/recursive-agent-ledger/src/lib.rs
+be7bc423cf636ee0f984aff28b905b3ee79fe00e4e9b05071d7dee2c5a1ee4b7  crates/recursive-agent-ledger/tests/run_pack_provenance.rs
+04cf913eae229359a175fa4f87df0345caf82f79680e7ccb6da97f440fc0c423  docs/receipts/phase-5/task-5.5-run-pack/closeout/CHANGE_RECEIPT.json
+ddf0b6bbc7565527ee1fcd86973c7c7412abfb934f41dcceaae3b53e8aa3b4c5  docs/receipts/phase-5/task-5.5-run-pack/closeout/MANIFEST.json
+79cb843ffcaebb631ab4b15f1ac47f25fc1286185d5daa2d3323d0cc07446688  docs/receipts/phase-5/task-5.5-run-pack/closeout/HOSTILE_REVIEW.md
+d97529baa4e4827d7069e835cd96995ee09f793145549cacfe5eae29d6c21cdc  docs/receipts/phase-5/task-5.5-run-pack/closeout/HANDOFF.md
+7149ca523442af2e8f850ebd264c7216d7cff42d71d83fb990460a89cf41c510  docs/receipts/phase-5/task-5.5-run-pack/closeout/ROLLBACK.md
+0d6acd65c74c82787d6a2a708834a69c54592aed9d22d904b2f0c42c5aa28942  docs/receipts/phase-5/task-5.5-run-pack/closeout/GIT_STATUS_AFTER.txt

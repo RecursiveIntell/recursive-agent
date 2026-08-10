@@ -1,0 +1,21 @@
+{
+  "schema": "RunPackTask10CloseoutManifestV1",
+  "version": 1,
+  "source_identity": {
+    "root": "/home/sikmindz/Coding/recursive-agent",
+    "branch": "main",
+    "head_before_task_10_closeout": "df615a7"
+  },
+  "artifact_digest_manifest": "MANIFEST.sha256",
+  "artifacts": [
+    "CHANGE_RECEIPT.json",
+    "HANDOFF.md",
+    "HOSTILE_REVIEW.md",
+    "ROLLBACK.md",
+    "GIT_STATUS_AFTER.txt",
+    "MANIFEST.sha256"
+  ],
+  "evidence_state": "locally_reproduced",
+  "complete": true,
+  "claim_boundary": "Only the local recorded test matrix is certified; no production, provider, remote, deployment, hosted, or general-security claim is made."
+}

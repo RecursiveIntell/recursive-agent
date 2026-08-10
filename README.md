@@ -32,7 +32,7 @@ canonical Libraries crates by path:
   - `recursive-agent-policy` — permits, lineage, allowlist.
   - `recursive-agent-tools` — `echo` and `time_now` manifests.
   - `recursive-agent-runner` — typed run DAG, deterministic walk.
-  - `recursive-agent-cli` — `ra run`, `ra verify`, `ra replay`,
+  - `recursive-agent-cli` — `ra run`, `ra verify`, `ra replay`, `ra pack`,
     `ra doctor`.
 
 ## Quick start
@@ -48,6 +48,23 @@ cargo build --release
 The first run prints a `<run-dir>` under
 `~/.local/share/recursive-agent/runs/`. Capture stdout into
 `docs/receipts/` so the chain can be reproduced.
+
+## Auditable Run Pack v1 — local proof boundary
+
+A verified terminal run can be projected into a portable, immutable pack:
+
+```bash
+ra pack export --run <run-dir> --out <empty-pack-dir>
+ra pack verify --pack <pack-dir>
+ra pack replay --pack <pack-dir>
+```
+
+The pack binds receipts, metadata, referenced artifacts, and descriptive
+provenance files in `PACK_MANIFEST.json`. Verification and replay use only the
+pack bytes; replay returns recorded evidence and does not re-execute tools or
+providers. This is proven only for the recorded local test matrix. It does not
+establish provider-backed replay, remote execution, deployment support, or a
+general security certification.
 
 ## Layout
 

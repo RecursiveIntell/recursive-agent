@@ -9,9 +9,11 @@ use llm_tool_runtime::{
     ToolReceiptPersistence, ToolRegistry, ToolResult, ToolRuntime, ToolSideEffectClass,
 };
 use recursive_agent_contracts::parse_run_spec_file;
-use recursive_agent_ledger::{verify_directory_bound, RunRootIdentity};
+use recursive_agent_ledger::{
+    export_run_pack, verify_directory_bound, verify_run_pack, RunPaths, RunRootIdentity,
+};
 use recursive_agent_runner::{
-    operation_from_run_spec, replay, Clock, RunSummary, RuntimeDependencies,
+    operation_from_run_spec, replay, replay_run_pack, Clock, RunSummary, RuntimeDependencies,
     RuntimeLedgerDependencyV1, RuntimePolicyDependencyV1, RuntimeProviderDependencyV1,
     RuntimeSandboxDependencyV1, RuntimeService, RuntimeStoreDependencyV1,
 };
@@ -59,6 +61,32 @@ enum Cmd {
     Replay {
         #[arg(long)]
         run: PathBuf,
+    },
+    /// Export, verify, or replay a portable Run Pack using ledger/runner owners.
+    Pack {
+        #[command(subcommand)]
+        cmd: PackCmd,
+    },
+}
+
+#[derive(Subcommand, Debug)]
+enum PackCmd {
+    /// Export one already-verified terminal run as an immutable Run Pack.
+    Export {
+        #[arg(long)]
+        run: PathBuf,
+        #[arg(long)]
+        out: PathBuf,
+    },
+    /// Strictly verify a portable Run Pack from its own bytes.
+    Verify {
+        #[arg(long)]
+        pack: PathBuf,
+    },
+    /// Replay only recorded evidence from a strictly verified Run Pack.
+    Replay {
+        #[arg(long)]
+        pack: PathBuf,
     },
 }
 
@@ -295,6 +323,11 @@ fn main() {
         }
         Cmd::Verify { run } => verify_cmd(&run),
         Cmd::Replay { run } => replay_cmd(&run),
+        Cmd::Pack { cmd } => match cmd {
+            PackCmd::Export { run, out } => pack_export_cmd(&run, &out),
+            PackCmd::Verify { pack } => pack_verify_cmd(&pack),
+            PackCmd::Replay { pack } => pack_replay_cmd(&pack),
+        },
     }
 }
 
@@ -455,6 +488,53 @@ fn replay_cmd(run_dir: &Path) {
             std::process::exit(2);
         }
     }
+}
+
+fn pack_export_cmd(run_dir: &Path, out: &Path) {
+    match export_run_pack(&RunPaths::new(run_dir), out) {
+        Ok(verification) => print_json_or_exit(
+            "pack export",
+            &serde_json::json!({
+                "schema_version": verification.schema_version,
+                "pack_path": out,
+                "manifest_digest": verification.manifest_digest,
+                "manifest_ref": "PACK_MANIFEST.json",
+            }),
+        ),
+        Err(error) => pack_error_exit("export", error),
+    }
+}
+
+fn pack_verify_cmd(pack: &Path) {
+    match verify_run_pack(pack) {
+        Ok(verification) => print_json_or_exit("pack verify", &verification),
+        Err(error) => pack_error_exit("verify", error),
+    }
+}
+
+fn pack_replay_cmd(pack: &Path) {
+    match replay_run_pack(pack) {
+        Ok(result) => print_json_or_exit("pack replay", &result),
+        Err(error) => pack_error_exit("replay", error),
+    }
+}
+
+fn print_json_or_exit(label: &str, value: &impl serde::Serialize) -> ! {
+    match serde_json::to_string(value) {
+        Ok(json) => {
+            println!("{json}");
+            std::process::exit(0);
+        }
+        Err(error) => {
+            eprintln!("{label}: ERROR: serialization failed: {error}");
+            std::process::exit(2);
+        }
+    }
+}
+
+fn pack_error_exit(label: &str, error: impl std::fmt::Display) -> ! {
+    eprintln!("pack {label}: ERROR: {error}");
+    std::process::exit(2);
 }
 
 #[cfg(test)]

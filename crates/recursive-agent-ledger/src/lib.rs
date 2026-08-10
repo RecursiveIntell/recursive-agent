@@ -18,7 +18,7 @@ use recursive_agent_contracts::{
     ReceiptIdentityMaterialV1, ReceiptKindV1, ReceiptOutcomeV1, ReceiptV1, RunPackFileEntryV1,
     RunPackManifestV1, RunTerminalStateV1, RuntimeEventV1, GENESIS_SEED,
 };
-use rustix::fs::{AtFlags, FlockOperation, Mode, OFlags, ResolveFlags};
+use rustix::fs::{AtFlags, FlockOperation, Mode, OFlags, RenameFlags, ResolveFlags};
 use thiserror::Error;
 
 pub const MAX_ARTIFACT_SIZE: u64 = 16 * 1024 * 1024;
@@ -76,6 +76,7 @@ pub enum LedgerError {
 pub struct RunPackPlan {
     pub source_run_id: CurrentRunId,
     pub files: Vec<RunPackFileEntryV1>,
+    generated_files: BTreeMap<String, Vec<u8>>,
 }
 
 impl RunPackPlan {
@@ -1038,15 +1039,77 @@ fn pack_plan_from_snapshot(
             &metadata,
         ));
     }
+    let source_run_id = snapshot
+        .verification()
+        .verified_run_id
+        .clone()
+        .ok_or_else(|| LedgerError::RunPackInvalid("missing run identity".into()))?;
+    let generated_files = generated_provenance_files(&source_run_id, snapshot)?;
+    for (path, bytes) in &generated_files {
+        let role = match path.as_str() {
+            "OPERATOR_REPORT.json" => "operator-report",
+            "SOURCE_PROVENANCE.json" => "source-provenance",
+            "TOOLCHAIN.json" => "toolchain",
+            _ => {
+                return Err(LedgerError::RunPackInvalid(
+                    "unknown generated pack file".into(),
+                ))
+            }
+        };
+        files.push(pack_entry(path, role, bytes));
+    }
     files.sort_by(|a, b| a.path.cmp(&b.path));
     Ok(RunPackPlan {
-        source_run_id: snapshot
-            .verification()
-            .verified_run_id
-            .clone()
-            .ok_or_else(|| LedgerError::RunPackInvalid("missing run identity".into()))?,
+        source_run_id,
         files,
+        generated_files,
     })
+}
+
+fn generated_provenance_files(
+    source_run_id: &CurrentRunId,
+    snapshot: &VerifiedReceiptSnapshot,
+) -> Result<BTreeMap<String, Vec<u8>>, LedgerError> {
+    let verification = snapshot.verification();
+    let terminal_classification = serde_json::to_value(verification.terminal_state)?;
+    let mut files = BTreeMap::new();
+    files.insert(
+        "SOURCE_PROVENANCE.json".into(),
+        recursive_agent_contracts::jcs_canonical(&serde_json::json!({
+            "schema_version": 1,
+            "source_run_id": source_run_id,
+            "source_verification_outcome": "verified",
+            "source_verification_ref": "chain.meta",
+            "source_commit": "unknown",
+            "source_diff_state": "unknown",
+            "rust_version": "unknown",
+            "cargo_version": "unknown",
+            "command_argv": [],
+            "timestamp_classification": "unknown"
+        }))?,
+    );
+    files.insert(
+        "TOOLCHAIN.json".into(),
+        recursive_agent_contracts::jcs_canonical(&serde_json::json!({
+            "schema_version": 1,
+            "rust_version": "unknown",
+            "cargo_version": "unknown",
+            "command_argv": [],
+            "timestamp_classification": "unknown"
+        }))?,
+    );
+    files.insert(
+        "OPERATOR_REPORT.json".into(),
+        recursive_agent_contracts::jcs_canonical(&serde_json::json!({
+            "schema_version": 1,
+            "source_run_id": source_run_id,
+            "source_verification_outcome": "verified",
+            "source_verification_ref": "chain.meta",
+            "terminal_classification": terminal_classification,
+            "descriptive_only": true
+        }))?,
+    );
+    Ok(files)
 }
 
 pub fn plan_run_pack(paths: &RunPaths) -> Result<RunPackPlan, LedgerError> {
@@ -1089,6 +1152,9 @@ fn validate_pack_entry_role(entry: &RunPackFileEntryV1) -> Result<(), LedgerErro
     let expected_role = match entry.path.as_str() {
         "receipts.ndjson" => "receipts",
         "chain.meta" => "chain-meta",
+        "OPERATOR_REPORT.json" => "operator-report",
+        "SOURCE_PROVENANCE.json" => "source-provenance",
+        "TOOLCHAIN.json" => "toolchain",
         _ => {
             let name = entry.path.strip_prefix("artifacts/").ok_or_else(|| {
                 LedgerError::RunPackInvalid(format!("unexpected pack path {}", entry.path))
@@ -1386,7 +1452,10 @@ pub fn export_run_pack_with_interruption(
         let store = ArtifactStore::from_run_root_fd(source_root, false)?;
         let plan = pack_plan_from_snapshot(source_root, &snapshot, &store)?;
         for entry in &plan.files {
-            let bytes = read_pack_entry(source_root, entry)?;
+            let bytes = match plan.generated_files.get(&entry.path) {
+                Some(bytes) => bytes.clone(),
+                None => read_pack_entry(source_root, entry)?,
+            };
             write_new_pack_file(&temporary_root, &entry.path, &bytes)?;
             if read_pack_entry(&temporary_root, entry)? != bytes {
                 return Err(LedgerError::RunPackInvalid(format!(
@@ -1414,11 +1483,12 @@ pub fn export_run_pack_with_interruption(
         with_exclusive_lock(&temporary_root, verify_run_pack_from_dir_fd)
     })?;
     parent.sync_all()?;
-    rustix::fs::renameat(
+    rustix::fs::renameat_with(
         parent.as_fd(),
         &temporary_name,
         parent.as_fd(),
         &destination_name,
+        RenameFlags::NOREPLACE,
     )
     .map_err(std::io::Error::from)?;
     parent.sync_all()?;

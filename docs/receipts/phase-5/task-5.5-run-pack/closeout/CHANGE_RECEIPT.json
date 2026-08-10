@@ -1,0 +1,68 @@
+{
+  "schema": "ChangeReceiptV1",
+  "version": 1,
+  "task_id": "auditable-run-pack-v1-task-10-closeout-20260809",
+  "source_identity": {
+    "root": "/home/sikmindz/Coding/recursive-agent",
+    "branch": "main",
+    "head_before_closeout": "df615a7",
+    "evidence_cutoff": "2026-08-09"
+  },
+  "goal": "Certify only the tested local proof boundary for Auditable Run Pack v1.",
+  "non_goals": [
+    "production readiness",
+    "provider-backed execution or replay",
+    "remote execution",
+    "deployment or hosted operation",
+    "general security certification",
+    "commit, push, merge, publish, deploy, reset, or deletion"
+  ],
+  "changed_paths": [
+    ".hermes/plans/2026-08-09-auditable-run-pack-v1-proof-sprint.md",
+    "README.md",
+    "crates/recursive-agent-contracts/src/lib.rs",
+    "crates/recursive-agent-contracts/tests/run_pack_contract.rs",
+    "crates/recursive-agent-ledger/src/lib.rs",
+    "crates/recursive-agent-ledger/tests/run_pack_export.rs",
+    "crates/recursive-agent-ledger/tests/run_pack_plan.rs",
+    "crates/recursive-agent-ledger/tests/run_pack_provenance.rs",
+    "crates/recursive-agent-ledger/tests/run_pack_verify.rs",
+    "crates/recursive-agent-runner/src/lib.rs",
+    "crates/recursive-agent-runner/tests/run_pack_replay.rs",
+    "crates/recursive-agent-cli/src/main.rs",
+    "crates/recursive-agent-cli/tests/run_pack_cli.rs",
+    "crates/recursive-agent-cli/tests/run_pack_clean_process.rs",
+    "scripts/verify-run-pack.sh",
+    "docs/capability-status.md",
+    "docs/receipts/phase-5/task-5.5-run-pack/closeout/"
+  ],
+  "checks": [
+    {"command":"cargo fmt --all -- --check","exit_code":0,"status":"passed"},
+    {"command":"cargo test --workspace --all-targets","exit_code":0,"status":"passed"},
+    {"command":"cargo clippy --workspace --all-targets -- -D warnings","exit_code":0,"status":"passed"},
+    {"command":"cargo test -p recursive-agent-ledger --test run_pack_plan","exit_code":0,"status":"passed"},
+    {"command":"cargo test -p recursive-agent-ledger --test run_pack_export","exit_code":0,"status":"passed"},
+    {"command":"cargo test -p recursive-agent-ledger --test run_pack_verify","exit_code":0,"status":"passed"},
+    {"command":"cargo test -p recursive-agent-ledger --test run_pack_provenance","exit_code":0,"status":"passed"},
+    {"command":"cargo test -p recursive-agent-runner --test run_pack_replay","exit_code":0,"status":"passed"},
+    {"command":"cargo test -p recursive-agent-cli --test run_pack_cli","exit_code":0,"status":"passed"},
+    {"command":"cargo test -p recursive-agent-cli --test run_pack_clean_process","exit_code":0,"status":"passed"},
+    {"command":"./scripts/verify-run-pack.sh","exit_code":0,"status":"passed"},
+    {"command":"git diff --check","exit_code":0,"status":"passed"}
+  ],
+  "evidence": {
+    "local_clean_process": "verified by the CLI acceptance test using a copied pack after source run removal",
+    "replay_external_effects": "verified in that acceptance test with strace network/process syscall tracing on this host",
+    "negative_cases": "verified by focused ledger and CLI tests for manifest, receipt, metadata, artifact, missing/extra, hostile path, symlink/FIFO, source tamper, destination, and child-link/closure conflicts",
+    "hostile_review": "docs/receipts/phase-5/task-5.5-run-pack/closeout/HOSTILE_REVIEW.md",
+    "agent_graph_advisory": "run-19fe8fd34d7-e; advisory only, live source verification controlled acceptance"
+  },
+  "unresolved_delta": [
+    "No deterministic post-precheck destination-contention harness exists; publication now uses kernel no-replace semantics and ordinary rename must not be restored.",
+    "The acceptance claim remains local and platform-specific to the tested environment."
+  ],
+  "foreign_or_preexisting_state": "GIT_STATUS_AFTER.txt preserves dirty/untracked state; it is excluded from automatic staging.",
+  "rollback": "See ROLLBACK.md. Revert only plan-owned Task 7-10 paths; preserve receipts and unrelated dirty state.",
+  "next_gate": "Separate explicit authority is required to stage/commit the remaining Task 7-10 changes; no external effect occurred here.",
+  "complete": true
+}
