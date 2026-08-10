@@ -1,0 +1,86 @@
+{
+  "schema": "ChangeReceiptV1",
+  "task_id": "witnessed-workbench-phase5-owner-conformance-and-deferred-admission-20260810",
+  "evidence_cutoff": "2026-08-10T05:15:27Z",
+  "source_owner": {
+    "repository": "recursive-agent",
+    "root": "/home/sikmindz/Coding/recursive-agent",
+    "branch": "main",
+    "head": "0ea0c8f017d9329cafa19d990008cc5291c5fb07"
+  },
+  "intended_scope": [
+    "repair and run a disposable local owner-conformance harness",
+    "preserve a machine-readable result matrix and logs",
+    "prepare no-effect Phase 6 admission requirements",
+    "record Phase 7 and Phase 8 deferrals"
+  ],
+  "non_goals": [
+    "host deployment",
+    "credentials or service identities",
+    "network listener or firewall changes",
+    "live Hermes user session",
+    "shared production storage",
+    "single cross-process import transaction",
+    "Gloss work"
+  ],
+  "changed_paths": [
+    "scripts/phase5_offline_conformance.py",
+    ".hermes/runs/witnessed-workbench-phase5-20260810/",
+    "docs/receipts/witnessed-workbench/2026-08-10-phase5-8/"
+  ],
+  "validation": {
+    "passed": [
+      "python3 -m py_compile scripts/phase5_offline_conformance.py",
+      "python3 scripts/phase5_offline_conformance.py --root .hermes/runs/witnessed-workbench-phase5-20260810 (exit 0)",
+      "cargo fmt --all -- --check",
+      "cargo clippy -p recursive-agent-ledger --all-targets -- -D warnings",
+      "cargo test -p recursive-agent-ledger --test run_pack_verify (17 passed)",
+      "cargo test -p recursive-agent-runner --test run_pack_replay (2 passed)",
+      "ClaimLedger: uv run --python 3.11 --extra dev python -m pytest -q tests/test_run_pack_import.py (9 passed)",
+      "Mnemes: cargo test --test run_pack_observation --test run_pack_server (5 passed)",
+      "Mnemes: cargo fmt --all -- --check",
+      "Mnemes: cargo clippy --all-targets --all-features -- -D warnings",
+      "git diff --check"
+    ],
+    "failed": [],
+    "skipped": [
+      "full clean-host restore drill: requires separately authorized Phase 6 deployment target",
+      "single cross-process generated-projection transaction: not implemented by this owner-conformance harness",
+      "final Mnemes retrieval projection for a run pack: not implemented"
+    ]
+  },
+  "artifacts": [
+    {
+      "path": ".hermes/runs/witnessed-workbench-phase5-20260810/phase5-conformance.json",
+      "sha256": "906e3f5c7b217929159d76f8b3a99f1a4d8d461872f9e4c93cdabfd1c9e17a30"
+    },
+    {
+      "path": "docs/receipts/witnessed-workbench/2026-08-10-phase5-8/PHASE_5_STATUS.md",
+      "sha256": "b0493166820b83639d5a10018a70fd5868418d185fbb10ab519c809845499182"
+    },
+    {
+      "path": "docs/receipts/witnessed-workbench/2026-08-10-phase5-8/PHASE_6_DEPLOYMENT_ADMISSION.md",
+      "sha256": "c99a68099c2bb10421c921ea0e2123a84c4b546befc25b96e6a2160c44166549"
+    },
+    {
+      "path": "docs/receipts/witnessed-workbench/2026-08-10-phase5-8/DEFERRED_SURFACES.md",
+      "sha256": "b481775cb06aa6a75c154089054fee5421a593133a8561be8b4d0a048b78a2c6"
+    }
+  ],
+  "evidence_state": {
+    "owner_conformance_harness": "verified",
+    "phase_6_deployment": "blocked/unknown",
+    "phase_7_controlled_orchestration": "proposed",
+    "phase_8_deferred_surfaces": "documented",
+    "full_roadmap_phase_5_gate": "blocked/unknown",
+    "agent_graph_hostile_review": "degraded: run-19fea159292-1 executed coordinator plus three analysts (4 succeeded) but the synthesizer failed; cancellation was requested while the run was pending, then the durable terminal receipt recorded cancelled / success=false / no final_report"
+  },
+  "unresolved_delta": [
+    "Build a true disposable three-owner integration fixture from one newly generated projection through final retrieval.",
+    "Exercise copy, verifier, ClaimLedger import, Mnemes import, and final-index fault injection in that fixture.",
+    "Run the clean-host restore drill only after explicit Phase 6 target authority."
+  ],
+  "rollback": "Delete scripts/phase5_offline_conformance.py and docs/receipts/witnessed-workbench/2026-08-10-phase5-8/; remove the disposable .hermes/runs/witnessed-workbench-phase5-20260810/ packet. No remote, host, credential, service, or committed history effect occurred from this phase.",
+  "next_gate": "Implement and independently validate the missing cross-process integration fixture; Phase 6 remains blocked until explicit target authority.",
+  "complete": false
+}
