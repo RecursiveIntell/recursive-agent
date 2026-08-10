@@ -12,9 +12,12 @@ if [[ -e "$PLUGIN_DIR" ]]; then
   exit 2
 fi
 
-mkdir -p "$(dirname "$PLUGIN_DIR")"
-cp -R "$SRC" "$PLUGIN_DIR"
-rm -rf "$PLUGIN_DIR/tests"
+mkdir -p "$PLUGIN_DIR"
+# Ship only the declared runtime package. Copying the whole source directory
+# would also install pytest caches and other development artifacts.
+for file in __init__.py client.py schema.py plugin.yaml pyproject.toml; do
+  cp "$SRC/$file" "$PLUGIN_DIR/$file"
+done
 
 # Write a manifest recording the installed files for clean uninstall.
 find "$PLUGIN_DIR" -type f | sed "s#^$PLUGIN_DIR/##" | sort > "$PLUGIN_DIR/../recursive-agent-native.manifest"

@@ -52,6 +52,9 @@ def test_register_exposes_one_non_overriding_tool_in_recursive_agent_toolset():
     assert reg["toolset"] == "recursive_agent"
     # A non-overriding plugin must not request override.
     assert reg.get("override") is None or reg.get("override") is False
+    # Hermes dispatches registered handlers as handler(args), not handler(ctx, args).
+    # The closure must retain the registration context without a TypeError.
+    assert reg["handler"]({}) == "recursive_agent_execute: unavailable: envelope_path required"
 
 
 def test_check_fn_returns_false_when_socket_absent(tmp_path):

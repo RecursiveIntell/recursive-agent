@@ -115,11 +115,17 @@ def _handler(ctx, args, **kwargs) -> str:
 
 def register(ctx) -> None:
     """Register the single non-overriding tool (Hermes plugin loader entry)."""
+    # Hermes dispatches registered handlers as ``handler(args, **kwargs)``.
+    # Capture the registration context here so socket configuration remains
+    # available without exposing a non-conforming two-argument handler.
+    def handler(args, **kwargs) -> str:
+        return _handler(ctx, args, **kwargs)
+
     ctx.register_tool(
         name=TOOL_NAME,
         toolset=TOOLSET,
         schema=RECURSIVE_AGENT_EXECUTE_SCHEMA,
-        handler=_handler,
+        handler=handler,
         check_fn=check_recursive_agent_available,
         description=(
             "Submit one bounded recursive-agent native action and return "
