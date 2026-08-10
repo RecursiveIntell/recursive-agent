@@ -56,7 +56,7 @@
     },
     {
       "path": "docs/receipts/witnessed-workbench/2026-08-10-phase5-8/PHASE_5_STATUS.md",
-      "sha256": "b0493166820b83639d5a10018a70fd5868418d185fbb10ab519c809845499182"
+      "sha256": "c74646560fdc26ea53b4d605977ce64081f06009bd5073d10f69a70e438a5a1a"
     },
     {
       "path": "docs/receipts/witnessed-workbench/2026-08-10-phase5-8/PHASE_6_DEPLOYMENT_ADMISSION.md",
@@ -76,6 +76,8 @@
     "agent_graph_hostile_review": "degraded: run-19fea159292-1 executed coordinator plus three analysts (4 succeeded) but the synthesizer failed; cancellation was requested while the run was pending, then the durable terminal receipt recorded cancelled / success=false / no final_report"
   },
   "unresolved_delta": [
+    "Repair and fault-inject PackVault's rename-before-admission-receipt crash window.",
+    "Define and fault-inject ClaimLedger recovery for the post-append receipt-reference rewrite window.",
     "Build a true disposable three-owner integration fixture from one newly generated projection through final retrieval.",
     "Exercise copy, verifier, ClaimLedger import, Mnemes import, and final-index fault injection in that fixture.",
     "Run the clean-host restore drill only after explicit Phase 6 target authority."
