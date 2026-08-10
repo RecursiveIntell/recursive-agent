@@ -1506,8 +1506,8 @@ fn dispatch_tool(
             "shell executable authority was not prepared before permit issuance".into(),
         )
     })?;
-    let result = sandbox_engine::execute(&spec, call, token, prepared)
-        .map_err(|error| recursive_agent_tools::ToolError::Runtime(format!("shell: {error}")))?;
+    let result =
+        sandbox_engine::execute(&spec, call, token, prepared).map_err(sandbox_tool_error)?;
     let success = result.enforcement.outcome
         == recursive_agent_sandbox::EnforcementOutcome::Enforced
         && !result.timed_out
@@ -1550,6 +1550,35 @@ fn dispatch_tool(
         reason: reason.into(),
         observation: Box::new(observation),
     })
+}
+
+/// Preserve sandbox enforcement evidence at the runner/tool boundary.
+///
+/// A launcher deadline can expire before the payload emits a normal
+/// `SandboxResult`. Flattening that typed failure into `ToolError::Runtime`
+/// loses both the retained enforcement record and the timeout classification,
+/// which would misproject the terminal state as `SandboxFailed`.
+fn sandbox_tool_error(
+    error: recursive_agent_sandbox::SandboxError,
+) -> recursive_agent_tools::ToolError {
+    use recursive_agent_sandbox::{SandboxError, SandboxFailureReason};
+
+    let reason = format!("shell: {error}");
+    match error {
+        SandboxError::SetupFailed { enforcement }
+        | SandboxError::LauncherUnavailable { enforcement }
+        | SandboxError::UnsupportedPlatform { enforcement } => {
+            let timed_out = enforcement.reason_code == Some(SandboxFailureReason::LauncherTimedOut);
+            recursive_agent_tools::ToolError::OwnerRuntime {
+                reason,
+                observation: Box::new(serde_json::json!({
+                    "timed_out": timed_out,
+                    "enforcement": enforcement,
+                })),
+            }
+        }
+        other => recursive_agent_tools::ToolError::Runtime(format!("shell: {other}")),
+    }
 }
 
 fn lifecycle_authority(
@@ -2107,6 +2136,52 @@ mod pinned_root_tests {
                 chain.run_root_identity().inode
             ),
             permits.run_root_identity()
+        );
+        Ok(())
+    }
+
+    fn failed_enforcement(
+        reason_code: recursive_agent_sandbox::SandboxFailureReason,
+    ) -> recursive_agent_sandbox::EnforcementRecord {
+        recursive_agent_sandbox::EnforcementRecord {
+            mechanism: recursive_agent_sandbox::SandboxMechanism::Bubblewrap,
+            outcome: recursive_agent_sandbox::EnforcementOutcome::Failed,
+            policy_digest: "test-policy".into(),
+            launcher_path: "/usr/bin/bwrap".into(),
+            launcher_version: None,
+            bash_trampoline_path: None,
+            launcher_argv: Vec::new(),
+            private_pid_namespace: false,
+            parent_death_control: false,
+            network_isolated: false,
+            network_mechanism: None,
+            seccomp_policy_digest: None,
+            denied_network_syscalls: Vec::new(),
+            effective_operation_roots: Vec::new(),
+            effective_runtime_read_roots: Vec::new(),
+            trusted_executables: Vec::new(),
+            authorization: None,
+            setup_proof_digest: None,
+            setup_proof_verified: false,
+            reason_code: Some(reason_code),
+        }
+    }
+
+    #[test]
+    fn launcher_timeout_setup_failure_remains_typed_and_timeout_classified() -> TestResult {
+        let error = sandbox_tool_error(recursive_agent_sandbox::SandboxError::SetupFailed {
+            enforcement: Box::new(failed_enforcement(
+                recursive_agent_sandbox::SandboxFailureReason::LauncherTimedOut,
+            )),
+        });
+        assert!(error.timed_out());
+        let observation = error
+            .failure_observation()
+            .ok_or("typed enforcement observation")?;
+        assert_eq!(observation["timed_out"], true);
+        assert_eq!(
+            observation["enforcement"]["reason_code"],
+            "launcher_timed_out"
         );
         Ok(())
     }
