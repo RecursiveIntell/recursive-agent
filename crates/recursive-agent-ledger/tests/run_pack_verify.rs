@@ -21,8 +21,11 @@ mod valid_chain_fixture {
     }
 }
 
-use recursive_agent_contracts::{content_digest, RunPackManifestV1};
-use recursive_agent_ledger::{export_run_pack, verify_run_pack};
+use recursive_agent_contracts::{
+    content_digest, RunPackManifestV1, RunPackProjectionOriginV1, RunPackRetentionStateV1,
+    RunPackVaultRefV1, RunPackVerificationOutcomeV1, RunPackVerificationV1,
+};
+use recursive_agent_ledger::{export_run_pack, verified_run_pack_snapshot, verify_run_pack};
 
 type TestResult = Result<(), Box<dyn std::error::Error>>;
 
@@ -79,6 +82,46 @@ fn copied_pack_verifies_when_its_original_run_is_unavailable() -> TestResult {
     std::fs::remove_dir_all(&run.paths.root)?;
 
     assert!(verify_run_pack(&copied)?.ok);
+    Ok(())
+}
+
+#[test]
+fn verified_snapshot_builds_projection_from_pack_evidence_only() -> TestResult {
+    let (_root, _run, pack) = exported_pack()?;
+    let snapshot = verified_run_pack_snapshot(&pack)?;
+    let time = "2026-08-10T00:00:00Z".parse()?;
+    let projection = snapshot.build_evidence_projection(
+        RunPackVerificationV1 {
+            verifier_contract_version: "recursive-agent.run-pack-verifier/v1".into(),
+            verified_at: time,
+            verification_receipt_digest: content_digest(&"admission-receipt")?,
+            outcome: RunPackVerificationOutcomeV1::Verified,
+        },
+        RunPackVaultRefV1 {
+            object_id: "vault-object-1".into(),
+            relative_ref: "objects/pack-1".into(),
+            retention_state: RunPackRetentionStateV1::Available,
+        },
+        RunPackProjectionOriginV1 {
+            operator_adapter: "hermes-native".into(),
+            source_device_ref: None,
+            observed_at: Some(time),
+            recorded_at: time,
+        },
+    )?;
+    assert_eq!(
+        projection.run_id,
+        snapshot
+            .verification()
+            .verified_run_id
+            .clone()
+            .ok_or("missing run")?
+    );
+    assert_eq!(
+        projection.pack_manifest_digest,
+        snapshot.pack_verification().manifest_digest
+    );
+    projection.validate()?;
     Ok(())
 }
 

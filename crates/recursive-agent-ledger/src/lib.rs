@@ -15,8 +15,9 @@ use recursive_agent_contracts::{
     content_digest, derive_artifact_id, derive_receipt_id, project_runtime_events,
     validate_receipt_sequence, ArtifactDescriptorV1, AuthorityLineageEntryV1, ContentDigest,
     ContractError, CurrentRunId, CurrentStepId, LifecycleValidationMode, PackVerificationResultV1,
-    ReceiptIdentityMaterialV1, ReceiptKindV1, ReceiptOutcomeV1, ReceiptV1, RunPackFileEntryV1,
-    RunPackManifestV1, RunTerminalStateV1, RuntimeEventV1, GENESIS_SEED,
+    ReceiptIdentityMaterialV1, ReceiptKindV1, ReceiptOutcomeV1, ReceiptV1, RunPackEventSummaryV1,
+    RunPackEvidenceProjectionV1, RunPackFileEntryV1, RunPackManifestV1, RunPackProjectionOriginV1,
+    RunPackVaultRefV1, RunPackVerificationV1, RunTerminalStateV1, RuntimeEventV1, GENESIS_SEED,
 };
 use rustix::fs::{AtFlags, FlockOperation, Mode, OFlags, RenameFlags, ResolveFlags};
 use thiserror::Error;
@@ -595,6 +596,7 @@ pub struct VerifiedReceiptSnapshot {
 #[derive(Debug, Clone)]
 pub struct VerifiedRunPackSnapshot {
     pack_verification: PackVerificationResultV1,
+    manifest: RunPackManifestV1,
     receipt_snapshot: VerifiedReceiptSnapshot,
 }
 
@@ -667,6 +669,57 @@ impl VerifiedRunPackSnapshot {
 
     pub fn receipts(&self) -> &[ReceiptV1] {
         self.receipt_snapshot.receipts()
+    }
+
+    /// Build a projection only from this verifier-created snapshot. Caller
+    /// metadata is validated, while all execution and pack binding fields are
+    /// derived from immutable pack and receipt evidence.
+    pub fn build_evidence_projection(
+        &self,
+        verification: RunPackVerificationV1,
+        vault: RunPackVaultRefV1,
+        origin: RunPackProjectionOriginV1,
+    ) -> Result<RunPackEvidenceProjectionV1, LedgerError> {
+        if !self.pack_verification.ok || !self.verification().current_strict_success {
+            return Err(LedgerError::RunPackInvalid(
+                "projection requires strict verified pack".into(),
+            ));
+        }
+        let run_id = self.verification().verified_run_id.clone().ok_or_else(|| {
+            LedgerError::RunPackInvalid("verified pack lacks source run identity".into())
+        })?;
+        let receipt_chain_digest = ContentDigest::from_hex(self.verification().final_head.clone())
+            .map_err(|error| ContractError::Malformed(format!("chain digest: {error}")))?;
+        let mut artifact_digests = self
+            .receipts()
+            .iter()
+            .flat_map(|receipt| {
+                receipt
+                    .artifact_refs
+                    .iter()
+                    .map(|artifact| artifact.digest.clone())
+            })
+            .collect::<Vec<_>>();
+        artifact_digests.sort();
+        artifact_digests.dedup();
+        let mut projection = RunPackEvidenceProjectionV1 {
+            schema: RunPackEvidenceProjectionV1::SCHEMA.into(),
+            projection_id: ContentDigest::compute(b"pending"),
+            run_id,
+            pack_manifest_digest: self.pack_verification.manifest_digest.clone(),
+            pack_content_digest: content_digest(&self.manifest.files)?,
+            verification,
+            vault,
+            origin,
+            event_summary: RunPackEventSummaryV1 {
+                terminal_state: self.verification().terminal_state,
+                receipt_chain_digest,
+                artifact_digests,
+            },
+        };
+        projection.projection_id = projection.derived_projection_id()?;
+        projection.validate()?;
+        Ok(projection)
     }
 }
 
@@ -1277,6 +1330,7 @@ fn verified_run_pack_snapshot_from_dir_fd(
             ok: true,
             manifest_digest: ContentDigest::compute(&mb),
         },
+        manifest: m,
         receipt_snapshot: VerifiedReceiptSnapshot {
             verification,
             receipts: Arc::from(scan.receipts),

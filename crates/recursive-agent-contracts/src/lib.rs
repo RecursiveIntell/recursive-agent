@@ -7,6 +7,7 @@
 
 mod event;
 mod operation;
+mod run_pack_projection;
 
 pub use event::{
     project_runtime_events, validate_runtime_event_sequence, RuntimeEventKindV1,
@@ -20,6 +21,11 @@ pub use operation::{
     ChildOperationEnvelopeV2, ChildOperationProposalV2, ChildRunAuthorityV1, DeclaredEffectsV1,
     OperationBudgetV1, OperationEnvelopeV1, OperationIngressError, OperationSchemaV1,
     ProvenanceRefV1, ReplayClassV1, ReplayIntentV1, ReplaySpecV1,
+};
+pub use run_pack_projection::{
+    RunPackEventSummaryV1, RunPackEvidenceProjectionV1, RunPackProjectionOriginV1,
+    RunPackRetentionStateV1, RunPackVaultRefV1, RunPackVerificationOutcomeV1,
+    RunPackVerificationV1,
 };
 
 use boundary_compiler::{Canonicalizer, ContentDigest as BoundaryContentDigest, JcsError};
