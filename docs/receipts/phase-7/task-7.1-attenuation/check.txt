@@ -1,0 +1,11 @@
+    Checking serde v1.0.228
+    Checking thiserror v2.0.18
+    Checking schemars v0.8.22
+    Checking chrono v0.4.45
+    Checking boundary-compiler v0.1.0 (/home/sikmindz/Coding/Libraries/boundary-compiler)
+    Checking stack-ids v0.1.3 (/home/sikmindz/Coding/Libraries/stack-ids)
+    Checking recursive-agent-contracts v0.1.0 (/home/sikmindz/Coding/recursive-agent/crates/recursive-agent-contracts)
+    Checking recursive-agent-policy v0.1.0 (/home/sikmindz/Coding/recursive-agent/crates/recursive-agent-policy)
+    Finished `dev` profile [unoptimized + debuginfo] target(s) in 5.34s
+
+EXIT:0

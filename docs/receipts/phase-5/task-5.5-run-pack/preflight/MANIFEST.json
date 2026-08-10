@@ -1,0 +1,40 @@
+{
+  "baseline_artifacts": {
+    "git_diff_binary": "git-diff.binary",
+    "git_head": "git-head.txt",
+    "git_status": "git-status.txt",
+    "toolchain": "toolchain.txt"
+  },
+  "baseline_gates": {
+    "cargo_clippy_workspace_all_targets_d_warnings": {
+      "exit_code": 0
+    },
+    "cargo_fmt_all_check": {
+      "exit_code": 0
+    },
+    "cargo_test_workspace_all_targets": {
+      "exit_code": 0
+    },
+    "phase2_runtime_service": {
+      "exit_code": 0,
+      "tests_passed": 13
+    }
+  },
+  "branch": "main",
+  "complete": true,
+  "excluded_preexisting_untracked_paths": [
+    "?? .hermes/plans/2026-08-09-auditable-run-pack-v1-proof-sprint.md",
+    "?? .hermes/runs/",
+    "?? docs/receipts/phase-5/task-5.5-run-pack/",
+    "?? docs/receipts/phase-6/task-6.1-cli-runtime-adapter/manual-runs/42d37d648e2eaf71ff53b8f45ed35c17cfedad1f4e903cd4b520d689cfc9db9e/permits/.permit.lock",
+    "?? docs/receipts/phase-7/task-7.1-attenuation/",
+    "?? docs/receipts/phase-7/task-7.2-child-runs/contract-amendment-20260809/execution-receipts/",
+    "?? integrations/hermes-native/__pycache__/",
+    "?? integrations/hermes-native/tests/__pycache__/"
+  ],
+  "head": "2ae62bda4eb86c26e364e20d57250d3d1a7f04eb",
+  "observed_at_utc": "2026-08-09T23:07:10.102106+00:00",
+  "repository_root": "/home/sikmindz/Coding/recursive-agent",
+  "schema_version": "recursive-agent.run-pack.preflight.v1",
+  "scope": "Auditable Run Pack v1 proof sprint Task 0 preflight; no foreign artifact staging or deletion."
+}

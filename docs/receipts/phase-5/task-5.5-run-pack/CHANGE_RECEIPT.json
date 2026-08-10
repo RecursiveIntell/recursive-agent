@@ -1,0 +1,28 @@
+{
+  "changed_paths": [],
+  "checks": [
+    {
+      "gate_id": "G-000",
+      "status": "NOT_RUN"
+    }
+  ],
+  "commands": [],
+  "complete": false,
+  "goal": "Implement Auditable Run Pack v1 as an additive ledger-owned export, pack-only verification, recorded-evidence replay, and thin CLI surface.",
+  "non_goals": [],
+  "remaining_delta": [
+    "Review preflight",
+    "Populate owner map",
+    "Define phase contracts",
+    "Define validation and rollback"
+  ],
+  "rollback": "No source changes were made by scaffold_pass.py.",
+  "schema": "ChangeReceiptV1",
+  "source_identity": {
+    "branch": "main",
+    "head": "2ae62bda4eb86c26e364e20d57250d3d1a7f04eb",
+    "root": "/home/sikmindz/Coding/recursive-agent"
+  },
+  "task_id": "20260809T230533Z-implement-auditable-run-pack-v1-as-an-additive-ledger-owned-expo",
+  "version": 1
+}

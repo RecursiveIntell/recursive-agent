@@ -1,0 +1,8 @@
+recursive-agent Phase 1 candidate (admission rejected pending hostile review)
+mode: provider-free receipt-bearing execution
+boundary: boundary-compiler 0.1.0 + stack-ids 0.1.3
+available pure tools: echo, time_now (frozen clock required)
+available bounded effect: shell (runner-private one-shot dispatch, Bubblewrap + seccomp network EPERM)
+typed unavailable: llm/provider networking, mcp_call/client spawn, memory runtime, skills, delegate
+ledger: offline blake3 chain + strict artifact verification + bound replay snapshot
+policy: m0-2; Phase 1 network is always denied

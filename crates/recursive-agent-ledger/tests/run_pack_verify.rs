@@ -109,6 +109,9 @@ fn verified_admission_builds_projection_from_pack_evidence_only() -> TestResult 
         snapshot.pack_verification().manifest_digest
     );
     projection.validate()?;
+    if let Ok(path) = std::env::var("RA_PHASE5_PROJECTION_OUT") {
+        std::fs::write(path, recursive_agent_contracts::jcs_canonical(&projection)?)?;
+    }
     Ok(())
 }
 

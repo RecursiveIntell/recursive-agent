@@ -1,0 +1,19 @@
+   Compiling recursive-agent-policy v0.1.0 (/home/sikmindz/Coding/recursive-agent/crates/recursive-agent-policy)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.41s
+     Running tests/hardening_v5_attenuation.rs (target/debug/deps/hardening_v5_attenuation-7bebcab54ac3c854)
+
+running 1 test
+test persisted_delegation_proof_binds_identity_and_rejects_tampering ... FAILED
+
+failures:
+
+---- persisted_delegation_proof_binds_identity_and_rejects_tampering stdout ----
+Error: "delegated child evidence lacks a persisted derivation proof"
+
+
+failures:
+    persisted_delegation_proof_binds_identity_and_rejects_tampering
+
+test result: FAILED. 0 passed; 1 failed; 0 ignored; 0 measured; 5 filtered out; finished in 0.00s
+
+error: test failed, to rerun pass `-p recursive-agent-policy --test hardening_v5_attenuation`
