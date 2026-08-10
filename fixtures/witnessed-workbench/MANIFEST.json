@@ -1,0 +1,10 @@
+{
+  "schema": "WitnessedWorkbenchFixtureManifestV1",
+  "fixtures": {
+    "run-pack-evidence-projection-v1.json": {
+      "sha256": "fb91e2bdee8f14162b3cf09992070fd07697d29d0742d2e1175ab374303e49f5",
+      "owner": "recursive-agent-contracts",
+      "contract": "RunPackEvidenceProjectionV1"
+    }
+  }
+}
