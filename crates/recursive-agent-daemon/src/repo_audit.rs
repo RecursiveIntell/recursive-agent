@@ -141,6 +141,13 @@ pub struct TodoMarkerV1 {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct PanicMacroV1 {
+    pub path: String,
+    pub line: u64,
+    pub macro_name: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct ProposalCandidateV1 {
     pub path: String,
     pub line: u64,
@@ -156,6 +163,7 @@ pub struct RepoAuditV1 {
     pub source_bytes_scanned: u64,
     pub skipped_symlinks: u64,
     pub todo_markers: Vec<TodoMarkerV1>,
+    pub panic_macros: Vec<PanicMacroV1>,
     pub proposal_candidates: Vec<ProposalCandidateV1>,
 }
 
@@ -188,6 +196,7 @@ pub fn audit_root(root: &Path, limits: AuditLimits) -> Result<RepoAuditV1, Audit
 
     let mut bytes_scanned = 0_u64;
     let mut markers = Vec::new();
+    let mut panic_macros = Vec::new();
     for path in &regular_files {
         let metadata = fs::metadata(path).map_err(|_| AuditError::Io)?;
         let size = metadata.len();
@@ -210,7 +219,7 @@ pub fn audit_root(root: &Path, limits: AuditLimits) -> Result<RepoAuditV1, Audit
             for (index, line) in content.lines().enumerate() {
                 let marker = rust_line_comment(line).and_then(actionable_marker);
                 if let Some(marker) = marker {
-                    if markers.len() == limits.max_markers {
+                    if markers.len() + panic_macros.len() == limits.max_markers {
                         break;
                     }
                     markers.push(TodoMarkerV1 {
@@ -220,9 +229,19 @@ pub fn audit_root(root: &Path, limits: AuditLimits) -> Result<RepoAuditV1, Audit
                     });
                 }
             }
+            for (line, macro_name) in executable_panic_macros(&content) {
+                if markers.len() + panic_macros.len() == limits.max_markers {
+                    break;
+                }
+                panic_macros.push(PanicMacroV1 {
+                    path: relative.clone(),
+                    line,
+                    macro_name: macro_name.into(),
+                });
+            }
         }
     }
-    let proposal_candidates = markers
+    let mut proposal_candidates: Vec<_> = markers
         .iter()
         .map(|marker| ProposalCandidateV1 {
             path: marker.path.clone(),
@@ -233,13 +252,22 @@ pub fn audit_root(root: &Path, limits: AuditLimits) -> Result<RepoAuditV1, Audit
                     .into(),
         })
         .collect();
+    proposal_candidates.extend(panic_macros.iter().map(|macro_finding| ProposalCandidateV1 {
+        path: macro_finding.path.clone(),
+        line: macro_finding.line,
+        marker: macro_finding.macro_name.clone(),
+        advisory_action:
+            "Review and resolve the executable panic macro; no source change is authorized by this audit."
+                .into(),
+    }));
     Ok(RepoAuditV1 {
-        schema: "recursive-agent.repo-audit/v3".into(),
-        marker_scope: "ordinary-rust-line-comments-v1".into(),
+        schema: "recursive-agent.repo-audit/v4".into(),
+        marker_scope: "ordinary-rust-line-comments-v1; executable-panic-macros-v1".into(),
         files_scanned: u64::try_from(regular_files.len()).map_err(|_| AuditError::Io)?,
         source_bytes_scanned: bytes_scanned,
         skipped_symlinks,
         todo_markers: markers,
+        panic_macros,
         proposal_candidates,
     })
 }
@@ -259,6 +287,130 @@ fn actionable_marker(comment: &str) -> Option<&'static str> {
         let message = rest.strip_prefix(':').unwrap_or(rest).trim();
         if !message.is_empty() {
             return Some(marker);
+        }
+    }
+    None
+}
+
+fn executable_panic_macros(content: &str) -> Vec<(u64, &'static str)> {
+    #[derive(Clone, Copy)]
+    enum State {
+        Code,
+        LineComment,
+        BlockComment(u32),
+        Quoted(u8),
+        Raw(usize),
+    }
+
+    let bytes = content.as_bytes();
+    let mut findings = Vec::new();
+    let mut index = 0;
+    let mut line = 1_u64;
+    let mut state = State::Code;
+    while index < bytes.len() {
+        match state {
+            State::Code => {
+                if bytes[index..].starts_with(b"//") {
+                    state = State::LineComment;
+                    index += 2;
+                } else if bytes[index..].starts_with(b"/*") {
+                    state = State::BlockComment(1);
+                    index += 2;
+                } else if let Some(hashes) = raw_string_hashes(bytes, index) {
+                    state = State::Raw(hashes);
+                    index += 2 + hashes;
+                } else if matches!(bytes[index], b'\"' | b'\'') {
+                    state = State::Quoted(bytes[index]);
+                    index += 1;
+                } else if let Some(macro_name) = panic_macro_at(bytes, index) {
+                    findings.push((line, macro_name));
+                    index += macro_name.len();
+                } else {
+                    if bytes[index] == b'\n' {
+                        line = line.saturating_add(1);
+                    }
+                    index += 1;
+                }
+            }
+            State::LineComment => {
+                if bytes[index] == b'\n' {
+                    line = line.saturating_add(1);
+                    state = State::Code;
+                }
+                index += 1;
+            }
+            State::BlockComment(depth) => {
+                if bytes[index..].starts_with(b"/*") {
+                    state = State::BlockComment(depth.saturating_add(1));
+                    index += 2;
+                } else if bytes[index..].starts_with(b"*/") {
+                    state = if depth == 1 {
+                        State::Code
+                    } else {
+                        State::BlockComment(depth - 1)
+                    };
+                    index += 2;
+                } else {
+                    if bytes[index] == b'\n' {
+                        line = line.saturating_add(1);
+                    }
+                    index += 1;
+                }
+            }
+            State::Quoted(quote) => {
+                if bytes[index] == b'\\' {
+                    index = index.saturating_add(2);
+                } else {
+                    if bytes[index] == b'\n' {
+                        line = line.saturating_add(1);
+                    }
+                    if bytes[index] == quote {
+                        state = State::Code;
+                    }
+                    index += 1;
+                }
+            }
+            State::Raw(hashes) => {
+                if bytes[index] == b'\n' {
+                    line = line.saturating_add(1);
+                }
+                if bytes[index] == b'\"'
+                    && (0..hashes).all(|offset| bytes.get(index + 1 + offset) == Some(&b'#'))
+                {
+                    index += 1 + hashes;
+                    state = State::Code;
+                } else {
+                    index += 1;
+                }
+            }
+        }
+    }
+    findings
+}
+
+fn raw_string_hashes(bytes: &[u8], index: usize) -> Option<usize> {
+    if bytes.get(index) != Some(&b'r') {
+        return None;
+    }
+    let mut hashes = 0;
+    while bytes.get(index + 1 + hashes) == Some(&b'#') {
+        hashes += 1;
+    }
+    (bytes.get(index + 1 + hashes) == Some(&b'\"')).then_some(hashes)
+}
+
+fn panic_macro_at(bytes: &[u8], index: usize) -> Option<&'static str> {
+    for macro_name in ["todo!", "unimplemented!"] {
+        let name = macro_name.as_bytes();
+        let before_is_ident = index
+            .checked_sub(1)
+            .and_then(|before| bytes.get(before))
+            .is_some_and(|byte| byte.is_ascii_alphanumeric() || *byte == b'_');
+        let after_is_ident = bytes
+            .get(index + name.len())
+            .is_some_and(|byte| byte.is_ascii_alphanumeric() || *byte == b'_');
+        if !before_is_ident && !after_is_ident && bytes[index..].starts_with(name) {
+            return Some(macro_name);
         }
     }
     None

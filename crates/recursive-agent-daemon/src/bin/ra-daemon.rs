@@ -372,7 +372,7 @@ fn canonical_repo_audit_envelope(
         },
         provenance: vec![ProvenanceRefV1 {
             source: "urn:recursive-agent:repo-audit".into(),
-            digest: ContentDigest::compute(b"recursive-agent-repo-audit-v8"),
+            digest: ContentDigest::compute(b"recursive-agent-repo-audit-v9"),
         }],
         replay: ReplaySpecV1 {
             class: ReplayClassV1::Deterministic,

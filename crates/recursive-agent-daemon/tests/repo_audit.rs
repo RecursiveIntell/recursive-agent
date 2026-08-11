@@ -23,8 +23,11 @@ fn audit_is_stable_and_reports_only_regular_files_beneath_the_fixed_root() -> Te
     let second = audit_root(root.path(), AuditLimits::test_defaults())?;
 
     assert_eq!(first, second, "audit output must be deterministic");
-    assert_eq!(first.schema, "recursive-agent.repo-audit/v3");
-    assert_eq!(first.marker_scope, "ordinary-rust-line-comments-v1");
+    assert_eq!(first.schema, "recursive-agent.repo-audit/v4");
+    assert_eq!(
+        first.marker_scope,
+        "ordinary-rust-line-comments-v1; executable-panic-macros-v1"
+    );
     assert_eq!(first.files_scanned, 2);
     assert_eq!(first.todo_markers.len(), 1);
     assert_eq!(first.todo_markers[0].path, "src/lib.rs");
@@ -39,6 +42,37 @@ fn audit_is_stable_and_reports_only_regular_files_beneath_the_fixed_root() -> Te
     );
     assert!(first.skipped_symlinks >= 1);
     assert!(!serde_json::to_string(&first)?.contains("/etc/passwd"));
+    Ok(())
+}
+
+#[test]
+fn audit_reports_only_executable_panic_macro_candidates() -> TestResult {
+    let root = tempfile::tempdir()?;
+    fs::create_dir(root.path().join("src"))?;
+    fs::write(
+        root.path().join("src/lib.rs"),
+        r##"
+// todo!()
+/* unimplemented!() */
+let a = "todo!()";
+let b = r#"unimplemented!()"#;
+fn actual() { todo!() }
+fn also_actual() { unimplemented!() }
+"##,
+    )?;
+
+    let audit = audit_root(root.path(), AuditLimits::test_defaults())?;
+
+    assert_eq!(audit.panic_macros.len(), 2);
+    assert_eq!(audit.panic_macros[0].line, 6);
+    assert_eq!(audit.panic_macros[0].macro_name, "todo!");
+    assert_eq!(audit.panic_macros[1].line, 7);
+    assert_eq!(audit.panic_macros[1].macro_name, "unimplemented!");
+    assert_eq!(audit.proposal_candidates.len(), 2);
+    assert!(audit
+        .proposal_candidates
+        .iter()
+        .all(|candidate| candidate.advisory_action.contains("panic macro")));
     Ok(())
 }
 
