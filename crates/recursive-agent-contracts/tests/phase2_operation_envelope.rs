@@ -105,6 +105,31 @@ fn complete_operation_envelope_round_trips_without_a_second_run_model(
 }
 
 #[test]
+fn repo_audit_operation_has_no_caller_supplied_filesystem_path(
+) -> Result<(), Box<dyn std::error::Error>> {
+    let mut envelope = sample_envelope()?;
+    envelope.run_spec.steps[0].name = "repo_audit".into();
+    envelope.run_spec.steps[0].call = ToolCallSpecV1 {
+        tool: "repo_audit".into(),
+        args: serde_json::json!({
+            "scope_digest": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+        }),
+        frozen_clock: None,
+    };
+    envelope.effects.action_digest = content_digest(&envelope.run_spec)?;
+    envelope.validate()?;
+
+    let mut widened = envelope;
+    widened.run_spec.steps[0].call.args = serde_json::json!({"root": "/tmp/escape"});
+    widened.effects.action_digest = content_digest(&widened.run_spec)?;
+    assert!(
+        widened.validate().is_err(),
+        "repo_audit accepted a caller-controlled filesystem path"
+    );
+    Ok(())
+}
+
+#[test]
 fn operation_envelope_rejects_unknown_closed_fields() -> Result<(), Box<dyn std::error::Error>> {
     let encoded = serde_json::to_value(sample_envelope()?)?;
     for (label, pointer) in [

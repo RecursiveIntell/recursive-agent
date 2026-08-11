@@ -564,17 +564,16 @@ fn validate_declared_effects(
     let mut required_network = false;
     let mut has_shell = false;
     for step in &run_spec.steps {
-        if step.call.tool != "shell" {
-            continue;
+        if step.call.tool == "shell" {
+            has_shell = true;
+            let args = serde_json::from_value::<crate::ShellArgsIngressV1>(step.call.args.clone())
+                .map_err(|_| {
+                    ContractError::Malformed("shell effect declaration could not be decoded".into())
+                })?;
+            required_reads.extend(args.allowed_read_paths);
+            required_writes.extend(args.allowed_write_paths);
+            required_network |= args.allow_network;
         }
-        has_shell = true;
-        let args = serde_json::from_value::<crate::ShellArgsIngressV1>(step.call.args.clone())
-            .map_err(|_| {
-                ContractError::Malformed("shell effect declaration could not be decoded".into())
-            })?;
-        required_reads.extend(args.allowed_read_paths);
-        required_writes.extend(args.allowed_write_paths);
-        required_network |= args.allow_network;
     }
 
     let declared_reads = effects

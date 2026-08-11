@@ -2079,7 +2079,12 @@ pub struct Allowlist {
 impl Default for Allowlist {
     fn default() -> Self {
         Self {
-            allowed: BTreeSet::from(["echo".into(), "time_now".into(), "shell".into()]),
+            allowed: BTreeSet::from([
+                "echo".into(),
+                "time_now".into(),
+                "repo_audit".into(),
+                "shell".into(),
+            ]),
             max_arg_bytes: 16 * 1024,
             policy_version: "m0-2".into(),
         }

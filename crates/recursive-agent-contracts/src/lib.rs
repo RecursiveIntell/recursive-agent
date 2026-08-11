@@ -557,6 +557,12 @@ struct TimeNowArgsIngressV1 {
 
 #[derive(Debug, Deserialize)]
 #[serde(deny_unknown_fields)]
+struct RepoAuditArgsIngressV1 {
+    scope_digest: String,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
 struct ShellArgsIngressV1 {
     command: String,
     #[serde(default)]
@@ -773,6 +779,7 @@ fn validate_ingress_spec(spec: &RunSpecV1) -> Result<(), RunSpecIngressError> {
         match step.call.tool.as_str() {
             "echo" => validate_echo_args(&step.call.args)?,
             "time_now" => validate_time_args(&step.call.args)?,
+            "repo_audit" => validate_repo_audit_args(&step.call.args)?,
             "shell" => validate_shell_args(&step.call.args)?,
             _ => return Err(RunSpecIngressError::InvalidToolArguments),
         }
@@ -820,6 +827,20 @@ fn validate_item_count(
             field,
             maximum_items,
         });
+    }
+    Ok(())
+}
+
+fn validate_repo_audit_args(value: &serde_json::Value) -> Result<(), RunSpecIngressError> {
+    let args = serde_json::from_value::<RepoAuditArgsIngressV1>(value.clone())
+        .map_err(|_| RunSpecIngressError::InvalidToolArguments)?;
+    if args.scope_digest.len() != 64
+        || !args
+            .scope_digest
+            .bytes()
+            .all(|byte| byte.is_ascii_hexdigit())
+    {
+        return Err(RunSpecIngressError::InvalidToolArguments);
     }
     Ok(())
 }

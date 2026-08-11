@@ -5,6 +5,7 @@
 //! data shapes; Phase 1 only shares the canonical bounded RunSpec decoder.
 
 pub mod protocol;
+pub mod repo_audit;
 pub mod server;
 pub mod socket;
 
