@@ -1,0 +1,11 @@
+# Linux development safeguards for this memory-constrained workstation.
+# Keep Rust compilation serial, and run every host test binary outside the
+# Ares Desktop cgroup with a fail-closed memory ceiling.
+[build]
+jobs = 1
+
+# Use scripts/guarded-cargo.sh explicitly for guarded builds or Clippy. Cargo
+# aliases cannot safely invoke repository-local shell scripts on stable Cargo.
+
+[target.x86_64-unknown-linux-gnu]
+runner = ["scripts/guarded-test-runner.sh"]
