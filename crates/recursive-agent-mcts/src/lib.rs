@@ -1,10 +1,4 @@
-#![cfg(feature = "later-phase-prototype")]
-
-//! Monte Carlo Tree Search over tool sequences.
-//! Selects tools via random sampling, scores via provided function,
-//! returns the best tool found.
-
-use rand::Rng;
+//! Deterministic, bounded UCT search over tool sequences.
 use serde::{Deserialize, Serialize};
 use thiserror::Error;
 
@@ -22,7 +16,6 @@ pub struct McstNode {
     pub children: Vec<McstNode>,
     pub args_template: serde_json::Value,
 }
-
 impl McstNode {
     pub fn new(tool_name: &str, args_template: serde_json::Value) -> Self {
         Self {
@@ -34,69 +27,121 @@ impl McstNode {
         }
     }
 }
-
-/// Scoring function: takes a sequence of tool names and returns a score.
 pub type ScoreFn = Box<dyn Fn(&[&str]) -> f64>;
 
 pub struct McstSearch {
     available_tools: Vec<(String, serde_json::Value)>,
 }
-
 impl McstSearch {
-    pub fn new(available_tools: Vec<(String, serde_json::Value)>) -> Result<Self, McstError> {
+    pub fn new(mut available_tools: Vec<(String, serde_json::Value)>) -> Result<Self, McstError> {
         if available_tools.is_empty() {
             return Err(McstError::NoMoves);
         }
+        available_tools.sort_by(|a, b| a.0.cmp(&b.0));
         Ok(Self { available_tools })
     }
-
-    /// Run `iterations` rollouts, scoring each randomly-selected tool.
     pub fn search(&self, score_fn: &ScoreFn, iterations: usize) -> McstNode {
-        let mut rng = rand::thread_rng();
-        let mut best_score = f64::NEG_INFINITY;
-        let mut best_tool = String::new();
-        let mut total_visits = 0u64;
-
-        for _ in 0..iterations {
-            let idx = rng.gen_range(0..self.available_tools.len());
-            let (tool_name, _args) = &self.available_tools[idx];
-            let tool_names = vec![tool_name.as_str()];
-            let score = score_fn(&tool_names);
-            total_visits += 1;
-            if score > best_score {
-                best_score = score;
-                best_tool = tool_name.clone();
-            }
-        }
-
+        self.search_bounded(score_fn, iterations, 1, 0)
+    }
+    pub fn search_bounded(
+        &self,
+        score_fn: &ScoreFn,
+        iterations: usize,
+        max_depth: usize,
+        seed: u64,
+    ) -> McstNode {
         let mut root = McstNode::new("root", serde_json::Value::Null);
-        root.visits = total_visits;
-        root.total_score = best_score;
-        if !best_tool.is_empty() {
-            root.children
-                .push(McstNode::new(&best_tool, serde_json::Value::Null));
+        let budget = iterations.min(100_000);
+        let depth = max_depth.clamp(1, 64);
+        for i in 0..budget {
+            let mut path = Vec::new();
+            let mut node = &mut root;
+            for d in 0..depth {
+                if node.children.len() < self.available_tools.len() {
+                    let idx = (splitmix(seed.wrapping_add(i as u64).wrapping_add(d as u64))
+                        as usize)
+                        % self.available_tools.len();
+                    let (name, args) = &self.available_tools[idx];
+                    if !node.children.iter().any(|c| c.tool_name == *name) {
+                        node.children.push(McstNode::new(name, args.clone()));
+                    }
+                }
+                let idx = node
+                    .children
+                    .iter()
+                    .enumerate()
+                    .max_by(|(_, a), (_, b)| {
+                        uct(a, node.visits)
+                            .total_cmp(&uct(b, node.visits))
+                            .then_with(|| b.tool_name.cmp(&a.tool_name))
+                    })
+                    .map(|(j, _)| j)
+                    .unwrap_or(0);
+                path.push(node.children[idx].tool_name.clone());
+                node = &mut node.children[idx];
+                if d + 1 == depth {
+                    break;
+                }
+            }
+            let refs = path.iter().map(String::as_str).collect::<Vec<_>>();
+            let score = score_fn(&refs);
+            root.visits += 1;
+            root.total_score += score;
+            update_path(&mut root, &path, score);
         }
         root
     }
+    pub fn best_path(root: &McstNode) -> Vec<String> {
+        let mut out = Vec::new();
+        let mut n = root;
+        while let Some(c) = n.children.iter().filter(|c| c.visits > 0).max_by(|a, b| {
+            (a.total_score / a.visits as f64)
+                .total_cmp(&(b.total_score / b.visits as f64))
+                .then_with(|| b.tool_name.cmp(&a.tool_name))
+        }) {
+            out.push(c.tool_name.clone());
+            n = c;
+        }
+        out
+    }
 }
-
+fn update_path(node: &mut McstNode, path: &[String], score: f64) {
+    if let Some((name, rest)) = path.split_first() {
+        if let Some(child) = node.children.iter_mut().find(|c| c.tool_name == *name) {
+            child.visits += 1;
+            child.total_score += score;
+            update_path(child, rest, score);
+        }
+    }
+}
+fn uct(n: &McstNode, parent: u64) -> f64 {
+    if n.visits == 0 {
+        return f64::INFINITY;
+    }
+    n.total_score / n.visits as f64
+        + std::f64::consts::SQRT_2 * ((parent.max(1) as f64).ln() / n.visits as f64).sqrt()
+}
+fn splitmix(mut x: u64) -> u64 {
+    x = x.wrapping_add(0x9e3779b97f4a7c15);
+    let mut z = x;
+    z = (z ^ (z >> 30)).wrapping_mul(0xbf58476d1ce4e5b9);
+    z = (z ^ (z >> 27)).wrapping_mul(0x94d049bb133111eb);
+    z ^ (z >> 31)
+}
 #[cfg(test)]
 mod tests {
     use super::*;
-
     #[test]
-    fn search_with_one_tool() -> Result<(), McstError> {
-        let tools = vec![("echo".into(), serde_json::json!({"text": "hi"}))];
-        let mcts = McstSearch::new(tools)?;
-        let score_fn: ScoreFn = Box::new(|_tools| 1.0);
-        let result = mcts.search(&score_fn, 10);
-        assert!(result.visits > 0);
+    fn deterministic() -> Result<(), Box<dyn std::error::Error>> {
+        let s = McstSearch::new(vec![
+            ("b".into(), serde_json::Value::Null),
+            ("a".into(), serde_json::Value::Null),
+        ])?;
+        let f: ScoreFn = Box::new(|p| if p[0] == "a" { 1.0 } else { 0.0 });
+        let a = s.search_bounded(&f, 100, 2, 7);
+        let b = s.search_bounded(&f, 100, 2, 7);
+        assert_eq!(serde_json::to_string(&a)?, serde_json::to_string(&b)?);
+        assert_eq!(McstSearch::best_path(&a)[0], "a");
         Ok(())
-    }
-
-    #[test]
-    fn empty_tools_fails() {
-        let result = McstSearch::new(vec![]);
-        assert!(result.is_err());
     }
 }

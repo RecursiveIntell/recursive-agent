@@ -1,11 +1,18 @@
 //! Receipt-bearing, fail-fast runner for recorded-evidence execution.
 
+mod autonomous;
 mod deps;
 mod error;
 mod runtime;
 mod sandbox_engine;
 mod scheduler;
 
+pub use autonomous::{
+    AutonomousActionV1, AutonomousBudgetV1, AutonomousCancellation, AutonomousContextV1,
+    AutonomousError, AutonomousExecutor, AutonomousIntentV1, AutonomousPlanV1, AutonomousPlanner,
+    AutonomousReceiptV1, AutonomousResultV1, AutonomousRunner, AutonomousTranscript,
+    JsonAutonomousPlanner, ModelAutonomousPlanner,
+};
 pub use deps::{
     RuntimeDependencies, RuntimeDependenciesBuilder, RuntimeLedgerDependencyV1,
     RuntimePolicyDependencyV1, RuntimeProviderDependencyV1, RuntimeSandboxDependencyV1,
@@ -13,8 +20,8 @@ pub use deps::{
 };
 pub use error::RuntimeDependencyError;
 pub use runtime::{
-    RuntimeCancelResultV1, RuntimeHandleV1, RuntimeLiveParentV2, RuntimeService,
-    RuntimeServiceError, RuntimeStatusV1,
+    NativeOperationExecutor, RuntimeCancelResultV1, RuntimeHandleV1, RuntimeLiveParentV2,
+    RuntimeService, RuntimeServiceError, RuntimeStatusV1,
 };
 pub use scheduler::{OperationRow, ProjectedState, SchedulerStore, SchedulerStoreError};
 

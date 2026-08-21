@@ -19,12 +19,15 @@ use recursive_agent_ledger::{
     make_receipt, open, put_string, verified_snapshot_directory_bound, ArtifactStore,
     ChildRunLinkV1, ReceiptDraftV1, RunPaths,
 };
-use recursive_agent_provider::{ProviderSpecV1, ValidatedEndpoint};
+use recursive_agent_memory::MemoryStore;
+use recursive_agent_provider::{
+    CompletionBackend, CompletionResponseV1, ProviderSpecV1, ValidatedEndpoint,
+};
 use recursive_agent_runner::{
-    Clock, RuntimeCancelResultV1, RuntimeDependencies, RuntimeDependencyError,
-    RuntimeLedgerDependencyV1, RuntimePolicyDependencyV1, RuntimeProviderDependencyV1,
-    RuntimeSandboxDependencyV1, RuntimeService, RuntimeServiceError, RuntimeStatusV1,
-    RuntimeStoreDependencyV1, SystemClock,
+    AutonomousBudgetV1, AutonomousCancellation, AutonomousTranscript, Clock, RuntimeCancelResultV1,
+    RuntimeDependencies, RuntimeDependencyError, RuntimeLedgerDependencyV1,
+    RuntimePolicyDependencyV1, RuntimeProviderDependencyV1, RuntimeSandboxDependencyV1,
+    RuntimeService, RuntimeServiceError, RuntimeStatusV1, RuntimeStoreDependencyV1, SystemClock,
 };
 
 struct FixedClock;
@@ -798,5 +801,212 @@ fn runtime_service_rejects_concurrent_duplicate_execution() -> Result<(), Box<dy
         service.status(&operation_id)?,
         RuntimeStatusV1::Terminal { .. }
     ));
+    Ok(())
+}
+
+struct ModelPlanFixture {
+    responses: Mutex<Vec<String>>,
+    prompts: Mutex<Vec<String>>,
+}
+
+impl CompletionBackend for ModelPlanFixture {
+    fn complete(
+        &self,
+        request: &recursive_agent_provider::CompletionRequestV1,
+    ) -> Result<CompletionResponseV1, recursive_agent_provider::ProviderError> {
+        self.prompts
+            .lock()
+            .map_err(|_| recursive_agent_provider::ProviderError::Unavailable)?
+            .push(request.prompt.clone());
+        let response = self
+            .responses
+            .lock()
+            .map_err(|_| recursive_agent_provider::ProviderError::Unavailable)?
+            .pop()
+            .ok_or(recursive_agent_provider::ProviderError::Unavailable)?;
+        Ok(CompletionResponseV1 {
+            model: "fixture-model".into(),
+            text: response,
+            raw: serde_json::json!({"fixture": true}),
+        })
+    }
+}
+
+#[test]
+fn runtime_service_model_loop_executes_fixture_plan_through_native_submit(
+) -> Result<(), Box<dyn std::error::Error>> {
+    let output_root = tempfile::tempdir()?;
+    let operation = sample_operation()?;
+    let plan = serde_json::json!({
+        "complete": false,
+        "intents": [{
+            "name": "native_operation",
+            "payload": {"operation": operation},
+            "delegate": false
+        }]
+    });
+    let terminal_plan = serde_json::json!({"complete": true, "intents": []});
+    let backend = ModelPlanFixture {
+        responses: Mutex::new(vec![terminal_plan.to_string(), plan.to_string()]),
+        prompts: Mutex::new(Vec::new()),
+    };
+    let service = RuntimeService::new(service_dependencies(output_root.path())?);
+    let memory = MemoryStore::open(&output_root.path().join("memory.db"))?;
+    let cancellation = AutonomousCancellation::new();
+    let result = service.run_model_autonomous(
+        serde_json::json!({"goal": "execute the admitted fixture operation"}),
+        &memory,
+        None,
+        AutonomousTranscript::open(&output_root.path().join("autonomy.ndjson"))?,
+        AutonomousBudgetV1 {
+            max_depth: 1,
+            max_steps: 2,
+            max_children: 1,
+            max_wall_time_ms: 10_000,
+            max_output_bytes: 16_384,
+        },
+        &cancellation,
+        ProviderSpecV1::Ollama {
+            base_url: ValidatedEndpoint::try_new("http://127.0.0.1:11434")?,
+            model: "fixture-model".into(),
+        },
+        &backend,
+        Some(256),
+    )?;
+    assert_eq!(result.output["verified"], true);
+    assert!(result.output["run_id"].as_str().is_some());
+    let prompts = backend
+        .prompts
+        .lock()
+        .map_err(|_| std::io::Error::other("model fixture prompt lock poisoned"))?;
+    assert_eq!(
+        prompts.len(),
+        2,
+        "execution must require explicit completion"
+    );
+    assert!(
+        prompts[1].contains("\"verified\":true"),
+        "the next planner context must contain the preceding observed output"
+    );
+    drop(prompts);
+    let receipt = result
+        .receipt
+        .as_ref()
+        .ok_or("native autonomous result omitted verified terminal receipt")?;
+    let native_run_id = result.output["run_id"]
+        .as_str()
+        .ok_or("native autonomous result omitted run id")?;
+    let native_run_id = recursive_agent_contracts::CurrentRunId::try_new(native_run_id)?;
+    let native_snapshot = verified_snapshot_directory_bound(&RunPaths::new(
+        output_root
+            .path()
+            .join(content_digest(&native_run_id)?.to_string()),
+    ))?;
+    assert_eq!(
+        native_snapshot
+            .receipts()
+            .last()
+            .ok_or("verified native receipt chain is empty")?
+            .receipt_id,
+        *receipt,
+        "autonomous output must bind the strictly verified native terminal receipt"
+    );
+    let learned = memory.search("autonomous", "verified", 1)?;
+    let learned = learned
+        .first()
+        .ok_or("successful autonomous operation did not persist learned memory")?;
+    assert_eq!(learned.provenance.source_receipt.as_ref(), Some(receipt));
+    let transcript = std::fs::read_to_string(output_root.path().join("autonomy.ndjson"))?;
+    assert!(transcript.contains("complete"));
+    assert!(transcript.contains("succeeded"));
+    Ok(())
+}
+
+#[test]
+fn model_autonomous_rejects_nonterminal_plans_without_complete_receipts(
+) -> Result<(), Box<dyn std::error::Error>> {
+    for invalid_plan in [
+        serde_json::json!({"intents": []}),
+        serde_json::json!({"complete": true, "intents": [{"name": "native_operation", "payload": {}, "delegate": false}]}),
+        serde_json::json!({"complete": false, "intents": []}),
+    ] {
+        let output_root = tempfile::tempdir()?;
+        let service = RuntimeService::new(service_dependencies(output_root.path())?);
+        let memory = MemoryStore::open(&output_root.path().join("memory.db"))?;
+        let cancellation = AutonomousCancellation::new();
+        let backend = ModelPlanFixture {
+            responses: Mutex::new(vec![invalid_plan.to_string()]),
+            prompts: Mutex::new(Vec::new()),
+        };
+        assert!(service
+            .run_model_autonomous(
+                serde_json::json!({"goal": "must not infer completion"}),
+                &memory,
+                None,
+                AutonomousTranscript::open(&output_root.path().join("autonomy.ndjson"))?,
+                AutonomousBudgetV1 {
+                    max_depth: 1,
+                    max_steps: 2,
+                    max_children: 1,
+                    max_wall_time_ms: 10_000,
+                    max_output_bytes: 16_384,
+                },
+                &cancellation,
+                ProviderSpecV1::Ollama {
+                    base_url: ValidatedEndpoint::try_new("http://127.0.0.1:11434")?,
+                    model: "fixture-model".into(),
+                },
+                &backend,
+                Some(256),
+            )
+            .is_err());
+        let transcript = std::fs::read_to_string(output_root.path().join("autonomy.ndjson"))?;
+        assert!(!transcript.contains("\"action\":\"complete\""));
+        assert!(transcript.contains("\"action\":\"rejected\""));
+    }
+    Ok(())
+}
+
+#[test]
+fn model_autonomous_budget_rejection_never_emits_complete_receipt(
+) -> Result<(), Box<dyn std::error::Error>> {
+    let output_root = tempfile::tempdir()?;
+    let operation = sample_operation()?;
+    let backend = ModelPlanFixture {
+        responses: Mutex::new(vec![serde_json::json!({
+            "complete": false,
+            "intents": [{"name": "native_operation", "payload": {"operation": operation}, "delegate": false}]
+        })
+        .to_string()]),
+        prompts: Mutex::new(Vec::new()),
+    };
+    let service = RuntimeService::new(service_dependencies(output_root.path())?);
+    let memory = MemoryStore::open(&output_root.path().join("memory.db"))?;
+    let cancellation = AutonomousCancellation::new();
+    assert!(service
+        .run_model_autonomous(
+            serde_json::json!({"goal": "must not complete after exhausted budget"}),
+            &memory,
+            None,
+            AutonomousTranscript::open(&output_root.path().join("autonomy.ndjson"))?,
+            AutonomousBudgetV1 {
+                max_depth: 1,
+                max_steps: 1,
+                max_children: 1,
+                max_wall_time_ms: 10_000,
+                max_output_bytes: 16_384,
+            },
+            &cancellation,
+            ProviderSpecV1::Ollama {
+                base_url: ValidatedEndpoint::try_new("http://127.0.0.1:11434")?,
+                model: "fixture-model".into(),
+            },
+            &backend,
+            Some(256),
+        )
+        .is_err());
+    let transcript = std::fs::read_to_string(output_root.path().join("autonomy.ndjson"))?;
+    assert!(!transcript.contains("\"action\":\"complete\""));
+    assert!(transcript.contains("\"action\":\"rejected\""));
     Ok(())
 }

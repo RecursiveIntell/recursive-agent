@@ -103,6 +103,10 @@ impl SecretBytes {
     pub fn new(bytes: Vec<u8>) -> Self {
         Self(bytes)
     }
+
+    fn as_bytes(&self) -> &[u8] {
+        &self.0
+    }
 }
 
 impl std::fmt::Debug for SecretBytes {
@@ -257,6 +261,150 @@ pub enum ProviderError {
     Unavailable,
     #[error("malformed provider response: {0}")]
     Malformed(String),
+}
+
+/// A provider boundary that performs one explicitly requested completion.
+/// Implementations must never hide retries, fallback providers, or credential
+/// resolution behind the planner contract.
+pub trait CompletionBackend {
+    fn complete(
+        &self,
+        request: &CompletionRequestV1,
+    ) -> Result<CompletionResponseV1, ProviderError>;
+}
+
+/// Explicit HTTP provider backend for Ollama and OpenAI-compatible APIs.
+/// Constructing this backend does not perform network I/O; calls happen only
+/// when `complete` is invoked by an admitted runtime path.
+#[derive(Debug, Clone)]
+pub struct HttpCompletionBackend {
+    timeout: std::time::Duration,
+}
+
+impl HttpCompletionBackend {
+    pub fn new(timeout: std::time::Duration) -> Result<Self, ProviderError> {
+        if timeout.is_zero() {
+            return Err(ProviderError::Http {
+                operation: "client_build",
+            });
+        }
+        Ok(Self { timeout })
+    }
+}
+
+impl Default for HttpCompletionBackend {
+    fn default() -> Self {
+        Self {
+            timeout: std::time::Duration::from_secs(120),
+        }
+    }
+}
+
+impl CompletionBackend for HttpCompletionBackend {
+    fn complete(
+        &self,
+        request: &CompletionRequestV1,
+    ) -> Result<CompletionResponseV1, ProviderError> {
+        let client = reqwest::blocking::Client::builder()
+            .timeout(self.timeout)
+            .build()
+            .map_err(|_| ProviderError::Http {
+                operation: "client_build",
+            })?;
+        match &request.provider {
+            ProviderSpecV1::Ollama { base_url, model } => {
+                let mut body = serde_json::json!({
+                    "model": model,
+                    "prompt": request.prompt,
+                    "stream": false,
+                });
+                if let Some(max_tokens) = request.max_tokens {
+                    body["options"] = serde_json::json!({ "num_predict": max_tokens });
+                }
+                let response = client
+                    .post(base_url.route_url(ProviderRoute::OllamaGenerate))
+                    .json(&body)
+                    .send()
+                    .map_err(|_| ProviderError::Http {
+                        operation: "ollama_completion",
+                    })?;
+                let status = response.status();
+                if !status.is_success() {
+                    return Err(ProviderError::HttpStatus {
+                        status: status.as_u16(),
+                    });
+                }
+                let raw = response
+                    .json::<serde_json::Value>()
+                    .map_err(|error| ProviderError::Malformed(error.to_string()))?;
+                let text = raw
+                    .get("response")
+                    .and_then(serde_json::Value::as_str)
+                    .filter(|text| !text.is_empty())
+                    .ok_or_else(|| ProviderError::Malformed("missing non-empty response".into()))?;
+                Ok(CompletionResponseV1 {
+                    model: model.clone(),
+                    text: text.to_owned(),
+                    raw,
+                })
+            }
+            ProviderSpecV1::OpenAiCompatible {
+                base_url,
+                model,
+                credential_ref,
+            } => {
+                let credential = EnvironmentCredentialResolver
+                    .resolve(credential_ref)
+                    .map_err(|error| match error {
+                        CredentialResolveError::Missing => ProviderError::MissingCredential,
+                        CredentialResolveError::UnsupportedReference => {
+                            ProviderError::UnsupportedCredentialReference
+                        }
+                        CredentialResolveError::InvalidValue => ProviderError::InvalidCredential,
+                    })?;
+                let token = std::str::from_utf8(credential.as_bytes())
+                    .map_err(|_| ProviderError::InvalidCredential)?;
+                let mut body = serde_json::json!({
+                    "model": model,
+                    "messages": [{"role": "user", "content": request.prompt}],
+                    "stream": false,
+                });
+                if let Some(max_tokens) = request.max_tokens {
+                    body["max_tokens"] = serde_json::json!(max_tokens);
+                }
+                let response = client
+                    .post(base_url.route_url(ProviderRoute::OpenAiChatCompletions))
+                    .bearer_auth(token)
+                    .json(&body)
+                    .send()
+                    .map_err(|_| ProviderError::Http {
+                        operation: "openai_completion",
+                    })?;
+                let status = response.status();
+                if !status.is_success() {
+                    return Err(ProviderError::HttpStatus {
+                        status: status.as_u16(),
+                    });
+                }
+                let raw = response
+                    .json::<serde_json::Value>()
+                    .map_err(|error| ProviderError::Malformed(error.to_string()))?;
+                let text = raw
+                    .get("choices")
+                    .and_then(|choices| choices.get(0))
+                    .and_then(|choice| choice.get("message"))
+                    .and_then(|message| message.get("content"))
+                    .and_then(serde_json::Value::as_str)
+                    .filter(|text| !text.is_empty())
+                    .ok_or_else(|| ProviderError::Malformed("missing non-empty content".into()))?;
+                Ok(CompletionResponseV1 {
+                    model: model.clone(),
+                    text: text.to_owned(),
+                    raw,
+                })
+            }
+        }
+    }
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]

@@ -7,9 +7,9 @@ use llm_tool_runtime::{
 };
 use recursive_agent_contracts::{
     content_digest, derive_child_operation_id, derive_child_operation_proposal_digest,
-    derive_operation_id, derive_step_id, ChildOperationEnvelopeV2, ChildOperationProposalV2,
-    ChildRunAuthorityV1, ContractError, CurrentRunId, OperationEnvelopeV1, ReceiptKindV1,
-    RunTerminalStateV1, RuntimeEventV1, ToolCallSpecV1,
+    derive_operation_id, derive_step_id, parse_operation_envelope_bytes, ChildOperationEnvelopeV2,
+    ChildOperationProposalV2, ChildRunAuthorityV1, ContractError, CurrentRunId,
+    OperationEnvelopeV1, ReceiptKindV1, RunTerminalStateV1, RuntimeEventV1, ToolCallSpecV1,
 };
 use recursive_agent_ledger::{
     committed_events_directory_bound, verified_snapshot_directory_bound,
@@ -20,13 +20,16 @@ use recursive_agent_policy::{
     ActorPrincipalV1, ChildRunCeilingV1, FamilyAuthorityStore, FamilyChildRequestV1,
     FamilyRootGrantV1, PermitBudgetV1, PermitEvidenceV1,
 };
+use recursive_agent_provider::{CompletionBackend, ProviderSpecV1};
 use stack_ids::{AttemptId, TraceCtx, TrialId};
 use thiserror::Error;
 
 use crate::{
     run_child_spec_with_run_id, run_live_parent_spec_with_run_id, run_spec_internal_with_run_id,
-    LiveParentRun, NoopRunnerHook, RunError, RunnerToolExecutor, RunnerToolOutput,
-    RuntimeDependencies,
+    AutonomousBudgetV1, AutonomousCancellation, AutonomousError, AutonomousExecutor,
+    AutonomousIntentV1, AutonomousPlanner, AutonomousResultV1, AutonomousTranscript,
+    JsonAutonomousPlanner, LiveParentRun, ModelAutonomousPlanner, NoopRunnerHook, RunError,
+    RunnerToolExecutor, RunnerToolOutput, RuntimeDependencies,
 };
 
 /// Stable handle returned only after the authoritative run has reached a terminal receipt.
@@ -149,6 +152,11 @@ pub enum RuntimeServiceError {
     /// The authoritative runner rejected or failed the operation.
     #[error("run: {0}")]
     Run(#[from] RunError),
+    /// The autonomous planner/executor boundary failed before a native result
+    /// could be returned. The autonomous transcript remains the durable owner
+    /// of its internal state transitions.
+    #[error("autonomous: {0}")]
+    Autonomous(#[from] AutonomousError),
     /// Idempotency key was reused with a different canonical request digest.
     #[error(
         "idempotency key conflict: key={key} previously bound to digest={prior} now {incoming}"
@@ -178,6 +186,69 @@ pub enum RuntimeServiceError {
 
 struct AdmittedToolExecutor<'a> {
     runtime: &'a ToolRuntime,
+}
+
+/// Executor that turns an autonomous intent containing an `operation` object
+/// into one canonical native V1 submission. It is deliberately explicit: an
+/// intent without a complete operation envelope cannot select a tool by name
+/// or acquire provider access implicitly.
+pub struct NativeOperationExecutor<'a> {
+    service: &'a RuntimeService,
+}
+
+impl<'a> NativeOperationExecutor<'a> {
+    pub fn new(service: &'a RuntimeService) -> Self {
+        Self { service }
+    }
+}
+
+impl AutonomousExecutor for NativeOperationExecutor<'_> {
+    fn execute(
+        &self,
+        _context: &crate::AutonomousContextV1,
+        intent: &AutonomousIntentV1,
+    ) -> Result<AutonomousResultV1, AutonomousError> {
+        let operation = intent.payload.get("operation").ok_or_else(|| {
+            AutonomousError::InvalidPlan("intent lacks operation envelope".into())
+        })?;
+        let bytes = serde_json::to_vec(operation)?;
+        let operation = parse_operation_envelope_bytes(&bytes)
+            .map_err(|error| AutonomousError::InvalidPlan(error.to_string()))?;
+        let handle = self
+            .service
+            .submit(&operation)
+            .map_err(|error| AutonomousError::InvalidPlan(error.to_string()))?;
+        let verification = self
+            .service
+            .verify(handle.run_id())
+            .map_err(|error| AutonomousError::InvalidPlan(error.to_string()))?;
+        if !verification.current_strict_success
+            || verification.terminal_state != RunTerminalStateV1::Succeeded
+        {
+            return Err(AutonomousError::InvalidPlan(
+                "native operation lacks strictly verified successful terminal evidence".into(),
+            ));
+        }
+        let snapshot = verified_snapshot_directory_bound(&RunPaths::new(handle.run_dir()))
+            .map_err(|error| AutonomousError::InvalidPlan(error.to_string()))?;
+        let terminal_receipt = snapshot.receipts().last().ok_or_else(|| {
+            AutonomousError::InvalidPlan("verified native operation transcript is empty".into())
+        })?;
+        if terminal_receipt.kind != ReceiptKindV1::RunFinalized {
+            return Err(AutonomousError::InvalidPlan(
+                "verified native operation lacks a terminal receipt".into(),
+            ));
+        }
+        Ok(AutonomousResultV1 {
+            output: serde_json::json!({
+                "run_id": handle.run_id().to_string(),
+                "operation_id": handle.operation_id().to_string(),
+                "run_dir": handle.run_dir().display().to_string(),
+                "verified": true,
+            }),
+            receipt: Some(terminal_receipt.receipt_id.clone()),
+        })
+    }
 }
 
 impl RunnerToolExecutor for AdmittedToolExecutor<'_> {
@@ -470,6 +541,91 @@ impl RuntimeService {
             run_id: summary.run_id,
             run_dir: summary.run_dir,
         })
+    }
+
+    /// Run the bounded autonomous loop inside the canonical runtime owner.
+    /// The transcript, memory store, and optional skill registry are explicit
+    /// inputs; no provider, tool, or child operation is inferred by this
+    /// facade.
+    // The explicit dependency list is intentional: memory, skills, transcript,
+    // budget, cancellation, planner, and executor remain caller-owned and are
+    // not hidden behind a second mutable runtime configuration object.
+    #[allow(clippy::too_many_arguments)]
+    pub fn run_autonomous<P, E>(
+        &self,
+        input: serde_json::Value,
+        memory: &recursive_agent_memory::MemoryStore,
+        skills: Option<&recursive_agent_skills::SkillRegistry>,
+        transcript: AutonomousTranscript,
+        budget: AutonomousBudgetV1,
+        cancellation: &AutonomousCancellation,
+        planner: &P,
+        executor: &E,
+    ) -> Result<AutonomousResultV1, RuntimeServiceError>
+    where
+        P: AutonomousPlanner,
+        E: AutonomousExecutor,
+    {
+        let mut runner =
+            crate::AutonomousRunner::new(memory, skills, transcript, budget, cancellation)?;
+        Ok(runner.run(input, planner, executor)?)
+    }
+
+    /// Convenience entry point for a closed JSON plan whose intents contain
+    /// complete native V1 operation envelopes. Each executed intent still
+    /// passes through `RuntimeService::submit` and its strict verification.
+    pub fn run_json_autonomous(
+        &self,
+        input: serde_json::Value,
+        memory: &recursive_agent_memory::MemoryStore,
+        skills: Option<&recursive_agent_skills::SkillRegistry>,
+        transcript: AutonomousTranscript,
+        budget: AutonomousBudgetV1,
+        cancellation: &AutonomousCancellation,
+    ) -> Result<AutonomousResultV1, RuntimeServiceError> {
+        let planner = JsonAutonomousPlanner;
+        let executor = NativeOperationExecutor::new(self);
+        self.run_autonomous(
+            input,
+            memory,
+            skills,
+            transcript,
+            budget,
+            cancellation,
+            &planner,
+            &executor,
+        )
+    }
+
+    /// Run a model-backed autonomous loop through the canonical runtime owner.
+    /// The provider backend is explicit and injected, allowing deterministic
+    /// tests to use a fake completion source while production callers choose
+    /// `HttpCompletionBackend` deliberately.
+    #[allow(clippy::too_many_arguments)]
+    pub fn run_model_autonomous<B: CompletionBackend>(
+        &self,
+        input: serde_json::Value,
+        memory: &recursive_agent_memory::MemoryStore,
+        skills: Option<&recursive_agent_skills::SkillRegistry>,
+        transcript: AutonomousTranscript,
+        budget: AutonomousBudgetV1,
+        cancellation: &AutonomousCancellation,
+        provider: ProviderSpecV1,
+        backend: &B,
+        max_tokens: Option<u32>,
+    ) -> Result<AutonomousResultV1, RuntimeServiceError> {
+        let planner = ModelAutonomousPlanner::new(backend, provider, max_tokens);
+        let executor = NativeOperationExecutor::new(self);
+        self.run_autonomous(
+            input,
+            memory,
+            skills,
+            transcript,
+            budget,
+            cancellation,
+            &planner,
+            &executor,
+        )
     }
 
     /// Idempotently submit one native V1 operation (Task 5.4, submit side).

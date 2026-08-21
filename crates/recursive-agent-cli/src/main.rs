@@ -1,3 +1,5 @@
+use std::io::{Read, Write};
+use std::os::unix::net::UnixStream;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
@@ -9,13 +11,20 @@ use llm_tool_runtime::{
     ToolReceiptPersistence, ToolRegistry, ToolResult, ToolRuntime, ToolSideEffectClass,
 };
 use recursive_agent_contracts::parse_run_spec_file;
+use recursive_agent_daemon::{
+    IpcRequestEnvelopeV1, IpcRequestV1, IPC_PROTOCOL_VERSION_V1, IPC_REQUEST_SCHEMA_V1,
+    MAX_FRAME_PAYLOAD_BYTES,
+};
 use recursive_agent_ledger::{
     export_run_pack, verify_directory_bound, verify_run_pack, RunPaths, RunRootIdentity,
 };
+use recursive_agent_memory::MemoryStore;
+use recursive_agent_provider::{HttpCompletionBackend, ProviderSpecV1, ValidatedEndpoint};
 use recursive_agent_runner::{
-    operation_from_run_spec, replay, replay_run_pack, Clock, RunSummary, RuntimeDependencies,
-    RuntimeLedgerDependencyV1, RuntimePolicyDependencyV1, RuntimeProviderDependencyV1,
-    RuntimeSandboxDependencyV1, RuntimeService, RuntimeStoreDependencyV1,
+    operation_from_run_spec, replay, replay_run_pack, AutonomousBudgetV1, AutonomousCancellation,
+    AutonomousTranscript, Clock, RunSummary, RuntimeDependencies, RuntimeLedgerDependencyV1,
+    RuntimePolicyDependencyV1, RuntimeProviderDependencyV1, RuntimeSandboxDependencyV1,
+    RuntimeService, RuntimeStoreDependencyV1,
 };
 
 #[derive(Parser, Debug)]
@@ -49,6 +58,36 @@ enum Cmd {
         /// ipc (connect to a ra-daemon socket). No silent fallback between modes.
         #[arg(long, value_enum, default_value_t = RuntimeMode::Embedded)]
         runtime: RuntimeMode,
+        /// Socket used by the explicit IPC runtime adapter.
+        #[arg(long)]
+        socket: Option<PathBuf>,
+    },
+    /// Run a bounded model-driven autonomous loop through the native runtime.
+    Autonomous {
+        /// Natural-language goal supplied to the planner.
+        #[arg(long)]
+        goal: String,
+        /// Explicit Ollama-compatible origin.
+        #[arg(long, default_value = "http://127.0.0.1:11434")]
+        provider_url: String,
+        /// Model name admitted by the provider.
+        #[arg(long)]
+        model: String,
+        /// Durable output root for memory and the autonomy transcript.
+        #[arg(long)]
+        out: Option<PathBuf>,
+        #[arg(long, default_value_t = 3)]
+        max_depth: u32,
+        #[arg(long, default_value_t = 8)]
+        max_steps: u32,
+        #[arg(long, default_value_t = 2)]
+        max_children: u32,
+        #[arg(long, default_value_t = 120_000)]
+        max_wall_time_ms: u64,
+        #[arg(long, default_value_t = 65_536)]
+        max_output_bytes: u64,
+        #[arg(long)]
+        max_tokens: Option<u32>,
     },
     /// Verify a run directory's receipt chain offline.
     Verify {
@@ -282,6 +321,23 @@ impl Tool for TimeNowDescriptorOwner {
 }
 
 fn embedded_service(output_root: &Path) -> Result<RuntimeService, Box<dyn std::error::Error>> {
+    service_with_provider(output_root, RuntimeProviderDependencyV1::Disabled)
+}
+
+fn autonomous_service(
+    output_root: &Path,
+    provider: ProviderSpecV1,
+) -> Result<RuntimeService, Box<dyn std::error::Error>> {
+    service_with_provider(
+        output_root,
+        RuntimeProviderDependencyV1::Configured(provider),
+    )
+}
+
+fn service_with_provider(
+    output_root: &Path,
+    provider: RuntimeProviderDependencyV1,
+) -> Result<RuntimeService, Box<dyn std::error::Error>> {
     let mut registry = ToolRegistry::new();
     registry.register(ShellDescriptorOwner::new());
     registry.register(EchoDescriptorOwner::new());
@@ -290,7 +346,7 @@ fn embedded_service(output_root: &Path) -> Result<RuntimeService, Box<dyn std::e
         .policy(RuntimePolicyDependencyV1::Native)
         .sandbox(RuntimeSandboxDependencyV1::Native)
         .tool_runtime(Arc::new(ToolRuntime::new(registry)))
-        .provider(RuntimeProviderDependencyV1::Disabled)
+        .provider(provider)
         .ledger(RuntimeLedgerDependencyV1::Native)
         .clock(Arc::new(SystemClockAdapter))
         .store(RuntimeStoreDependencyV1::Native)
@@ -304,7 +360,12 @@ fn main() {
     let cli = Cli::parse();
     match cli.cmd {
         Cmd::Doctor => doctor(),
-        Cmd::Run { spec, out, runtime } => {
+        Cmd::Run {
+            spec,
+            out,
+            runtime,
+            socket,
+        } => {
             let parsed = match parse_run_spec_file(&spec) {
                 Ok(value) => value,
                 Err(error) => {
@@ -315,12 +376,34 @@ fn main() {
             let out_root = out.unwrap_or_else(default_runs_root);
             match runtime {
                 RuntimeMode::Embedded => run_embedded(&parsed, &out_root),
-                RuntimeMode::Ipc => {
-                    eprintln!("error: --runtime ipc requires a ra-daemon socket and is wired in a later Phase 6 task; use embedded");
-                    std::process::exit(2);
-                }
+                RuntimeMode::Ipc => run_ipc(&parsed, socket.as_deref()),
             }
         }
+        Cmd::Autonomous {
+            goal,
+            provider_url,
+            model,
+            out,
+            max_depth,
+            max_steps,
+            max_children,
+            max_wall_time_ms,
+            max_output_bytes,
+            max_tokens,
+        } => autonomous_cmd(
+            &goal,
+            &provider_url,
+            &model,
+            out.as_deref(),
+            AutonomousBudgetV1 {
+                max_depth,
+                max_steps,
+                max_children,
+                max_wall_time_ms,
+                max_output_bytes,
+            },
+            max_tokens,
+        ),
         Cmd::Verify { run } => verify_cmd(&run),
         Cmd::Replay { run } => replay_cmd(&run),
         Cmd::Pack { cmd } => match cmd {
@@ -329,6 +412,158 @@ fn main() {
             PackCmd::Replay { pack } => pack_replay_cmd(&pack),
         },
     }
+}
+
+fn autonomous_cmd(
+    goal: &str,
+    provider_url: &str,
+    model: &str,
+    out: Option<&Path>,
+    budget: AutonomousBudgetV1,
+    max_tokens: Option<u32>,
+) {
+    let endpoint = match ValidatedEndpoint::try_new(provider_url) {
+        Ok(value) => value,
+        Err(error) => {
+            eprintln!("error: provider endpoint rejected: {error}");
+            std::process::exit(2);
+        }
+    };
+    let provider = ProviderSpecV1::Ollama {
+        base_url: endpoint,
+        model: model.to_owned(),
+    };
+    let output_root = out
+        .map(Path::to_path_buf)
+        .unwrap_or_else(|| default_runs_root().join("autonomous"));
+    if let Err(error) = std::fs::create_dir_all(&output_root) {
+        eprintln!("error: autonomous output root unavailable: {error}");
+        std::process::exit(2);
+    }
+    let service = match autonomous_service(&output_root, provider.clone()) {
+        Ok(value) => value,
+        Err(error) => {
+            eprintln!("error: autonomous runtime construction failed: {error}");
+            std::process::exit(2);
+        }
+    };
+    let memory = match MemoryStore::open(&output_root.join("memory.db")) {
+        Ok(value) => value,
+        Err(error) => {
+            eprintln!("error: autonomous memory unavailable: {error}");
+            std::process::exit(2);
+        }
+    };
+    let transcript = match AutonomousTranscript::open(&output_root.join("autonomy.ndjson")) {
+        Ok(value) => value,
+        Err(error) => {
+            eprintln!("error: autonomous transcript unavailable: {error}");
+            std::process::exit(2);
+        }
+    };
+    let cancellation = AutonomousCancellation::new();
+    let backend = HttpCompletionBackend::default();
+    match service.run_model_autonomous(
+        serde_json::json!({"goal": goal}),
+        &memory,
+        None,
+        transcript,
+        budget,
+        &cancellation,
+        provider,
+        &backend,
+        max_tokens,
+    ) {
+        Ok(value) => match serde_json::to_string_pretty(&value.output) {
+            Ok(encoded) => println!("{encoded}"),
+            Err(error) => {
+                eprintln!("error: autonomous result serialization failed: {error}");
+                std::process::exit(2);
+            }
+        },
+        Err(error) => {
+            eprintln!("error: autonomous execution rejected: {error}");
+            std::process::exit(2);
+        }
+    }
+}
+
+/// Execute through the daemon IPC transport. IPC mode never constructs an
+/// embedded runtime and never falls back when the socket is absent.
+fn run_ipc(parsed: &recursive_agent_contracts::RunSpecV1, socket: Option<&Path>) -> ! {
+    let socket = match socket {
+        Some(path) => path,
+        None => {
+            eprintln!("error: --runtime ipc requires --socket");
+            std::process::exit(2);
+        }
+    };
+    let operation = match operation_from_run_spec(parsed) {
+        Ok(operation) => operation,
+        Err(error) => {
+            eprintln!("error: run spec to V1 translation failed: {error}");
+            std::process::exit(2);
+        }
+    };
+    let request = IpcRequestEnvelopeV1 {
+        schema: IPC_REQUEST_SCHEMA_V1.into(),
+        protocol_version: IPC_PROTOCOL_VERSION_V1,
+        request_id: format!("cli-{}", std::process::id()),
+        request: IpcRequestV1::Submit {
+            operation: Box::new(operation),
+        },
+    };
+    let payload = match serde_json::to_vec(&request) {
+        Ok(bytes) => bytes,
+        Err(error) => {
+            eprintln!("error: IPC request serialization failed: {error}");
+            std::process::exit(2);
+        }
+    };
+    if payload.len() > MAX_FRAME_PAYLOAD_BYTES {
+        eprintln!("error: IPC request exceeds frame limit");
+        std::process::exit(2);
+    }
+    let mut stream = match UnixStream::connect(socket) {
+        Ok(stream) => stream,
+        Err(error) => {
+            eprintln!(
+                "error: cannot connect to daemon socket {}: {error}",
+                socket.display()
+            );
+            std::process::exit(2);
+        }
+    };
+    if let Err(error) = stream
+        .write_all(&(payload.len() as u32).to_be_bytes())
+        .and_then(|_| stream.write_all(&payload))
+    {
+        eprintln!("error: IPC request failed: {error}");
+        std::process::exit(2);
+    }
+    let mut header = [0_u8; 4];
+    if let Err(error) = stream.read_exact(&mut header) {
+        eprintln!("error: IPC response header failed: {error}");
+        std::process::exit(1);
+    }
+    let length = u32::from_be_bytes(header) as usize;
+    if length > MAX_FRAME_PAYLOAD_BYTES {
+        eprintln!("error: IPC response exceeds frame limit");
+        std::process::exit(1);
+    }
+    let mut body = vec![0_u8; length];
+    if let Err(error) = stream.read_exact(&mut body) {
+        eprintln!("error: IPC response body failed: {error}");
+        std::process::exit(1);
+    }
+    match String::from_utf8(body) {
+        Ok(response) => println!("{response}"),
+        Err(error) => {
+            eprintln!("error: IPC response was not UTF-8: {error}");
+            std::process::exit(1);
+        }
+    }
+    std::process::exit(0)
 }
 
 /// Execute through the canonical in-process RuntimeService (no private

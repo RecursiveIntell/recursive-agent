@@ -2,11 +2,9 @@
 //! Used by the `memory_put`, `memory_get`, and `memory_search` tools.
 
 use recursive_agent_contracts::{content_digest, CurrentReceiptId};
-#[cfg(test)]
 use rusqlite::{params, Connection};
 use serde::{Deserialize, Serialize};
 use stack_ids::EpisodeId;
-#[cfg(test)]
 use std::path::Path;
 use thiserror::Error;
 
@@ -155,14 +153,12 @@ pub struct MemoryEntry {
     pub recorded_at: String,
 }
 
-#[cfg(test)]
-struct MemoryStore {
+pub struct MemoryStore {
     db: Connection,
 }
 
-#[cfg(test)]
 impl MemoryStore {
-    fn open(path: &Path) -> Result<Self, MemoryError> {
+    pub fn open(path: &Path) -> Result<Self, MemoryError> {
         let db = Connection::open(path)?;
         db.execute_batch(
             "CREATE TABLE IF NOT EXISTS memories (
@@ -179,7 +175,7 @@ impl MemoryStore {
         Ok(Self { db })
     }
 
-    fn put(
+    pub fn put(
         &self,
         namespace: &str,
         key: &str,
@@ -188,7 +184,7 @@ impl MemoryStore {
         self.put_with_provenance(namespace, key, content, &MemoryProvenanceV1::default())
     }
 
-    fn put_with_provenance(
+    pub fn put_with_provenance(
         &self,
         namespace: &str,
         key: &str,
@@ -206,7 +202,7 @@ impl MemoryStore {
         Ok(id)
     }
 
-    fn get(&self, namespace: &str, key: &str) -> Result<Option<MemoryEntry>, MemoryError> {
+    pub fn get(&self, namespace: &str, key: &str) -> Result<Option<MemoryEntry>, MemoryError> {
         let mut stmt = self.db.prepare(
             "SELECT id, namespace, key, content, provenance, recorded_at FROM memories WHERE namespace = ?1 AND key = ?2 ORDER BY recorded_at DESC LIMIT 1",
         )?;
@@ -217,7 +213,7 @@ impl MemoryStore {
         Ok(Some(decode_row(row)?))
     }
 
-    fn search(
+    pub fn search(
         &self,
         namespace: &str,
         query: &str,
@@ -256,7 +252,6 @@ impl MemoryStore {
     }
 }
 
-#[cfg(test)]
 fn decode_row(row: &rusqlite::Row<'_>) -> Result<MemoryEntry, MemoryError> {
     let field = |index| {
         row.get::<_, String>(index)

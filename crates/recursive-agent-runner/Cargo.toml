@@ -15,6 +15,9 @@ recursive-agent-policy = { path = "../recursive-agent-policy" }
 recursive-agent-sandbox = { path = "../recursive-agent-sandbox" }
 recursive-agent-tools = { path = "../recursive-agent-tools" }
 recursive-agent-provider = { path = "../recursive-agent-provider" }
+recursive-agent-memory = { path = "../recursive-agent-memory" }
+recursive-agent-skills = { path = "../recursive-agent-skills" }
+recursive-agent-mcts = { path = "../recursive-agent-mcts" }
 llm-tool-runtime = { workspace = true }
 async-trait = "0.1"
 tokio = { version = "1", features = ["rt", "time"] }

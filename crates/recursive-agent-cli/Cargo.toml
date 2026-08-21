@@ -16,10 +16,12 @@ path = "src/main.rs"
 recursive-agent-contracts = { path = "../recursive-agent-contracts" }
 recursive-agent-ledger = { path = "../recursive-agent-ledger" }
 recursive-agent-runner = { path = "../recursive-agent-runner" }
+recursive-agent-daemon = { path = "../recursive-agent-daemon" }
 recursive-agent-policy = { path = "../recursive-agent-policy" }
 recursive-agent-sandbox = { path = "../recursive-agent-sandbox" }
 recursive-agent-tools = { path = "../recursive-agent-tools" }
 recursive-agent-provider = { path = "../recursive-agent-provider" }
+recursive-agent-memory = { path = "../recursive-agent-memory" }
 llm-tool-runtime = { workspace = true }
 async-trait = "0.1"
 tokio = { version = "1", features = ["rt"] }
