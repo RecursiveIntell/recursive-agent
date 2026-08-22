@@ -1,0 +1,206 @@
+{
+  "final_retrieval_projection": {
+    "path": "/home/sikmindz/Coding/recursive-agent/docs/receipts/closeout-20260822/phase5-generated-final/final-retrieval-projection.json",
+    "sha256": "dacd20641c94a486382fee627c542ace6f56671dda7b4329920b9d2f4f9f3da1"
+  },
+  "generated_at": "2026-08-22T10:46:47.520602+00:00",
+  "matrix": [
+    {
+      "artifacts": {
+        "projection": "/home/sikmindz/Coding/recursive-agent/docs/receipts/closeout-20260822/phase5-generated-final/recursive-agent-projection.json",
+        "projection_sha256": "02c12f4b9c9eb9ea608390eaceb64cd2353a776c34bd3eb8c3d0df6459e5211a",
+        "receipt": "/home/sikmindz/Coding/recursive-agent/docs/receipts/closeout-20260822/phase5-generated-final/recursive-agent-verification-receipt.json",
+        "receipt_sha256": "c1f4b20fdd7b2ee4a905140eb78389307c3f2ae353cec1f1f0e5b47c887f39e7"
+      },
+      "case": "native_fresh_run_pack_and_vault",
+      "command": [
+        "cargo",
+        "test",
+        "-p",
+        "recursive-agent-ledger",
+        "--test",
+        "run_pack_verify",
+        "pack_vault_admits_then_verifies_after_source_is_deleted",
+        "--",
+        "--exact"
+      ],
+      "cwd": "/home/sikmindz/Coding/recursive-agent",
+      "exit_code": 0,
+      "log_path": "/home/sikmindz/Coding/recursive-agent/docs/receipts/closeout-20260822/phase5-generated-final/logs/native_fresh_run_pack_and_vault.log",
+      "log_sha256": "71eed2fcac3120883cc58c6215cda5d3e23f328ef21fc3fc3a38003bce20e3cf",
+      "state": "verified"
+    },
+    {
+      "artifacts": {
+        "projection": "/home/sikmindz/Coding/recursive-agent/docs/receipts/closeout-20260822/phase5-generated-final/recursive-agent-projection.json",
+        "projection_sha256": "02c12f4b9c9eb9ea608390eaceb64cd2353a776c34bd3eb8c3d0df6459e5211a",
+        "receipt": "/home/sikmindz/Coding/recursive-agent/docs/receipts/closeout-20260822/phase5-generated-final/recursive-agent-verification-receipt.json",
+        "receipt_sha256": "c1f4b20fdd7b2ee4a905140eb78389307c3f2ae353cec1f1f0e5b47c887f39e7"
+      },
+      "case": "native_generated_projection",
+      "command": [
+        "cargo",
+        "test",
+        "-p",
+        "recursive-agent-ledger",
+        "--test",
+        "run_pack_verify",
+        "verified_admission_builds_projection_from_pack_evidence_only",
+        "--",
+        "--exact"
+      ],
+      "cwd": "/home/sikmindz/Coding/recursive-agent",
+      "exit_code": 0,
+      "log_path": "/home/sikmindz/Coding/recursive-agent/docs/receipts/closeout-20260822/phase5-generated-final/logs/native_generated_projection.log",
+      "log_sha256": "5549338f08ad81c19d21a5451c51180c7647740c4b58096d54cc0a323bef00ce",
+      "state": "verified"
+    },
+    {
+      "artifacts": {
+        "projection": "/home/sikmindz/Coding/recursive-agent/docs/receipts/closeout-20260822/phase5-generated-final/recursive-agent-projection.json",
+        "projection_sha256": "02c12f4b9c9eb9ea608390eaceb64cd2353a776c34bd3eb8c3d0df6459e5211a",
+        "receipt": "/home/sikmindz/Coding/recursive-agent/docs/receipts/closeout-20260822/phase5-generated-final/recursive-agent-verification-receipt.json",
+        "receipt_sha256": "c1f4b20fdd7b2ee4a905140eb78389307c3f2ae353cec1f1f0e5b47c887f39e7"
+      },
+      "case": "clean_host_restore_and_recorded_replay",
+      "command": [
+        "cargo",
+        "test",
+        "-p",
+        "recursive-agent-cli",
+        "--test",
+        "run_pack_clean_process",
+        "copied_pack_verifies_and_replays_from_a_clean_root_after_source_removal",
+        "--",
+        "--exact"
+      ],
+      "cwd": "/home/sikmindz/Coding/recursive-agent",
+      "exit_code": 0,
+      "log_path": "/home/sikmindz/Coding/recursive-agent/docs/receipts/closeout-20260822/phase5-generated-final/logs/clean_host_restore_and_recorded_replay.log",
+      "log_sha256": "b340a0b6936266e6f1c473307afea3a4ca3ea88b8101b33eed943438074eb484",
+      "state": "verified"
+    },
+    {
+      "artifacts": {
+        "projection": "/home/sikmindz/Coding/recursive-agent/docs/receipts/closeout-20260822/phase5-generated-final/recursive-agent-projection.json",
+        "projection_sha256": "02c12f4b9c9eb9ea608390eaceb64cd2353a776c34bd3eb8c3d0df6459e5211a",
+        "receipt": "/home/sikmindz/Coding/recursive-agent/docs/receipts/closeout-20260822/phase5-generated-final/recursive-agent-verification-receipt.json",
+        "receipt_sha256": "c1f4b20fdd7b2ee4a905140eb78389307c3f2ae353cec1f1f0e5b47c887f39e7"
+      },
+      "case": "claimledger_generated_retry_tamper_conflict",
+      "command": [
+        "uv",
+        "run",
+        "--python",
+        "3.11",
+        "--extra",
+        "dev",
+        "python",
+        "scripts/witnessed_workbench_fixture.py",
+        "--projection",
+        "/home/sikmindz/Coding/recursive-agent/docs/receipts/closeout-20260822/phase5-generated-final/recursive-agent-projection.json",
+        "--verification-receipt",
+        "/home/sikmindz/Coding/recursive-agent/docs/receipts/closeout-20260822/phase5-generated-final/recursive-agent-verification-receipt.json",
+        "--storage-root",
+        "/home/sikmindz/Coding/recursive-agent/docs/receipts/closeout-20260822/phase5-generated-final/claim-ledger-store",
+        "--negative-root",
+        "/home/sikmindz/Coding/recursive-agent/docs/receipts/closeout-20260822/phase5-generated-final/claim-ledger-negative",
+        "--result",
+        "/home/sikmindz/Coding/recursive-agent/docs/receipts/closeout-20260822/phase5-generated-final/claim-ledger-result.json"
+      ],
+      "cwd": "/home/sikmindz/Coding/ClaimLedger",
+      "exit_code": 0,
+      "log_path": "/home/sikmindz/Coding/recursive-agent/docs/receipts/closeout-20260822/phase5-generated-final/logs/claimledger_generated_retry_tamper_conflict.log",
+      "log_sha256": "02a62ab142a777ae9f970f71371f6205be2549846d1afb12d3b688e9353a3650",
+      "state": "verified"
+    },
+    {
+      "artifacts": {
+        "projection": "/home/sikmindz/Coding/recursive-agent/docs/receipts/closeout-20260822/phase5-generated-final/recursive-agent-projection.json",
+        "projection_sha256": "02c12f4b9c9eb9ea608390eaceb64cd2353a776c34bd3eb8c3d0df6459e5211a",
+        "receipt": "/home/sikmindz/Coding/recursive-agent/docs/receipts/closeout-20260822/phase5-generated-final/recursive-agent-verification-receipt.json",
+        "receipt_sha256": "c1f4b20fdd7b2ee4a905140eb78389307c3f2ae353cec1f1f0e5b47c887f39e7"
+      },
+      "case": "mnemes_generated_retry_same_key_conflict",
+      "command": [
+        "cargo",
+        "test",
+        "--offline",
+        "--test",
+        "witnessed_workbench_fixture",
+        "imports_real_generated_projection_when_fixture_paths_are_explicit",
+        "--",
+        "--exact"
+      ],
+      "cwd": "/home/sikmindz/Coding/mnemes",
+      "exit_code": 0,
+      "log_path": "/home/sikmindz/Coding/recursive-agent/docs/receipts/closeout-20260822/phase5-generated-final/logs/mnemes_generated_retry_same_key_conflict.log",
+      "log_sha256": "f6b16e68ef3b4de547982595e396a22aa8f8cff6ab95a771adb2fc73864ed820",
+      "state": "verified"
+    },
+    {
+      "artifact_path": "/home/sikmindz/Coding/recursive-agent/docs/receipts/closeout-20260822/phase5-generated-final/unavailable-pack",
+      "artifacts": {
+        "projection": "/home/sikmindz/Coding/recursive-agent/docs/receipts/closeout-20260822/phase5-generated-final/recursive-agent-projection.json",
+        "projection_sha256": "02c12f4b9c9eb9ea608390eaceb64cd2353a776c34bd3eb8c3d0df6459e5211a",
+        "receipt": "/home/sikmindz/Coding/recursive-agent/docs/receipts/closeout-20260822/phase5-generated-final/recursive-agent-verification-receipt.json",
+        "receipt_sha256": "c1f4b20fdd7b2ee4a905140eb78389307c3f2ae353cec1f1f0e5b47c887f39e7"
+      },
+      "case": "unavailable_pack",
+      "exit_code": 0,
+      "observation": "owner input removed; no import attempted",
+      "state": "verified"
+    },
+    {
+      "artifact_path": "/home/sikmindz/Coding/recursive-agent/docs/receipts/closeout-20260822/phase5-generated-final/tampered-projection.json",
+      "artifacts": {
+        "projection": "/home/sikmindz/Coding/recursive-agent/docs/receipts/closeout-20260822/phase5-generated-final/recursive-agent-projection.json",
+        "projection_sha256": "02c12f4b9c9eb9ea608390eaceb64cd2353a776c34bd3eb8c3d0df6459e5211a",
+        "receipt": "/home/sikmindz/Coding/recursive-agent/docs/receipts/closeout-20260822/phase5-generated-final/recursive-agent-verification-receipt.json",
+        "receipt_sha256": "c1f4b20fdd7b2ee4a905140eb78389307c3f2ae353cec1f1f0e5b47c887f39e7"
+      },
+      "case": "tamper_generated_projection",
+      "exit_code": 0,
+      "observation": "mutated generated bytes staged for owner rejection",
+      "sha256": "eb170a9176677780caa944a5c73b9b05b1f8a4dcd5fd4bcba83c4a5fdfb041a1",
+      "state": "verified"
+    }
+  ],
+  "network": "forbidden",
+  "owner_results": {
+    "claim_ledger": {
+      "bundle_id": "bdl_541a26cacb4cba775216",
+      "idempotent": true,
+      "import_id": "rpi_fedb52a8d720fa59045d",
+      "projection_sha256": "02c12f4b9c9eb9ea608390eaceb64cd2353a776c34bd3eb8c3d0df6459e5211a",
+      "schema": "witnessed-workbench.claim-ledger-fixture-result/v1",
+      "state": "pack_verified",
+      "support_state": "supported",
+      "tamper_rejected_without_durable_state": true,
+      "verification_receipt_sha256": "c1f4b20fdd7b2ee4a905140eb78389307c3f2ae353cec1f1f0e5b47c887f39e7"
+    },
+    "mnemes": {
+      "different_bytes_same_key_rejected": true,
+      "idempotent": true,
+      "operation_id": "3b071295-a0d1-49c1-87f0-ee9252388bf6",
+      "projection_sha256": "02c12f4b9c9eb9ea608390eaceb64cd2353a776c34bd3eb8c3d0df6459e5211a",
+      "provenance_edge_count": 1,
+      "receipt_id": "op-receipt:3b071295-a0d1-49c1-87f0-ee9252388bf6",
+      "recorded_at": "2026-08-22T10:46:47.499158207+00:00",
+      "schema": "witnessed-workbench.mnemes-fixture-result/v1"
+    }
+  },
+  "passed": true,
+  "projection": {
+    "path": "/home/sikmindz/Coding/recursive-agent/docs/receipts/closeout-20260822/phase5-generated-final/recursive-agent-projection.json",
+    "sha256": "02c12f4b9c9eb9ea608390eaceb64cd2353a776c34bd3eb8c3d0df6459e5211a"
+  },
+  "schema": "witnessed-workbench.generated-three-owner/v2",
+  "scope_note": "Disposable local conformance only; no production deployment claim.",
+  "state": "verified",
+  "test_only": true,
+  "verification_receipt": {
+    "path": "/home/sikmindz/Coding/recursive-agent/docs/receipts/closeout-20260822/phase5-generated-final/recursive-agent-verification-receipt.json",
+    "sha256": "c1f4b20fdd7b2ee4a905140eb78389307c3f2ae353cec1f1f0e5b47c887f39e7"
+  }
+}

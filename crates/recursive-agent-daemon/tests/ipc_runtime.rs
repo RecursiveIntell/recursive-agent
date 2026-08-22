@@ -247,6 +247,34 @@ fn daemon_submits_and_verifies_phase_two_action_over_ipc() -> TestResult {
 }
 
 #[test]
+fn daemon_returns_correlated_verify_error_for_tampered_run() -> TestResult {
+    let tmp = tempfile::tempdir()?;
+    let runtime_root = tmp.path().join("run");
+    std::fs::create_dir(&runtime_root)?;
+    let service = native_service(&runtime_root)?;
+    let handle = service.submit(&native_operation()?)?;
+    let run_id = handle.run_id().to_string();
+    std::fs::write(handle.run_dir().join("receipts.ndjson"), b"tampered\n")?;
+
+    let (listener, socket_path) = bind_private_socket(tmp.path(), "ra.sock")?;
+    let server_thread = std::thread::spawn(move || {
+        let _ = serve(listener, Arc::new(service), 4);
+    });
+    let mut stream = connect_with_retry(&socket_path, &server_thread)?;
+    stream.write_all(&verify_request("req-tampered", &run_id))?;
+    stream.flush()?;
+
+    let response = read_response(&mut stream)?;
+    assert_eq!(response["request_id"], "req-tampered");
+    assert_eq!(response["error"]["code"], "runtime_error");
+    assert!(response["error"]["message"]
+        .as_str()
+        .unwrap_or_default()
+        .contains("chain divergence"));
+    Ok(())
+}
+
+#[test]
 fn daemon_serves_status_over_authenticated_ipc() -> TestResult {
     let tmp = tempfile::tempdir()?;
     let runtime_root = tmp.path().join("run");

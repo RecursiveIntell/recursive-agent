@@ -1,0 +1,12 @@
+{
+  "claim_supported": "supported",
+  "mnemes_observed": true,
+  "native_verified": true,
+  "replay_verified": true,
+  "schema": "witnessed-workbench.final-retrieval-projection/v1",
+  "scope_note": "Derived retrieval view only; it is not execution authority, a pack, or a ClaimLedger bundle.",
+  "source_projection_sha256": "02c12f4b9c9eb9ea608390eaceb64cd2353a776c34bd3eb8c3d0df6459e5211a",
+  "state": "verified",
+  "vault_available": true,
+  "verification_receipt_sha256": "c1f4b20fdd7b2ee4a905140eb78389307c3f2ae353cec1f1f0e5b47c887f39e7"
+}

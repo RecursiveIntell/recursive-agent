@@ -1,0 +1,7 @@
+$ uv run --python 3.11 --extra dev python scripts/witnessed_workbench_fixture.py --projection /home/sikmindz/Coding/recursive-agent/docs/receipts/closeout-20260822/phase5-generated-final/recursive-agent-projection.json --verification-receipt /home/sikmindz/Coding/recursive-agent/docs/receipts/closeout-20260822/phase5-generated-final/recursive-agent-verification-receipt.json --storage-root /home/sikmindz/Coding/recursive-agent/docs/receipts/closeout-20260822/phase5-generated-final/claim-ledger-store --negative-root /home/sikmindz/Coding/recursive-agent/docs/receipts/closeout-20260822/phase5-generated-final/claim-ledger-negative --result /home/sikmindz/Coding/recursive-agent/docs/receipts/closeout-20260822/phase5-generated-final/claim-ledger-result.json
+# cwd: /home/sikmindz/Coding/ClaimLedger
+# exit: 0
+
+[stdout]
+
+[stderr]

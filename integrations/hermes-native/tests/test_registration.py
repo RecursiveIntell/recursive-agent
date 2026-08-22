@@ -7,6 +7,7 @@ full real-loader wiring is the Task 4.2 E2E.
 """
 
 import importlib.util
+import json
 import os
 import socket
 import sys
@@ -76,7 +77,15 @@ def test_check_fn_returns_true_when_socket_answers(tmp_path):
                 server.settimeout(0.1)
                 try:
                     conn, _ = server.accept()
-                    conn.close()
+                    try:
+                        header = conn.recv(4)
+                        if len(header) == 4:
+                            length = int.from_bytes(header, "big")
+                            conn.recv(length)
+                            payload = b'{"schema":"recursive-agent.ipc/request/v1","protocol_version":1,"request_id":"plugin-ping-1","pong":true}'
+                            conn.sendall(len(payload).to_bytes(4, "big") + payload)
+                    finally:
+                        conn.close()
                 except socket.timeout:
                     continue
         except OSError:
@@ -98,3 +107,197 @@ def test_malformed_runtime_response_is_rejected():
     # An oversized frame length must be rejected without parsing.
     with pytest.raises(client.DaemonClientError):
         client._frame_len_check((1024 * 1024) + (64 * 1024) + 1)
+
+
+def test_terminal_run_failure_preserves_daemon_facts(monkeypatch):
+    from hermes_native import client
+
+    monkeypatch.setattr(
+        client,
+        "submit_envelope",
+        lambda _socket_path, _envelope: {"run_id": "run-1", "run_dir": "/runs/run-1"},
+    )
+    monkeypatch.setattr(
+        client,
+        "status_of_run",
+        lambda _socket_path, _run_id: {
+            "run_id": "run-1",
+            "status": {"state": "terminal", "terminal_state": "failed"},
+        },
+    )
+    monkeypatch.setattr(
+        client,
+        "verify_run",
+        lambda _socket_path, _run_id: {
+            "run_id": "run-1",
+            "verification": {
+                "ok": True,
+                "current_strict_success": False,
+                "length": 4,
+                "final_head": "head-1",
+                "terminal_state": "failed",
+            },
+        },
+    )
+
+    with pytest.raises(client.DaemonRunFailure) as raised:
+        client.submit_and_status("/tmp/ra.sock", {"operation": "fixture"})
+
+    failure = raised.value
+    assert failure.code == "terminal_run_failed"
+    assert failure.run_id == "run-1"
+    assert failure.run_dir == "/runs/run-1"
+    assert failure.status["status"]["terminal_state"] == "failed"
+    assert failure.verification["verification"]["current_strict_success"] is False
+
+
+def test_strict_verification_failure_preserves_divergence_facts(monkeypatch):
+    from hermes_native import client
+
+    monkeypatch.setattr(
+        client,
+        "submit_envelope",
+        lambda _socket_path, _envelope: {"run_id": "run-2", "run_dir": "/runs/run-2"},
+    )
+    monkeypatch.setattr(
+        client,
+        "status_of_run",
+        lambda _socket_path, _run_id: {
+            "run_id": "run-2",
+            "status": {"state": "terminal", "terminal_state": "succeeded"},
+        },
+    )
+    monkeypatch.setattr(
+        client,
+        "verify_run",
+        lambda _socket_path, _run_id: {
+            "run_id": "run-2",
+            "verification": {
+                "ok": False,
+                "current_strict_success": False,
+                "length": 1,
+                "final_head": "head-2",
+                "terminal_state": "legacy_unknown",
+                "first_divergence": {
+                    "index": 1,
+                    "reason": "receipt chain mismatch",
+                },
+            },
+        },
+    )
+
+    with pytest.raises(client.DaemonRunFailure) as raised:
+        client.submit_and_status("/tmp/ra.sock", {"operation": "fixture"})
+
+    failure = raised.value
+    assert failure.code == "strict_verification_failed"
+    assert failure.verification["verification"]["first_divergence"]["reason"] == (
+        "receipt chain mismatch"
+    )
+
+
+def test_strict_verification_error_response_preserves_daemon_error(monkeypatch):
+    from hermes_native import client
+
+    monkeypatch.setattr(
+        client,
+        "submit_envelope",
+        lambda _socket_path, _envelope: {"run_id": "run-4", "run_dir": "/runs/run-4"},
+    )
+    monkeypatch.setattr(
+        client,
+        "status_of_run",
+        lambda _socket_path, _run_id: {
+            "run_id": "run-4",
+            "status": {"state": "terminal", "terminal_state": "succeeded"},
+        },
+    )
+    monkeypatch.setattr(
+        client,
+        "verify_run",
+        lambda _socket_path, _run_id: {
+            "run_id": "run-4",
+            "error": {
+                "code": "runtime_error",
+                "message": "runtime: ledger: chain divergence at receipt 0",
+            },
+        },
+    )
+
+    with pytest.raises(client.DaemonRunFailure) as raised:
+        client.submit_and_status("/tmp/ra.sock", {"operation": "fixture"})
+
+    failure = raised.value
+    assert failure.code == "strict_verification_error"
+    assert failure.verification["error"]["code"] == "runtime_error"
+    assert "chain divergence" in str(failure)
+
+
+def test_plugin_projects_terminal_failure_instead_of_unavailable(monkeypatch, tmp_path):
+    from hermes_native import client
+
+    envelope = tmp_path / "envelope.json"
+    envelope.write_text("{}", encoding="utf-8")
+    failure = client.DaemonRunFailure(
+        code="terminal_run_failed",
+        message="daemon terminal state is failed",
+        run_id="run-3",
+        run_dir="/runs/run-3",
+        status={"run_id": "run-3", "status": {"state": "terminal", "terminal_state": "failed"}},
+        verification={"run_id": "run-3", "verification": {"ok": True, "current_strict_success": False}},
+    )
+    monkeypatch.setattr(plugin, "submit_and_status", lambda _socket_path, _envelope: (_ for _ in ()).throw(failure))
+
+    result = json.loads(plugin._handler(None, {"envelope_path": str(envelope)}))
+    assert result["state"] == "terminal"
+    assert result["verified"] is False
+    assert result["failure"]["code"] == "terminal_run_failed"
+    assert result["status"]["status"]["terminal_state"] == "failed"
+    assert result["verification"]["verification"]["current_strict_success"] is False
+
+
+def test_plugin_preserves_verified_success_result_shape(monkeypatch, tmp_path):
+    envelope = tmp_path / "envelope.json"
+    envelope.write_text("{}", encoding="utf-8")
+    monkeypatch.setattr(
+        plugin,
+        "submit_and_status",
+        lambda _socket_path, _envelope: {
+            "state": "terminal",
+            "run_id": "run-ok",
+            "run_dir": "/runs/run-ok",
+            "verification": {
+                "ok": True,
+                "length": 2,
+                "final_head": "head-ok",
+            },
+        },
+    )
+
+    assert json.loads(plugin._handler(None, {"envelope_path": str(envelope)})) == {
+        "schema": "recursive-agent.hermes-result/v1",
+        "state": "terminal",
+        "run_id": "run-ok",
+        "run_dir": "/runs/run-ok",
+        "verified": True,
+        "chain_length": 2,
+        "final_head": "head-ok",
+    }
+
+
+def test_plugin_keeps_transport_failure_unavailable(monkeypatch, tmp_path):
+    from hermes_native import client
+
+    envelope = tmp_path / "envelope.json"
+    envelope.write_text("{}", encoding="utf-8")
+    monkeypatch.setattr(
+        plugin,
+        "submit_and_status",
+        lambda _socket_path, _envelope: (_ for _ in ()).throw(
+            client.DaemonClientError("cannot reach daemon")
+        ),
+    )
+
+    assert plugin._handler(None, {"envelope_path": str(envelope)}) == (
+        "recursive_agent_execute: unavailable: cannot reach daemon"
+    )

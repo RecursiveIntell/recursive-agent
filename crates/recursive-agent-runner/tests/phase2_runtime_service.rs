@@ -884,8 +884,13 @@ fn runtime_service_model_loop_executes_fixture_plan_through_native_submit(
         2,
         "execution must require explicit completion"
     );
-    assert!(
-        prompts[1].contains("\"verified\":true"),
+    let second_envelope = prompts[1]
+        .split_once("\nCONTEXT:\n")
+        .map(|(_, context)| context)
+        .ok_or("planner context delimiter missing")?;
+    let second_envelope: serde_json::Value = serde_json::from_str(second_envelope)?;
+    assert_eq!(
+        second_envelope["input"]["verified"], true,
         "the next planner context must contain the preceding observed output"
     );
     drop(prompts);

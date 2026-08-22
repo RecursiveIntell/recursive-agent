@@ -11,8 +11,28 @@ import json
 import os
 from pathlib import Path
 
-from .client import check_socket_available, submit_and_status, DaemonClientError
-from .schema import RECURSIVE_AGENT_EXECUTE_SCHEMA
+try:
+    from .client import (
+        DaemonClientError,
+        DaemonRunFailure,
+        check_socket_available,
+        submit_and_status,
+    )
+    from .schema import RECURSIVE_AGENT_EXECUTE_SCHEMA
+except ImportError:
+    # Pytest and Hermes both load this directory by path, so it may be
+    # executed without a conventional package parent. Keep that loader mode
+    # explicit rather than making test collection depend on import ordering.
+    import sys
+
+    sys.path.insert(0, str(Path(__file__).resolve().parent))
+    from client import (
+        DaemonClientError,
+        DaemonRunFailure,
+        check_socket_available,
+        submit_and_status,
+    )
+    from schema import RECURSIVE_AGENT_EXECUTE_SCHEMA
 
 # The tool name must not collide with any built-in; Hermes rejects a name that
 # another toolset already claims unless the operator explicitly allows an
@@ -70,7 +90,9 @@ def _handler(ctx, args, **kwargs) -> str:
 
     Successful results use a versioned JSON response because callers may need
     the exact daemon-owned ``run_dir`` for a CLI-owned Run Pack operation.
-    Presentation text is not an interchange format.
+    Terminal failures use the same JSON result channel with ``verified: false``
+    plus raw daemon status/verification mappings; transport failures remain
+    ``unavailable``. Presentation text is not an interchange format.
     """
     socket_path = _resolve_socket(ctx) if ctx is not None else DEFAULT_SOCKET_PATH
     envelope_path = str((args or {}).get("envelope_path", ""))
@@ -86,6 +108,21 @@ def _handler(ctx, args, **kwargs) -> str:
         return "recursive_agent_execute: unavailable: envelope_path required"
     try:
         result = submit_and_status(socket_path, envelope)
+    except DaemonRunFailure as error:
+        return json.dumps(
+            {
+                "schema": "recursive-agent.hermes-result/v1",
+                "state": "terminal",
+                "run_id": error.run_id,
+                "run_dir": error.run_dir,
+                "verified": False,
+                "failure": {"code": error.code, "message": str(error)},
+                "status": error.status,
+                "verification": error.verification,
+            },
+            separators=(",", ":"),
+            sort_keys=True,
+        )
     except DaemonClientError as error:
         return f"recursive_agent_execute: unavailable: {error}"
     try:

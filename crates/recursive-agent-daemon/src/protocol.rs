@@ -109,6 +109,8 @@ pub struct IpcRequestEnvelopeV1 {
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(tag = "kind", rename_all = "snake_case", deny_unknown_fields)]
 pub enum IpcRequestV1 {
+    /// Version/availability probe that performs no runtime read or effect.
+    Ping,
     /// Read ledger-derived status for an authoritative run identifier.
     Status {
         /// Authoritative run identifier.
@@ -118,6 +120,11 @@ pub enum IpcRequestV1 {
     /// The client supplies no verification facts; those are computed by the
     /// runtime owner after the request is admitted.
     Verify {
+        /// Authoritative run identifier.
+        run_id: String,
+    },
+    /// Request cancellation through the canonical runtime owner.
+    Cancel {
         /// Authoritative run identifier.
         run_id: String,
     },

@@ -1,0 +1,10 @@
+{
+  "different_bytes_same_key_rejected": true,
+  "idempotent": true,
+  "operation_id": "3b071295-a0d1-49c1-87f0-ee9252388bf6",
+  "projection_sha256": "02c12f4b9c9eb9ea608390eaceb64cd2353a776c34bd3eb8c3d0df6459e5211a",
+  "provenance_edge_count": 1,
+  "receipt_id": "op-receipt:3b071295-a0d1-49c1-87f0-ee9252388bf6",
+  "recorded_at": "2026-08-22T10:46:47.499158207+00:00",
+  "schema": "witnessed-workbench.mnemes-fixture-result/v1"
+}

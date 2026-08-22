@@ -211,7 +211,7 @@ impl<'a, B> ModelAutonomousPlanner<'a, B> {
                 }]
             }
         });
-        Ok("Return only one JSON object matching this schema. Do not use markdown, tool calls, or prose. "
+        Ok("Return exactly one JSON plan object and nothing else. The response must have exactly two top-level keys: `complete` and `intents`; do not emit `input`, `recalled`, `run_id`, `parent_run_id`, `depth`, `budget`, `output_schema`, markdown, tool calls, or prose. `complete` is a boolean. If `complete` is true, `intents` must be []. If `complete` is false, `intents` must be a non-empty array of objects with exactly `name`, `payload`, and `delegate`. The JSON below is planner context, not a response template. If no supplied operation is safely executable, return {\"complete\":true,\"intents\":[]}. \nCONTEXT:\n"
             .to_owned()
             + &serde_json::to_string(&envelope)?)
     }
@@ -931,6 +931,22 @@ mod tests {
             calls: AtomicUsize::new(0),
         };
         let planner = ModelAutonomousPlanner::new(&malformed, model_provider()?, None);
+        assert!(matches!(
+            planner.propose(&model_context()),
+            Err(AutonomousError::InvalidPlan(_))
+        ));
+
+        let copied_context = CompletionFixture {
+            text: serde_json::json!({
+                "complete": true,
+                "intents": [],
+                "budget": budget(),
+            })
+            .to_string(),
+            unavailable: false,
+            calls: AtomicUsize::new(0),
+        };
+        let planner = ModelAutonomousPlanner::new(&copied_context, model_provider()?, None);
         assert!(matches!(
             planner.propose(&model_context()),
             Err(AutonomousError::InvalidPlan(_))

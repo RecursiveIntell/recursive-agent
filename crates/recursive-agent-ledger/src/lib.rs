@@ -189,6 +189,32 @@ impl PackVault {
         Ok(())
     }
     pub fn admit(&self, source: &Path) -> Result<VaultAdmission, LedgerError> {
+        self.admit_with_failpoint(source, None)
+            .and_then(|result| result)
+    }
+
+    /// Exercise one durable admission boundary and return as if the process stopped.
+    /// The next exact retry must reconcile the durable receipt/object pair.
+    pub fn admit_with_interruption(
+        &self,
+        source: &Path,
+    ) -> Result<Result<VaultAdmission, LedgerError>, LedgerError> {
+        self.admit_with_failpoint(source, Some(RunPackExportStage::CopyComplete))
+    }
+
+    pub fn admit_with_interruption_at(
+        &self,
+        source: &Path,
+        stage: RunPackExportStage,
+    ) -> Result<Result<VaultAdmission, LedgerError>, LedgerError> {
+        self.admit_with_failpoint(source, Some(stage))
+    }
+
+    fn admit_with_failpoint(
+        &self,
+        source: &Path,
+        failpoint: Option<RunPackExportStage>,
+    ) -> Result<Result<VaultAdmission, LedgerError>, LedgerError> {
         let lock = std::fs::OpenOptions::new()
             .create(true)
             .read(true)
@@ -197,16 +223,23 @@ impl PackVault {
             .open(self.root.join(".admission.lock"))?;
         rustix::fs::flock(lock.as_fd(), FlockOperation::LockExclusive)
             .map_err(std::io::Error::from)?;
-        let result = self.admit_locked(source);
+        let result = self.admit_locked(source, failpoint);
         let unlock = rustix::fs::flock(lock.as_fd(), FlockOperation::Unlock);
         match (result, unlock) {
-            (Ok(admission), Ok(())) => Ok(admission),
+            (Ok(admission), Ok(())) => Ok(Ok(admission)),
+            (Err(error @ LedgerError::InjectedRunPackExportInterruption(_)), Ok(())) => {
+                Ok(Err(error))
+            }
             (Err(error), _) => Err(error),
             (Ok(_), Err(error)) => Err(std::io::Error::from(error).into()),
         }
     }
 
-    fn admit_locked(&self, source: &Path) -> Result<VaultAdmission, LedgerError> {
+    fn admit_locked(
+        &self,
+        source: &Path,
+        failpoint: Option<RunPackExportStage>,
+    ) -> Result<VaultAdmission, LedgerError> {
         let source_snapshot = verified_run_pack_snapshot(source)?;
         let source_content_digest = content_digest(&source_snapshot.manifest.files)?;
         let source_pack_digest = content_digest(&(
@@ -227,7 +260,36 @@ impl PackVault {
                     receipt,
                 });
             }
-            std::fs::remove_file(self.admission_receipt_path(&receipt.object_id)?)?;
+            if destination.exists() {
+                return Err(LedgerError::RunPackInvalid(
+                    "durably admitted vault object is not a directory".into(),
+                ));
+            }
+
+            // The receipt is durable provenance, not a disposable admission
+            // reservation. A retry repairs the missing publication using the
+            // receipt's original object identity and recorded time.
+            let stage = self.root.join(format!(".stage-{}", receipt.object_id));
+            copy_pack_tree(source, &stage)?;
+            if let Err(error) = verify_run_pack(&stage) {
+                let _ = std::fs::remove_dir_all(&stage);
+                return Err(error);
+            }
+            let snapshot = verified_run_pack_snapshot(&stage)?;
+            if snapshot.pack_verification().manifest_digest != receipt.final_manifest_digest
+                || content_digest(&snapshot.manifest.files)? != receipt.final_content_digest
+            {
+                let _ = std::fs::remove_dir_all(&stage);
+                return Err(LedgerError::RunPackInvalid(
+                    "repair source no longer matches durable admission receipt".into(),
+                ));
+            }
+            std::fs::rename(&stage, &destination)?;
+            return Ok(VaultAdmission {
+                object_id: receipt.object_id.clone(),
+                path: destination,
+                receipt,
+            });
         }
         let object_id = new_vault_object_id()?;
         let relative = format!("objects/{object_id}");
@@ -238,9 +300,21 @@ impl PackVault {
         }
         let stage = self.root.join(format!(".stage-{object_id}"));
         copy_pack_tree(source, &stage)?;
+        if failpoint == Some(RunPackExportStage::CopyComplete) {
+            let _ = std::fs::remove_dir_all(&stage);
+            return Err(LedgerError::InjectedRunPackExportInterruption(
+                RunPackExportStage::CopyComplete,
+            ));
+        }
         if let Err(error) = verify_run_pack(&stage) {
             let _ = std::fs::remove_dir_all(&stage);
             return Err(error);
+        }
+        if failpoint == Some(RunPackExportStage::VerifyComplete) {
+            let _ = std::fs::remove_dir_all(&stage);
+            return Err(LedgerError::InjectedRunPackExportInterruption(
+                RunPackExportStage::VerifyComplete,
+            ));
         }
         let snapshot = verified_run_pack_snapshot(&stage)?;
         let final_content_digest = content_digest(&snapshot.manifest.files)?;
@@ -258,29 +332,23 @@ impl PackVault {
             recorded_at,
         };
         self.persist_admission_receipt(&receipt)?;
+        if failpoint == Some(RunPackExportStage::ReceiptPersisted) {
+            let _ = std::fs::remove_dir_all(&stage);
+            return Err(LedgerError::InjectedRunPackExportInterruption(
+                RunPackExportStage::ReceiptPersisted,
+            ));
+        }
         std::fs::rename(&stage, &destination)?;
+        if failpoint == Some(RunPackExportStage::Published) {
+            return Err(LedgerError::InjectedRunPackExportInterruption(
+                RunPackExportStage::Published,
+            ));
+        }
         Ok(VaultAdmission {
             object_id,
             path: destination,
             receipt,
         })
-    }
-    pub fn admit_with_interruption(
-        &self,
-        source: &Path,
-    ) -> Result<Result<VaultAdmission, LedgerError>, LedgerError> {
-        let _ = verified_run_pack_snapshot(source)?;
-        let stage = self.root.join(format!(
-            ".stage-{}",
-            TEMP_SEQUENCE.fetch_add(1, Ordering::Relaxed)
-        ));
-        copy_pack_tree(source, &stage)?;
-        let verification = verify_run_pack(&stage);
-        std::fs::remove_dir_all(&stage)?;
-        verification?;
-        Ok(Err(LedgerError::InjectedRunPackExportInterruption(
-            RunPackExportStage::CopyComplete,
-        )))
     }
     pub fn admission(&self, object_id: &str) -> Result<VaultAdmission, LedgerError> {
         let receipt = self.admission_receipt(object_id)?;
@@ -505,6 +573,9 @@ pub enum RunPackExportStage {
     /// Every planned source entry has been copied and re-digested, but the
     /// manifest has not yet been written or published.
     CopyComplete,
+    VerifyComplete,
+    ReceiptPersisted,
+    Published,
 }
 
 fn genesis_digest() -> ContentDigest {

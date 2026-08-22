@@ -1,0 +1,10 @@
+gate_id,claim_or_invariant,command_or_witness,required,status,evidence_ref,notes
+A-000,current source and owner map,preflight scaffold,true,OBSERVED,PRECHECK.json,"HEAD e310cf9; dirty worktree preserved"
+A-001,failed terminal status is not mislabeled unavailable,pytest focused RED fixture,true,NOT_RUN,,"Run before production edit"
+A-002,strict verification failure retains daemon facts,pytest focused RED fixture,true,NOT_RUN,,"Run before production edit"
+A-002B,daemon verify error is correlated over real IPC,cargo test -p recursive-agent-daemon --test ipc_runtime daemon_returns_correlated_verify_error_for_tampered_run -- --exact,true,NOT_RUN,,"Run before production edit"
+A-003,transport failure remains unavailable,pytest focused suite,true,NOT_RUN,,"Existing behavior must remain"
+A-004,successful result shape is unchanged,pytest focused suite,true,NOT_RUN,,"Existing behavior must remain"
+A-005,focused adapter suite,python3 -m pytest integrations/hermes-native/tests/test_registration.py -q,true,NOT_RUN,,
+A-006,ruff and compile,python3 -m ruff check + py_compile,true,NOT_RUN,,
+A-007,workspace regression,cargo test --workspace --all-targets --locked --no-fail-fast,true,NOT_RUN,,"Required after final adapter change"

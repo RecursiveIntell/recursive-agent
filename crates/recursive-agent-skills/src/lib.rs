@@ -1,5 +1,3 @@
-#![cfg(feature = "later-phase-prototype")]
-
 //! Skill registry — file-based skill manifest loading and template expansion.
 //! Skills are JSON files under a registry directory. Each skill defines
 //! parameterized steps that can be expanded into a RunSpecV1.

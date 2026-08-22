@@ -1,0 +1,15 @@
+$ cargo test -p recursive-agent-ledger --test run_pack_verify pack_vault_admits_then_verifies_after_source_is_deleted -- --exact
+# cwd: /home/sikmindz/Coding/recursive-agent
+# exit: 0
+
+[stdout]
+
+running 1 test
+test pack_vault_admits_then_verifies_after_source_is_deleted ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 18 filtered out; finished in 0.24s
+
+
+[stderr]
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.15s
+     Running tests/run_pack_verify.rs (target/debug/deps/run_pack_verify-43fa5a91cd81bc7a)

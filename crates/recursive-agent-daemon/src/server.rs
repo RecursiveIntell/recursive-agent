@@ -13,7 +13,7 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use recursive_agent_contracts::CurrentRunId;
-use recursive_agent_runner::{RuntimeService, RuntimeStatusV1};
+use recursive_agent_runner::{RuntimeCancelResultV1, RuntimeService, RuntimeStatusV1};
 use thiserror::Error;
 
 use crate::protocol::{
@@ -187,7 +187,20 @@ fn handle_connection(stream: UnixStream, runtime: Arc<RuntimeService>) -> Result
         let request = decode_request_frame(&full_frame).map_err(ServerError::Frame)?;
         ids.admit(&request).map_err(ServerError::Frame)?;
 
-        let response = dispatch(&request, &runtime)?;
+        // Dispatch failures are still daemon-owned typed outcomes. Return them
+        // on the correlated request instead of dropping the connection and
+        // making a transcript/verification failure look like an unavailable
+        // daemon to local adapters.
+        let response = match dispatch(&request, &runtime) {
+            Ok(response) => response,
+            Err(error) => serde_json::json!({
+                "request_id": request.request_id,
+                "error": {
+                    "code": "runtime_error",
+                    "message": error.to_string(),
+                },
+            }),
+        };
         let resp_bytes = serde_json::to_vec(&response)?;
         let mut frame = (resp_bytes.len() as u32).to_be_bytes().to_vec();
         frame.extend_from_slice(&resp_bytes);
@@ -228,6 +241,12 @@ fn dispatch(
     runtime: &RuntimeService,
 ) -> Result<serde_json::Value, ServerError> {
     match &request.request {
+        IpcRequestV1::Ping => Ok(serde_json::json!({
+            "schema": IPC_REQUEST_SCHEMA_V1,
+            "protocol_version": IPC_PROTOCOL_VERSION_V1,
+            "request_id": request.request_id,
+            "pong": true,
+        })),
         IpcRequestV1::Status { run_id } => {
             let run = CurrentRunId::try_new(run_id)
                 .map_err(|_| ServerError::InvalidRunId(run_id.clone()))?;
@@ -266,6 +285,23 @@ fn dispatch(
                     "terminal_state": serde_json::to_value(verification.terminal_state)
                         .map_err(ServerError::Json)?,
                 },
+            }))
+        }
+        IpcRequestV1::Cancel { run_id } => {
+            let run = CurrentRunId::try_new(run_id)
+                .map_err(|_| ServerError::InvalidRunId(run_id.clone()))?;
+            let result = runtime.cancel(&run)?;
+            let cancellation = match result {
+                RuntimeCancelResultV1::CancellationRequested { run_id } => serde_json::json!({
+                    "state": "cancellation_requested", "run_id": run_id
+                }),
+                RuntimeCancelResultV1::AlreadyTerminal { state } => serde_json::json!({
+                    "state": "already_terminal",
+                    "terminal_state": serde_json::to_value(state).map_err(ServerError::Json)?
+                }),
+            };
+            Ok(serde_json::json!({
+                "request_id": request.request_id, "run_id": run_id, "cancellation": cancellation
             }))
         }
         IpcRequestV1::Submit { operation } => {

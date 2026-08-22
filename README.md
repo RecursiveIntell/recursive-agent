@@ -1,41 +1,36 @@
-# Recursive Agent Platform (M0)
+# Recursive Agent Platform — local development workspace
 
-> Local-first, provenance-native agent platform in Rust. This is **M0**: the
-> smallest vertical slice that produces a tamper-evident receipt chain for
-> a deterministic run, verifies it offline, and replays it from disk with
-> no provider call.
+> `recursive-agent` is an in-development, local-first Rust execution-kernel
+> workspace. Its original M0 receipt/verification/replay vertical slice remains
+> the baseline; the dirty working tree also contains an **experimental**
+> provider-facing autonomous-loop surface. Neither label is a production,
+> reliability, unattended-autonomy, or provider-integration certification.
 
-## What M0 is not
+## Criterion-referenced capability boundary
 
-- Not a Hermes or OpenClaw clone. It is a new platform that adopts useful
-  *behaviors* (CLI, receipts, replay, scopes) without copying source,
-  brand, or upstream contracts.
-- Not a provider integration. No Ollama, no OpenAI-compatible call, no
-  network. That is **Phase 2**, gated on M0 acceptance.
-- Not a UI. CLI only.
-- Not MCP. That is **Phase 3**.
-- Not a sandboxed execution plane. That is **Phase 4**.
+The current documented claims are limited to the evidence recorded in
+[`docs/claims.md`](docs/claims.md). At the 2026-08-21 evidence cutoff, the
+following commands were observed to pass in this working tree:
 
-## What M0 *is*
+```bash
+cargo test --workspace --all-targets --locked --no-fail-fast
+cargo clippy --workspace --all-targets --locked -- -D warnings
+cargo fmt --all -- --check
+```
 
-A small Rust workspace at `~/Coding/recursive-agent/` that depends on
-canonical Libraries crates by path:
+These are local source checks, not proof of release readiness, provider
+reliability, autonomous recursion, native child lineage, real-provider
+execution, or external integration. `cargo deny check advisories bans licenses
+sources` is currently blocked: it exits 4 because
+`webpki-roots` carries `CDLA-Permissive-2.0`, which the current policy rejects.
+Operational fuzzing is also blocked because `cargo-fuzz` is unavailable.
 
-- `boundary-compiler` for RFC 8785 JCS at every typed boundary.
-- `stack-ids` for family-qualified material IDs.
-- `bitemporal-runtime` for valid-time / recorded-time semantics.
-- `claim-ledger` for claim/evidence/provenance primitives.
-- Local crates:
-  - `recursive-agent-contracts` — typed protocol.
-  - `recursive-agent-ledger` — append-only chain + content-addressed
-    artifact store.
-  - `recursive-agent-policy` — permits, lineage, allowlist.
-  - `recursive-agent-tools` — `echo` and `time_now` manifests.
-  - `recursive-agent-runner` — typed run DAG, deterministic walk.
-  - `recursive-agent-cli` — `ra run`, `ra verify`, `ra replay`, `ra pack`,
-    `ra doctor`.
+## Original M0 boundary
 
-## Quick start
+The baseline M0 design provides a deterministic local run that emits a
+receipt chain, verifies it offline, and replays recorded disk artifacts without
+re-calling a provider. It is not a general deployment, sandbox certification,
+or deterministic replay guarantee for a provider response.
 
 ```bash
 cd ~/Coding/recursive-agent
@@ -45,13 +40,32 @@ cargo build --release
 ./target/release/ra verify <run-dir-printed-above>
 ```
 
-The first run prints a `<run-dir>` under
-`~/.local/share/recursive-agent/runs/`. Capture stdout into
-`docs/receipts/` so the chain can be reproduced.
+## Experimental provider-facing autonomous-loop surface
 
-## Auditable Run Pack v1 — local proof boundary
+The source tree exposes an `ra autonomous` command with explicit model,
+provider URL, output root, and budgets:
 
-A verified terminal run can be projected into a portable, immutable pack:
+```bash
+ra autonomous \
+  --goal "run the admitted operation" \
+  --model <ollama-model> \
+  --provider-url http://127.0.0.1:11434 \
+  --out /tmp/recursive-agent-autonomous
+```
+
+A model-fixture-to-native-submit path was locally exercised. No authorized live
+provider call is recorded in the current packet. Therefore this command may be
+described only as an experimental, bounded local surface whose provider,
+model-quality, autonomous-recursion, native-child-lineage, and reliability
+behavior remain unverified. It must not be described as a provider-backed
+production loop, an unattended agent, a recursive autonomous system, or a
+provider-deterministic replay mechanism.
+
+Malformed, unavailable, over-budget, cancelled, or unregistered work is
+intended to fail closed by the implementation; the current evidence does not
+promote that intent into a general reliability claim.
+
+## Recorded pack boundary
 
 ```bash
 ra pack export --run <run-dir> --out <empty-pack-dir>
@@ -59,28 +73,18 @@ ra pack verify --pack <pack-dir>
 ra pack replay --pack <pack-dir>
 ```
 
-The pack binds receipts, metadata, referenced artifacts, and descriptive
-provenance files in `PACK_MANIFEST.json`. Verification and replay use only the
-pack bytes; replay returns recorded evidence and does not re-execute tools or
-providers. This is proven only for the recorded local test matrix. It does not
-establish provider-backed replay, remote execution, deployment support, or a
-general security certification.
+Pack verification/replay is a recorded-artifact boundary: it does not establish
+provider re-execution, remote execution, deployment support, general security,
+or availability guarantees.
 
 ## Layout
 
 ```text
 recursive-agent/
 ├── crates/
-│   ├── recursive-agent-contracts/
-│   ├── recursive-agent-ledger/
-│   ├── recursive-agent-policy/
-│   ├── recursive-agent-tools/
-│   ├── recursive-agent-runner/
-│   └── recursive-agent-cli/
 ├── fixtures/
 ├── scripts/
 ├── docs/
-│   ├── adr/
 │   └── receipts/
 ├── AGENTS.md
 └── Cargo.toml
@@ -88,14 +92,13 @@ recursive-agent/
 
 ## Capability matrix
 
-| Capability | Source | M0 |
+| Capability | Current evidence state | Claim boundary |
 |---|---|---|
-| Canonical JSON boundary | `boundary-compiler` | yes |
-| Family-qualified IDs | `stack-ids` | yes |
-| Bitemporal | `bitemporal-runtime` | in-memory |
-| Claim/evidence | `claim-ledger` | envelope only |
-| Provider | none | out of scope |
-| MCP | none | out of scope |
-| Messaging | none | out of scope |
-| Web UI | none | out of scope |
-| Sandbox | none | out of scope |
+| Workspace tests / Clippy / formatting | observed local pass | Exact commands above passed at the evidence cutoff only |
+| Provider-facing autonomous CLI | experimental / unverified | Fixture → native submit observed; no live provider or reliability proof |
+| Autonomous recursion / native child lineage | unverified | No current acceptance evidence recorded |
+| Recorded offline replay | baseline design / scope-limited | Does not re-call providers or prove provider determinism |
+| Cargo-deny policy | blocked | Exit 4: `webpki-roots` `CDLA-Permissive-2.0` rejected |
+| Operational fuzzing | blocked | `cargo-fuzz` unavailable |
+| Three-owner conformance | degraded | Mnemes offline build needs uncached `allocator-api2` |
+| MCP, messaging, web UI, deployment | unverified or out of scope | No release claim |
