@@ -304,6 +304,39 @@ fn dispatch(
                 "request_id": request.request_id, "run_id": run_id, "cancellation": cancellation
             }))
         }
+        IpcRequestV1::PermitConsume {
+            permit_id,
+            binding,
+            call,
+        } => {
+            let preflight = runtime.consume_external_permit(permit_id, binding, call)?;
+            Ok(serde_json::json!({
+                "request_id": request.request_id,
+                "permit_id": permit_id,
+                "evidence": preflight.evidence,
+                "preflight_artifact": preflight,
+                "receipt_artifact": {
+                    "kind": "permit_preflight",
+                    "receipt_digest": preflight.receipt_digest,
+                },
+            }))
+        }
+        IpcRequestV1::PermitOutcomeRecord {
+            permit_id,
+            preflight_receipt_digest,
+            reported,
+        } => {
+            let outcome = runtime.record_external_permit_outcome(
+                permit_id,
+                preflight_receipt_digest,
+                reported.clone(),
+            )?;
+            Ok(serde_json::json!({
+                "request_id": request.request_id,
+                "permit_id": permit_id,
+                "outcome_artifact": outcome,
+            }))
+        }
         IpcRequestV1::Submit { operation } => {
             let handle = runtime.submit(operation)?;
             Ok(serde_json::json!({

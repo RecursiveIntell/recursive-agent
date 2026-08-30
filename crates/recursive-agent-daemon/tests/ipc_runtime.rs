@@ -19,13 +19,17 @@ use llm_tool_runtime::{
     ToolReceiptPersistence, ToolRegistry, ToolResult, ToolRuntime, ToolSideEffectClass,
 };
 use recursive_agent_contracts::{
-    content_digest, ActorAuthorityV1, AuthorityOriginV1, CausalLinkV1, ContentDigest,
-    DeclaredEffectsV1, OperationBudgetV1, OperationEnvelopeV1, OperationSchemaV1, ProvenanceRefV1,
-    ReplayClassV1, ReplayIntentV1, ReplaySpecV1, RunSpecV1, StepSpecV1, ToolCallSpecV1,
+    content_digest, derive_run_id, derive_step_id, ActorAuthorityV1, AuthorityOriginV1,
+    CausalLinkV1, ContentDigest, DeclaredEffectsV1, OperationBudgetV1, OperationEnvelopeV1,
+    OperationSchemaV1, ProvenanceRefV1, ReplayClassV1, ReplayIntentV1, ReplaySpecV1, RunSpecV1,
+    StepSpecV1, ToolCallSpecV1,
 };
 use recursive_agent_daemon::{
     bind_private_socket, serve, IPC_PROTOCOL_VERSION_V1, IPC_REQUEST_SCHEMA_V1,
     MAX_FRAME_PAYLOAD_BYTES,
+};
+use recursive_agent_policy::{
+    ActorPrincipalV1, DurablePermitStore, EffectScopeV1, PermitBindingV1, PermitBudgetV1,
 };
 use recursive_agent_runner::{
     Clock, RuntimeDependencies, RuntimeLedgerDependencyV1, RuntimePolicyDependencyV1,
@@ -197,6 +201,101 @@ fn submit_request(request_id: &str, operation: &OperationEnvelopeV1) -> Vec<u8> 
         "request": {"kind": "submit", "operation": operation},
     });
     frame(&serde_json::to_vec(&payload).unwrap())
+}
+
+fn external_permit_binding(
+    call: &ToolCallSpecV1,
+) -> Result<PermitBindingV1, Box<dyn std::error::Error>> {
+    let spec = RunSpecV1 {
+        name: "external-permit".into(),
+        steps: vec![StepSpecV1 {
+            name: "effect".into(),
+            call: call.clone(),
+        }],
+        frozen_clock: None,
+        policy_version: "policy-v1".into(),
+    };
+    let run_id = derive_run_id(&spec)?;
+    let step_id = derive_step_id(&run_id, 0, "effect", call)?;
+    let effect = EffectScopeV1 {
+        scope_name: "pure".into(),
+        read_roots: Vec::new(),
+        write_roots: Vec::new(),
+        network_allowed: false,
+    };
+    let now = FixedClock.now();
+    Ok(PermitBindingV1 {
+        actor: ActorPrincipalV1::try_new("actor:ipc-vertical")?,
+        action_digest: content_digest(call)?,
+        effect_digest: content_digest(&effect)?,
+        effect,
+        budget: PermitBudgetV1 {
+            max_wall_time_ms: 3_000,
+            max_output_bytes: 4_096,
+            max_artifact_bytes: 8_192,
+        },
+        policy_version: "policy-v1".into(),
+        parent_permit_id: None,
+        parent_operation_id: Some(run_id.clone()),
+        issued_at: now,
+        not_before: now,
+        expires_at: now + chrono::TimeDelta::seconds(60),
+        run_id,
+        step_id,
+        tool: call.tool.clone(),
+        args_digest: content_digest(&call.args)?,
+    })
+}
+
+#[test]
+fn daemon_consumes_and_records_external_permit_receipts_over_ipc() -> TestResult {
+    let tmp = tempfile::tempdir()?;
+    let runtime_root = tmp.path().join("permit-root");
+    std::fs::create_dir(&runtime_root)?;
+    let call = ToolCallSpecV1 {
+        tool: "echo".into(),
+        args: serde_json::json!({"text": "permit-vertical"}),
+        frozen_clock: None,
+    };
+    let binding = external_permit_binding(&call)?;
+    let root = std::fs::File::open(&runtime_root)?;
+    let permits = DurablePermitStore::from_dir_fd(&root)?;
+    let permit = permits.issue(&binding, FixedClock.now())?;
+    let service = native_service(&runtime_root)?;
+    let (listener, socket_path) = bind_private_socket(tmp.path(), "permit.sock")?;
+    let server_thread = std::thread::spawn(move || {
+        let _ = serve(listener, Arc::new(service), 4);
+    });
+    let mut stream = connect_with_retry(&socket_path, &server_thread)?;
+    let consume = serde_json::json!({
+        "schema": IPC_REQUEST_SCHEMA_V1,
+        "protocol_version": IPC_PROTOCOL_VERSION_V1,
+        "request_id": "permit-consume",
+        "request": {"kind": "permit_consume", "permit_id": permit.permit_id, "binding": binding, "call": call},
+    });
+    stream.write_all(&frame(&serde_json::to_vec(&consume)?))?;
+    stream.flush()?;
+    let consumed = read_response(&mut stream)?;
+    assert_eq!(consumed["request_id"], "permit-consume");
+    assert_eq!(consumed["evidence"]["state"]["state"], "consumed");
+    let digest = consumed["receipt_artifact"]["receipt_digest"]
+        .as_str()
+        .ok_or("preflight digest missing")?;
+    let outcome = serde_json::json!({
+        "schema": IPC_REQUEST_SCHEMA_V1,
+        "protocol_version": IPC_PROTOCOL_VERSION_V1,
+        "request_id": "permit-outcome",
+        "request": {"kind": "permit_outcome_record", "permit_id": consumed["permit_id"], "preflight_receipt_digest": digest, "reported": {"state": "outcome_ambiguous", "duration_ms": 7, "error_type": "transport_lost"}},
+    });
+    stream.write_all(&frame(&serde_json::to_vec(&outcome)?))?;
+    stream.flush()?;
+    let recorded = read_response(&mut stream)?;
+    assert_eq!(recorded["request_id"], "permit-outcome");
+    assert_eq!(
+        recorded["outcome_artifact"]["reported"]["state"],
+        "outcome_ambiguous"
+    );
+    Ok(())
 }
 
 /// The Phase 3 gate: a fresh daemon serves the Phase 2 native action over

@@ -220,11 +220,15 @@ fn append_prefix(chain: &mut recursive_agent_ledger::ChainHandle, fixture: &Fixt
         permit: fixture.control.clone(),
         state: PermitStateV1::Issued,
         child_allocations: Default::default(),
+        preflight_receipt: None,
+        outcome_receipt: None,
     })?;
     let issued = PermitEvidenceV1::from_record(&PermitRecordV1 {
         permit: fixture.permit.clone(),
         state: PermitStateV1::Issued,
         child_allocations: Default::default(),
+        preflight_receipt: None,
+        outcome_receipt: None,
     })?;
     let consumed = PermitEvidenceV1::from_record(&PermitRecordV1 {
         permit: fixture.permit.clone(),
@@ -232,6 +236,8 @@ fn append_prefix(chain: &mut recursive_agent_ledger::ChainHandle, fixture: &Fixt
             consumed_at: fixture.time,
         },
         child_allocations: Default::default(),
+        preflight_receipt: None,
+        outcome_receipt: None,
     })?;
     let issued_ref = store.put(
         &serde_json::to_vec(&issued)?,
@@ -305,6 +311,8 @@ fn append_control_revoked(
             reason: PermitRevocationReasonV1::Operator,
         },
         child_allocations: allocations,
+        preflight_receipt: None,
+        outcome_receipt: None,
     })?;
     let descriptor = chain.artifact_store()?.put(
         &serde_json::to_vec(&evidence)?,
@@ -723,6 +731,8 @@ fn evidence_bytes(permit: &ExecutionPermitV1, state: PermitStateV1) -> TestResul
             permit: permit.clone(),
             state,
             child_allocations: Default::default(),
+            preflight_receipt: None,
+            outcome_receipt: None,
         },
     )?)?)
 }

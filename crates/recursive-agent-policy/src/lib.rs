@@ -540,6 +540,136 @@ pub struct PermitRecordV1 {
     pub state: PermitStateV1,
     #[serde(default)]
     pub child_allocations: std::collections::BTreeMap<CurrentPermitId, PermitBudgetV1>,
+    /// Daemon-owned preflight evidence written atomically with consumption.
+    #[serde(default)]
+    pub preflight_receipt: Option<PermitPreflightReceiptV1>,
+    /// Daemon-owned reported outcome, bound to the consumed preflight receipt.
+    #[serde(default)]
+    pub outcome_receipt: Option<PermitOutcomeReceiptV1>,
+}
+
+/// An Ares-reported effect state. These states record what the executor reports;
+/// they do not assert independently confirmed external reality.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ReportedEffectStateV1 {
+    Succeeded,
+    Failed,
+    OutcomeAmbiguous,
+}
+
+/// Closed, bounded post-effect observation supplied by an external executor.
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct ReportedEffectOutcomeV1 {
+    pub state: ReportedEffectStateV1,
+    pub duration_ms: u64,
+    pub error_type: Option<String>,
+}
+
+impl ReportedEffectOutcomeV1 {
+    pub fn validate(&self) -> Result<(), PolicyError> {
+        if self.error_type.as_ref().is_some_and(|value| {
+            value.is_empty() || value.len() > 256 || value.chars().any(char::is_control)
+        }) {
+            return Err(PolicyError::InvalidLease(
+                "invalid reported effect error type".into(),
+            ));
+        }
+        if matches!(self.state, ReportedEffectStateV1::Succeeded) && self.error_type.is_some() {
+            return Err(PolicyError::InvalidLease(
+                "successful reported effect must not carry an error type".into(),
+            ));
+        }
+        Ok(())
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct PermitPreflightReceiptV1 {
+    pub permit_id: CurrentPermitId,
+    pub evidence: PermitEvidenceV1,
+    pub recorded_at: DateTime<Utc>,
+    pub receipt_digest: ContentDigest,
+}
+
+impl PermitPreflightReceiptV1 {
+    fn create(evidence: PermitEvidenceV1, recorded_at: DateTime<Utc>) -> Result<Self, PolicyError> {
+        evidence.validate()?;
+        let permit_id = evidence.permit_id.clone();
+        let receipt_digest = content_digest(&(&permit_id, &evidence, recorded_at))?;
+        Ok(Self {
+            permit_id,
+            evidence,
+            recorded_at,
+            receipt_digest,
+        })
+    }
+
+    pub fn validate(&self) -> Result<(), PolicyError> {
+        self.evidence.validate()?;
+        if self.permit_id != self.evidence.permit_id
+            || self.receipt_digest
+                != content_digest(&(&self.permit_id, &self.evidence, self.recorded_at))?
+        {
+            return Err(PolicyError::InvalidLease(
+                "invalid permit preflight receipt".into(),
+            ));
+        }
+        Ok(())
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct PermitOutcomeReceiptV1 {
+    pub permit_id: CurrentPermitId,
+    pub preflight_receipt_digest: ContentDigest,
+    pub reported: ReportedEffectOutcomeV1,
+    pub recorded_at: DateTime<Utc>,
+    pub receipt_digest: ContentDigest,
+}
+
+impl PermitOutcomeReceiptV1 {
+    fn create(
+        permit_id: CurrentPermitId,
+        preflight_receipt_digest: ContentDigest,
+        reported: ReportedEffectOutcomeV1,
+        recorded_at: DateTime<Utc>,
+    ) -> Result<Self, PolicyError> {
+        reported.validate()?;
+        let receipt_digest = content_digest(&(
+            &permit_id,
+            &preflight_receipt_digest,
+            &reported,
+            recorded_at,
+        ))?;
+        Ok(Self {
+            permit_id,
+            preflight_receipt_digest,
+            reported,
+            recorded_at,
+            receipt_digest,
+        })
+    }
+
+    pub fn validate(&self) -> Result<(), PolicyError> {
+        self.reported.validate()?;
+        if self.receipt_digest
+            != content_digest(&(
+                &self.permit_id,
+                &self.preflight_receipt_digest,
+                &self.reported,
+                self.recorded_at,
+            ))?
+        {
+            return Err(PolicyError::InvalidLease(
+                "invalid permit outcome receipt".into(),
+            ));
+        }
+        Ok(())
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
@@ -1461,11 +1591,15 @@ impl DurablePermitStore {
                 permit: permit.clone(),
                 state: PermitStateV1::Issued,
                 child_allocations: std::collections::BTreeMap::new(),
+                preflight_receipt: None,
+                outcome_receipt: None,
             })?;
             let record = PermitRecordV1 {
                 permit: permit.clone(),
                 state: PermitStateV1::Issued,
                 child_allocations: std::collections::BTreeMap::new(),
+                preflight_receipt: None,
+                outcome_receipt: None,
             };
             let existing_child = match self.read_record(&permit.permit_id) {
                 Ok(existing) if existing == record => Some(existing),
@@ -1523,6 +1657,78 @@ impl DurablePermitStore {
     ) -> Result<PermitEvidenceV1, PolicyError> {
         let record = self.consume_with_interruption(permit_id, dispatch, trusted_now, None)?;
         PermitEvidenceV1::from_record(&record)
+    }
+
+    pub fn consume_with_preflight(
+        &self,
+        permit_id: &CurrentPermitId,
+        dispatch: &PermitBindingV1,
+        trusted_now: DateTime<Utc>,
+    ) -> Result<PermitPreflightReceiptV1, PolicyError> {
+        dispatch.validate()?;
+        self.with_lock(|| {
+            let mut record = self.read_record_or_reject(permit_id)?;
+            validate_dispatch(permit_id, &record, dispatch, trusted_now)?;
+            if let Some(parent_id) = &record.permit.binding.parent_permit_id {
+                let parent = self
+                    .read_record(parent_id)
+                    .map_err(|_| rejected(permit_id, PermitRejectionReasonV1::WrongParent))?;
+                validate_parent_binding(&record.permit, &parent, trusted_now)?;
+            }
+            record.state = PermitStateV1::Consumed {
+                consumed_at: trusted_now,
+            };
+            let receipt = PermitPreflightReceiptV1::create(
+                PermitEvidenceV1::from_record(&record)?,
+                trusted_now,
+            )?;
+            record.preflight_receipt = Some(receipt.clone());
+            self.replace_record(&record, None)?;
+            Ok(receipt)
+        })
+    }
+
+    pub fn record_reported_outcome(
+        &self,
+        permit_id: &CurrentPermitId,
+        preflight_receipt_digest: &ContentDigest,
+        reported: ReportedEffectOutcomeV1,
+        trusted_now: DateTime<Utc>,
+    ) -> Result<PermitOutcomeReceiptV1, PolicyError> {
+        reported.validate()?;
+        self.with_lock(|| {
+            let mut record = self.read_record_or_reject(permit_id)?;
+            let preflight = record
+                .preflight_receipt
+                .as_ref()
+                .ok_or_else(|| rejected(permit_id, PermitRejectionReasonV1::StateCorrupted))?;
+            preflight.validate()?;
+            if preflight.receipt_digest != *preflight_receipt_digest {
+                return Err(rejected(permit_id, PermitRejectionReasonV1::WrongAction));
+            }
+            if let Some(existing) = &record.outcome_receipt {
+                existing.validate()?;
+                let proposed = PermitOutcomeReceiptV1::create(
+                    permit_id.clone(),
+                    preflight_receipt_digest.clone(),
+                    reported,
+                    trusted_now,
+                )?;
+                if *existing == proposed {
+                    return Ok(existing.clone());
+                }
+                return Err(PolicyError::PermitStateConflict);
+            }
+            let receipt = PermitOutcomeReceiptV1::create(
+                permit_id.clone(),
+                preflight_receipt_digest.clone(),
+                reported,
+                trusted_now,
+            )?;
+            record.outcome_receipt = Some(receipt.clone());
+            self.replace_record(&record, None)?;
+            Ok(receipt)
+        })
     }
 
     pub fn consume_with_interruption(
