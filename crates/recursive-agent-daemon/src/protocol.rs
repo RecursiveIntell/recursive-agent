@@ -6,7 +6,7 @@
 use recursive_agent_contracts::{
     parse_strict_json_value, CurrentPermitId, OperationEnvelopeV1, StrictJsonError, ToolCallSpecV1,
 };
-use recursive_agent_policy::{PermitBindingV1, ReportedEffectOutcomeV1};
+use recursive_agent_policy::{OperatorApprovalWitnessV1, PermitApprovalRequestV1, PermitBindingV1, ReportedEffectOutcomeV1};
 use serde::{Deserialize, Serialize};
 use std::collections::BTreeSet;
 
@@ -150,6 +150,12 @@ pub enum IpcRequestV1 {
         binding: Box<PermitBindingV1>,
         /// Exact typed call that Ares is about to dispatch after authorization.
         call: ToolCallSpecV1,
+    },
+    /// Narrow verifier-bound issuance. Without an explicitly attached verifier
+    /// the runtime rejects this before durable state is created.
+    PermitIssue {
+        request: PermitApprovalRequestV1,
+        approval: OperatorApprovalWitnessV1,
     },
     /// Record the bounded executor-reported outcome for one consumed preflight.
     PermitOutcomeRecord {

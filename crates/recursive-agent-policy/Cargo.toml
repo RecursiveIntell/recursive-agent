@@ -8,6 +8,9 @@ authors.workspace = true
 publish.workspace = true
 description = "Permits, lineage, and allowlist for M0"
 
+[features]
+test-only-approval-fixture = []
+
 [dependencies]
 recursive-agent-contracts = { path = "../recursive-agent-contracts" }
 serde = { workspace = true }
@@ -16,6 +19,7 @@ chrono = { workspace = true }
 thiserror = { workspace = true }
 stack-ids = { workspace = true }
 rustix = { workspace = true }
+blake3 = { workspace = true }
 
 [dev-dependencies]
 tempfile = "3"

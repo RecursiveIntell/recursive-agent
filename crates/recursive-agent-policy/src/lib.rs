@@ -46,6 +46,60 @@ impl ActorPrincipalV1 {
     }
 }
 
+/// Closed request for the test-only deterministic echo issue path. No client
+/// binding, digest, scope, lineage, or permit identifier is accepted.
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct PermitApprovalRequestV1 {
+    pub call: ToolCallSpecV1,
+    pub requested_validity_ms: u64,
+}
+
+/// Serialized operator decision authenticated by a verifier-held key.
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct OperatorApprovalWitnessV1 {
+    pub operator_case: String,
+    pub request_digest: ContentDigest,
+    pub authenticator: String,
+}
+
+/// Verifier-owned key material. Its constructor is compiled only for the
+/// explicit test fixture feature; production therefore fails closed.
+#[derive(Clone)]
+pub struct OperatorApprovalVerifierV1 { key: [u8; 32] }
+
+impl OperatorApprovalVerifierV1 {
+    #[cfg(feature = "test-only-approval-fixture")]
+    pub fn from_key(key: [u8; 32]) -> Result<Self, PolicyError> { Ok(Self { key }) }
+
+    #[cfg(feature = "test-only-approval-fixture")]
+    pub fn issue_witness(&self, request: &PermitApprovalRequestV1, operator_case: &str) -> Result<OperatorApprovalWitnessV1, PolicyError> {
+        if operator_case.is_empty() || operator_case.len() > 256 || operator_case.chars().any(char::is_control) { return Err(PolicyError::InvalidLease("invalid operator approval case".into())); }
+        let request_digest = content_digest(request)?;
+        Ok(OperatorApprovalWitnessV1 { authenticator: self.authenticate(&request_digest, operator_case), operator_case: operator_case.into(), request_digest })
+    }
+
+    fn authenticate(&self, digest: &ContentDigest, operator_case: &str) -> String {
+        let mut material = digest.hex().as_bytes().to_vec(); material.push(0); material.extend_from_slice(operator_case.as_bytes());
+        blake3::keyed_hash(&self.key, &material).to_hex().to_string()
+    }
+
+    pub fn verify_and_build_echo_binding(&self, request: &PermitApprovalRequestV1, witness: &OperatorApprovalWitnessV1, now: DateTime<Utc>) -> Result<PermitBindingV1, PolicyError> {
+        if request.requested_validity_ms != MAX_LIVE_LEASE_MILLISECONDS as u64 || request.call.tool != "echo" || !request.call.args.is_object() || request.call.frozen_clock.is_some() || witness.operator_case.is_empty() || witness.operator_case.chars().any(char::is_control) { return Err(PolicyError::InvalidLease("test-only echo approval contract rejected".into())); }
+        let request_digest = content_digest(request)?;
+        let expected = self.authenticate(&request_digest, &witness.operator_case);
+        if request_digest != witness.request_digest || !constant_time_eq(expected.as_bytes(), witness.authenticator.as_bytes()) { return Err(PolicyError::InvalidLease("operator approval witness authentication failed".into())); }
+        let spec = RunSpecV1 { name: "test-only-approved-echo".into(), steps: vec![recursive_agent_contracts::StepSpecV1 { name: "echo".into(), call: request.call.clone() }], frozen_clock: None, policy_version: "test-only-echo-v1".into() };
+        let run_id = recursive_agent_contracts::derive_run_id(&spec)?;
+        let step_id = recursive_agent_contracts::derive_step_id(&run_id, 0, "echo", &request.call)?;
+        let effect = EffectScopeV1 { scope_name: "test-only-deterministic-echo".into(), read_roots: Vec::new(), write_roots: Vec::new(), network_allowed: false };
+        Ok(PermitBindingV1 { actor: ActorPrincipalV1::try_new("operator:local")?, action_digest: content_digest(&request.call)?, effect_digest: content_digest(&effect)?, effect, budget: PermitBudgetV1 { max_wall_time_ms: 300_000, max_output_bytes: 4_096, max_artifact_bytes: 8_192 }, policy_version: "test-only-echo-v1".into(), parent_permit_id: None, parent_operation_id: None, issued_at: now, not_before: now, expires_at: now + chrono::TimeDelta::milliseconds(MAX_LIVE_LEASE_MILLISECONDS), run_id, step_id, tool: "echo".into(), args_digest: content_digest(&request.call.args)? })
+    }
+}
+
+fn constant_time_eq(left: &[u8], right: &[u8]) -> bool { let mut diff = left.len() ^ right.len(); for (a, b) in left.iter().zip(right.iter()) { diff |= usize::from(a ^ b); } diff == 0 }
+
 /// Explicit grantor, delegate, audience, and delegation depth for one edge.
 #[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 #[serde(deny_unknown_fields)]

@@ -321,6 +321,18 @@ fn dispatch(
                 },
             }))
         }
+        IpcRequestV1::PermitIssue {
+            request: approval_request,
+            approval,
+        } => {
+            let permit = runtime.issue_approved_echo_permit(approval_request, approval)?;
+            Ok(serde_json::json!({
+                "request_id": request.request_id,
+                "permit_id": permit.permit_id,
+                "binding": permit.binding,
+                "issuance_evidence": { "state": { "state": "issued" } },
+            }))
+        }
         IpcRequestV1::PermitOutcomeRecord {
             permit_id,
             preflight_receipt_digest,

@@ -29,7 +29,8 @@ use recursive_agent_daemon::{
     MAX_FRAME_PAYLOAD_BYTES,
 };
 use recursive_agent_policy::{
-    ActorPrincipalV1, DurablePermitStore, EffectScopeV1, PermitBindingV1, PermitBudgetV1,
+    ActorPrincipalV1, DurablePermitStore, EffectScopeV1, OperatorApprovalVerifierV1,
+    PermitApprovalRequestV1, PermitBindingV1, PermitBudgetV1,
 };
 use recursive_agent_runner::{
     Clock, RuntimeDependencies, RuntimeLedgerDependencyV1, RuntimePolicyDependencyV1,
@@ -295,6 +296,108 @@ fn daemon_consumes_and_records_external_permit_receipts_over_ipc() -> TestResult
         recorded["outcome_artifact"]["reported"]["state"],
         "outcome_ambiguous"
     );
+    Ok(())
+}
+
+#[test]
+fn daemon_issues_approved_permit_then_consumes_and_records_outcome_over_ipc() -> TestResult {
+    let tmp = tempfile::tempdir()?;
+    let runtime_root = tmp.path().join("approved-permit-root");
+    std::fs::create_dir(&runtime_root)?;
+    let call = ToolCallSpecV1 {
+        tool: "echo".into(),
+        args: serde_json::json!({"text": "approved-permit"}),
+        frozen_clock: None,
+    };
+    let approval_request = PermitApprovalRequestV1 {
+        call: call.clone(),
+        requested_validity_ms: 300_000,
+    };
+    let verifier = OperatorApprovalVerifierV1::from_key([7_u8; 32])?;
+    let approval = verifier.issue_witness(&approval_request, "operator-ui:case-1")?;
+    let service = native_service(&runtime_root)?.with_operator_approval_verifier(verifier.clone());
+    let (listener, socket_path) = bind_private_socket(tmp.path(), "approved-permit.sock")?;
+    let server_thread = std::thread::spawn(move || {
+        let _ = serve(listener, Arc::new(service), 4);
+    });
+    let mut stream = connect_with_retry(&socket_path, &server_thread)?;
+
+    // A signed witness binds the exact request. Reusing it for changed call
+    // material must fail before the policy owner creates durable state.
+    let mut changed_request = approval_request.clone();
+    changed_request.call.args = serde_json::json!({"text": "tampered"});
+    let tampered = serde_json::json!({
+        "schema": IPC_REQUEST_SCHEMA_V1,
+        "protocol_version": IPC_PROTOCOL_VERSION_V1,
+        "request_id": "permit-issue-tampered",
+        "request": {"kind": "permit_issue", "request": changed_request, "approval": approval},
+    });
+    stream.write_all(&frame(&serde_json::to_vec(&tampered)?))?;
+    stream.flush()?;
+    let rejected = read_response(&mut stream)?;
+    assert_eq!(rejected["request_id"], "permit-issue-tampered");
+    assert_eq!(rejected["error"]["code"], "runtime_error");
+
+    let approval = verifier.issue_witness(&approval_request, "operator-ui:case-2")?;
+    let issue = serde_json::json!({
+        "schema": IPC_REQUEST_SCHEMA_V1,
+        "protocol_version": IPC_PROTOCOL_VERSION_V1,
+        "request_id": "permit-issue",
+        "request": {"kind": "permit_issue", "request": approval_request, "approval": approval},
+    });
+    stream.write_all(&frame(&serde_json::to_vec(&issue)?))?;
+    stream.flush()?;
+    let issued = read_response(&mut stream)?;
+    assert_eq!(issued["request_id"], "permit-issue");
+    assert_eq!(issued["issuance_evidence"]["state"]["state"], "issued");
+    assert!(issued["permit_id"].as_str().is_some());
+
+    // Issuance is one-shot: an exact approval replay cannot mint/re-return a permit.
+    let replay = serde_json::json!({
+        "schema": IPC_REQUEST_SCHEMA_V1,
+        "protocol_version": IPC_PROTOCOL_VERSION_V1,
+        "request_id": "permit-issue-replay",
+        "request": {"kind": "permit_issue", "request": approval_request, "approval": approval},
+    });
+    stream.write_all(&frame(&serde_json::to_vec(&replay)?))?;
+    stream.flush()?;
+    let replayed = read_response(&mut stream)?;
+    assert_eq!(replayed["error"]["code"], "runtime_error");
+
+    let consume = serde_json::json!({
+        "schema": IPC_REQUEST_SCHEMA_V1,
+        "protocol_version": IPC_PROTOCOL_VERSION_V1,
+        "request_id": "permit-consume-approved",
+        "request": {"kind": "permit_consume", "permit_id": issued["permit_id"], "binding": issued["binding"], "call": call},
+    });
+    stream.write_all(&frame(&serde_json::to_vec(&consume)?))?;
+    stream.flush()?;
+    let consumed = read_response(&mut stream)?;
+    assert_eq!(consumed["evidence"]["state"]["state"], "consumed");
+    let outcome = serde_json::json!({
+        "schema": IPC_REQUEST_SCHEMA_V1,
+        "protocol_version": IPC_PROTOCOL_VERSION_V1,
+        "request_id": "permit-outcome-approved",
+        "request": {"kind": "permit_outcome_record", "permit_id": consumed["permit_id"], "preflight_receipt_digest": consumed["receipt_artifact"]["receipt_digest"], "reported": {"state": "outcome_ambiguous", "duration_ms": 7, "error_type": "transport_lost"}},
+    });
+    stream.write_all(&frame(&serde_json::to_vec(&outcome)?))?;
+    stream.flush()?;
+    let recorded = read_response(&mut stream)?;
+    assert_eq!(
+        recorded["outcome_artifact"]["reported"]["state"],
+        "outcome_ambiguous"
+    );
+    // Ambiguity is terminal: a later outcome cannot overwrite the quarantine
+    // record; a future operator reconciliation is a separate authority path.
+    let overwrite = serde_json::json!({
+        "schema": IPC_REQUEST_SCHEMA_V1,
+        "protocol_version": IPC_PROTOCOL_VERSION_V1,
+        "request_id": "permit-outcome-overwrite",
+        "request": {"kind": "permit_outcome_record", "permit_id": consumed["permit_id"], "preflight_receipt_digest": consumed["receipt_artifact"]["receipt_digest"], "reported": {"state": "succeeded", "duration_ms": 8, "error_type": null}},
+    });
+    stream.write_all(&frame(&serde_json::to_vec(&overwrite)?))?;
+    stream.flush()?;
+    assert_eq!(read_response(&mut stream)?["error"]["code"], "runtime_error");
     Ok(())
 }
 
