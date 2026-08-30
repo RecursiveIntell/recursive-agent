@@ -1269,6 +1269,7 @@ dependencies = [
 name = "recursive-agent-policy"
 version = "0.1.0"
 dependencies = [
+ "blake3",
  "chrono",
  "proptest",
  "recursive-agent-contracts",
