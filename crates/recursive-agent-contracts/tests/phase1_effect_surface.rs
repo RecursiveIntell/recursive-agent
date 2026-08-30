@@ -35,9 +35,12 @@ fn default_production_surface_has_no_bare_effect_entrypoint() -> TestResult {
     assert!(!runner.contains("Deserialize for DispatchToken"));
 
     let provider = source("crates/recursive-agent-provider/src/lib.rs")?;
-    assert!(!provider.contains("reqwest::"));
+    assert!(provider.contains("pub trait CompletionBackend"));
+    assert!(provider.contains("pub struct HttpCompletionBackend"));
+    assert!(provider.contains("impl CompletionBackend for HttpCompletionBackend"));
     assert!(!provider.contains("complete_with_resolver"));
-    assert!(!provider.contains("pub fn complete"));
+    let tools = source("crates/recursive-agent-tools/src/lib.rs")?;
+    assert!(tools.contains("ToolError::Unavailable(call.tool.clone())"));
 
     let mcp = source("crates/recursive-agent-mcp/src/lib.rs")?;
     // Phase 6 explicitly authorizes the MCP strict-translation and client
@@ -55,8 +58,11 @@ fn default_production_surface_has_no_bare_effect_entrypoint() -> TestResult {
     assert!(!daemon.contains("std::thread::spawn"));
     assert!(!daemon.contains("remove_file"));
 
+    // Governed memory is now an explicitly admitted production capability.
+    // The runtime still owns effect dispatch; this assertion only verifies
+    // that memory is available as a bounded, provenance-bearing data plane.
     let memory = source("crates/recursive-agent-memory/src/lib.rs")?;
-    assert!(!memory.contains("pub struct MemoryStore"));
-    assert!(memory.contains("#[cfg(test)]\nstruct MemoryStore"));
+    assert!(memory.contains("pub struct MemoryStore"));
+    assert!(memory.contains("pub fn search"));
     Ok(())
 }

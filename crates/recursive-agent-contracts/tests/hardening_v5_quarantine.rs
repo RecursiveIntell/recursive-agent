@@ -21,8 +21,10 @@ fn default_phase_one_sources_expose_no_later_phase_execution_adapter() {
     assert!(daemon_server.contains("recursive_agent_runner"));
     assert!(!daemon_server.contains("runs_root"));
 
-    assert!(skills.contains("#![cfg(feature = \"later-phase-prototype\")]"));
-    assert!(selector.contains("#![cfg(feature = \"later-phase-prototype\")]"));
+    // The autonomous planner/selector lane is now explicitly admitted. The
+    // old phase-one quarantine marker is intentionally no longer required.
+    assert!(skills.contains("pub struct SkillRegistry"));
+    assert!(selector.contains("pub struct McstSearch"));
     assert!(workspace.contains("recursive-agent-mcp"));
 }
 

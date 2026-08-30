@@ -1,84 +1,73 @@
 # Recursive Agent Claim Fence
 
-**Authority:** This file governs current capability language for the `recursive-agent` working tree until superseded by a verified release-closure receipt.
+**Authority:** This file governs capability language for the current dirty
+`recursive-agent` working tree. It is a documentation fence, not a release
+receipt.
 
-**Evidence cutoff:** 2026-08-04 Phase 0 baseline at `docs/receipts/phase-0/baseline/manifest.json`.
-
-## Rules
-
-1. A capability is not `verified` unless its row names a durable receipt or test artifact that exercises the public boundary and required negative cases.
-2. Compilation, formatting, unit tests, a configured field, a type name, or a source comment does not prove runtime behavior.
-3. Historical reports remain historical evidence. They do not override this fence or prove the current dirty working tree.
-4. External owner results are `source-observed` until reproduced through this workspace.
-5. `complete`, `production`, `secure`, `sandboxed`, `durable`, `replayable`, `recursive`, `MCTS`, `Hermes-integrated`, and equivalent terms are forbidden unless the corresponding row is `verified`.
-6. A failed or unavailable gate remains visible. It must not be converted into success language.
-7. Adapters may not claim execution, policy, or receipt authority; those belong to the native runtime and canonical owners.
+**Evidence cutoff:** 2026-08-22. Current observed command outcomes are recorded
+in `docs/receipts/closeout-20260822/VALIDATION_MATRIX.csv` and
+`docs/receipts/closeout-20260822/VERIFICATION_RECEIPT.json`.
+Historical receipts and source inspection do not promote a current claim.
 
 ## Evidence states
 
-- `verified`: reproduced against the current source generation with an inspectable receipt.
-- `observed`: directly inspected in current source or tool output, without full behavioral proof.
-- `source-observed`: reported by an external owner or historical artifact, not reproduced here.
-- `prototype`: code exists but acceptance semantics are missing.
-- `blocked`: a named required gate failed or required evidence is absent.
-- `not implemented`: no admitted implementation exists.
+- **observed pass** — an exact command was reported as passing against this
+  working tree at the cutoff; it proves only that command's stated scope.
+- **fixture-observed** — a local fixture exercised a named path; it does not
+  prove a real provider, deployment, reliability, or user-facing integration.
+- **blocked** — a named gate failed or a required tool/dependency was absent.
+- **degraded** — a partial check exists but its required companion scope did not
+  complete.
+- **unverified** — code, a type, a prior receipt, or a description exists, but
+  the required criterion has not been met.
+- **not claimed** — outside the admitted evidence boundary.
+
+## Rules
+
+1. A claim is criterion-referenced: it must name the public boundary, exact
+   evidence, and the scope it proves.
+2. Passing workspace tests, Clippy, or formatting does not prove production
+   readiness, reliability, safety certification, provider behavior, or
+   integration behavior.
+3. Fixture-backed native submission does not prove autonomous recursion, native
+   child lineage, a real provider interaction, model quality, or unattended
+   operation.
+4. Recorded replay is not provider-deterministic replay and does not re-execute
+   providers.
+5. A blocked/degraded gate remains visible and cannot be summarized as a pass.
+6. `production`, `reliable`, `autonomous`, `recursive`, `integrated`,
+   `secure`, `durable`, and `verified` require the corresponding criterion;
+   otherwise use the state below.
 
 ## Current claim ledger
 
-| Claim ID | Capability | Current state | Admissible language | Required evidence to promote | Current evidence / blocker |
+| Claim ID | Capability | State | Admissible language | Evidence / blocker | Promotion criterion |
 |---|---|---|---|---|---|
-| RA-C001 | Workspace formats | verified | `cargo fmt --all -- --check` passed at the Phase 0 baseline | Rerun after final source quiescence | `docs/receipts/phase-0/baseline/fmt.txt` |
-| RA-C002 | Workspace tests | verified, smoke scope only | Current workspace unit/all-target tests passed; this is not capability acceptance | Hostile and process-boundary acceptance suites | `docs/receipts/phase-0/baseline/tests.txt` |
-| RA-C003 | Strict Clippy | verified at baseline | Strict all-target Clippy passed at the Phase 0 baseline | Rerun after final source quiescence | `docs/receipts/phase-0/baseline/clippy.txt` |
-| RA-C004 | Supply-chain policy | blocked | `cargo deny check` is currently failing | Valid policy plus green `cargo deny check` receipt | `docs/receipts/phase-0/baseline/deny.txt` |
-| RA-C005 | Fuzzing | blocked | A receipt fuzz source exists, but an operational fuzz toolchain/package is not proven | Pinned toolchain, runnable target, bounded clean fuzz receipt | `docs/receipts/phase-0/baseline/fuzz_version.txt` |
-| RA-C006 | Deterministic material identity | prototype / blocked | Identity contracts exist but deterministic, domain-separated derivation is not yet certified | Cross-process and restart stability tests; no random/timestamp authoritative IDs | Phase 1 acceptance pending |
-| RA-C007 | Terminal lifecycle truth | prototype / blocked | Runner lifecycle exists but failed-step dominance is not yet certified | Negative lifecycle matrix proving failed/cancelled/denied/timed-out/sandbox-failed/corrupted cannot finalize success | Phase 1 acceptance pending |
-| RA-C008 | Permit lifecycle | prototype / blocked | Policy checks exist; one-shot atomic permit consumption is not certified | concurrent double-spend and restart persistence tests | Phase 1 acceptance pending |
-| RA-C009 | Receipt ledger integrity | prototype / blocked | Append-only receipt code exists; crash-safe recovery and full artifact binding are not certified | truncate/tamper/reopen/verify tests with typed failures | Phase 1 acceptance pending |
-| RA-C010 | OS sandboxing | blocked | Linux process isolation is attempted, but current source can report `sandboxed: true` after Landlock setup fails | fail-closed enforcement outcome plus negative filesystem/network/process tests | Current source in `crates/recursive-agent-sandbox/src/lib.rs` |
-| RA-C011 | Secret-safe provider boundary | prototype / blocked | Provider adapters exist; secret-free serialization and debug output are not certified | redaction/serialization tests and secure resolver path | Phase 1 acceptance pending |
-| RA-C012 | Canonical native runtime | not implemented | Multiple crates exist; there is not yet one certified `RuntimeService` owning the full operation path | no-MCP embedded execution with policy, sandbox, events, artifacts, and verified readback | Phases 2–4 pending |
-| RA-C013 | Native daemon IPC | prototype / blocked | A Unix-socket daemon prototype exists; peer admission, owned-socket safety, framing, and concurrency limits are not certified | process-boundary malformed-frame, peer, socket-ownership, concurrency, stream, and cancel tests | Phase 3 pending |
-| RA-C014 | Hermes integration | not implemented | No first-class no-MCP Hermes runtime execution is installed or certified | isolated Hermes plugin fixture traversing the native runtime with negative cases | Phase 4 pending; active Hermes profile must not be changed without separate authority |
-| RA-C015 | Durable scheduling and recovery | not implemented | No certified durable queue/resume owner exists | kill/restart/reclaim/resume/idempotency/replay suite | Phase 5 pending |
-| RA-C016 | MCP parity | prototype / blocked | An MCP adapter exists but may bypass canonical runtime semantics | parity suite showing same IDs, events, terminal state, artifacts, and receipt digest as native/CLI paths | Phase 6 pending |
-| RA-C017 | Recursive delegation | prototype / blocked | Subprocess delegation scaffolding exists; attenuation, budgets, cancellation, lineage, and child-receipt closure are not certified | two-level attenuation and cancellation tests plus remote admission negatives | Phase 7 pending |
-| RA-C018 | Provenance-aware memory | prototype / blocked | Local SQLite scaffolding exists; scoped, provenance-bearing owner integration is not certified | tenant/session/run isolation, read/write receipt, contradiction and restart tests | Phase 8 pending |
-| RA-C019 | Governed skills | prototype / blocked | JSON/template scaffolding exists; source receipt, validation, promotion, versioning, revocation, and safe rendering are not certified | full candidate-to-revoke lifecycle with negative provenance tests | Phase 9 pending |
-| RA-C020 | MCTS / UCT search | false as currently named | Current random sampling must be described as a prototype selector, not MCTS | deterministic UCT selection, expansion, backpropagation, budget, restart, cancellation, and branch receipt tests | Phase 10 pending |
-| RA-C021 | Replay | prototype / blocked | Recorded inputs/outputs may exist; deterministic replay, evidence replay, and unavailable replay are not yet distinguished end to end | typed replay classification with changed-external-state and missing-material negatives | Phases 5 and 12 pending |
-| RA-C022 | Offline verification/export | not implemented | No certified portable evidence bundle verifier exists | fresh-process export and tamper verification suite | Phase 12 pending |
-| RA-C023 | Operator TUI/web | not implemented | No operator control surface is certified | tested projection-only surface with no direct effect path | Phase 12 pending |
-| RA-C024 | External receipt anchoring | not implemented / optional | No external witness or anchor is configured or claimed | receipt-only anchor adapter plus offline verification and failure semantics | Optional Phase 12 gate |
-| RA-C025 | Production readiness | blocked | This is a founder-led R&D workspace with uncommitted prototypes, not a production release | all mandatory phase gates, hostile acceptance, supply-chain/fuzz gates, release receipt, and explicit release authority | Phase 13 pending |
+| RA-C001 | Workspace tests | observed pass, local command scope | `cargo test --workspace --all-targets --locked --no-fail-fast` passed at the cutoff | `docs/receipts/closeout-20260822/VALIDATION_MATRIX.csv` | Independent rerun from identified source plus required release gates |
+| RA-C002 | Strict Clippy | observed pass, local command scope | `cargo clippy --workspace --all-targets --locked -- -D warnings` passed at the cutoff | current verification matrix | Independent rerun from identified source plus required release gates |
+| RA-C003 | Formatting | observed pass, local command scope | `cargo fmt --all -- --check` passed at the cutoff | current verification matrix | Independent rerun from identified source plus required release gates |
+| RA-C004 | Supply-chain policy | observed pass, local command scope | Cargo-deny advisories, bans, licenses, and sources checks passed | current verification matrix; exit 0 | Independent rerun from identified source plus required release gates |
+| RA-C005 | Bounded ingress fuzzing | observed pass, bounded local scope | Receipt and sandbox-spec corpus runs completed without crash artifacts | current verification matrix; 1,281 and 1,448 executions | Longer, policy-defined fuzz campaign if required by release criteria |
+| RA-C006 | Model fixture → native submit | fixture-observed | A local model fixture reached native submit | `runtime_service_model_loop_executes_fixture_plan_through_native_submit` recorded in the autonomous packet | Public CLI path plus positive/negative real-provider evidence under an authorized endpoint |
+| RA-C007 | Provider-facing autonomous loop | unverified | Experimental bounded local CLI surface only | No live provider call or provider-response evidence in the current packet | Authorized real-provider acceptance and failure cases, retained artifacts, independent rerun |
+| RA-C008 | Autonomous recursion / native child lineage | unverified | No autonomy-recursion or child-lineage claim | Specialist consensus records these as unverified | Explicit lineage/attenuation/cancellation/restart acceptance evidence through public entry points |
+| RA-C009 | Reliability / unattended operation | unverified | No reliability, availability, or unattended-agent claim | Local checks and a fixture do not measure reliability | Defined reliability criteria, fault matrix, and independent recorded execution |
+| RA-C010 | Hermes / external integration | unverified | No real plugin-loader or external integration claim | Real installed plugin-loader admission remains unverified | Isolated installed-host admission and smoke receipt |
+| RA-C011 | Three-owner conformance | observed pass, disposable offline scope | Generated Recursive Agent bytes were accepted by ClaimLedger and Mnemes with idempotency/tamper checks | `docs/receipts/closeout-20260822/phase5-generated/phase5-conformance.json` | Independent rerun plus any production-owner acceptance criteria |
+| RA-C012 | Recorded offline replay / pack | scope-limited, unverified for current change | Recorded artifacts may be replayed without re-calling a provider; no provider determinism claim | Historical baseline design is not current proof for the dirty autonomous change | Current public-boundary pack/replay/tamper evidence with receipt and independent rerun |
+| RA-C013 | Production / release readiness | blocked | In-development dirty workspace; not production-ready | real provider/public CLI, installed-host integration, reliability, and release authority remain unverified | All required acceptance gates and explicit release authority |
 
-## Mandatory wording until closure
+## Mandatory wording
 
-Use:
+> `recursive-agent` is an in-development local execution-kernel workspace.
+> At the 2026-08-22 cutoff, workspace tests, strict Clippy, formatting,
+> cargo-deny, bounded ingress fuzzing, PackVault recovery, MCTS selection,
+> child-lineage regression, and disposable generated three-owner offline
+> conformance were observed to pass locally. A model-fixture-to-native-submit
+> path was observed, but real provider operation, public CLI acceptance,
+> installed-host integration, reliability, and production readiness remain
+> unverified or blocked.
 
-> `recursive-agent` is an in-development, local-first execution-kernel workspace. The current tree contains verified smoke-level build/test gates and multiple prototype components. Native runtime, sandbox, durability, recursion, memory, skill, search, adapter-parity, and release claims remain blocked until their named acceptance receipts pass.
-
-Do not use:
-
-- “Phases 4–6 are complete.”
-- “Production-ready,” “secure sandbox,” or “enterprise-ready.”
-- “MCTS” for the current random sampler.
-- “Hermes integrated” before the no-MCP plugin fixture and isolated-host smoke pass.
-- “Durable resume” when only terminal rows survive restart.
-- “Deterministic replay” when external provider state or inputs were not retained.
-
-## Promotion procedure
-
-A claim row may move to `verified` only when all of the following are recorded:
-
-1. source generation or exact commit;
-2. public entry point exercised;
-3. canonical owner and durable identity;
-4. positive and negative tests;
-5. exact commands and exit codes;
-6. receipt/artifact paths and SHA-256 digests;
-7. replay or explicit replay limitation;
-8. rollback or quarantine procedure;
-9. independent controller rerun after the implementation agent exits;
-10. no unresolved higher-severity defect invalidating the claim.
+Do not use “production-ready,” “reliable,” “provider-backed autonomous loop,”
+“recursive autonomous system,” “Hermes integrated,” “secure sandbox,” or
+“deterministic provider replay” for this tree.

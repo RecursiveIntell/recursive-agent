@@ -17,7 +17,12 @@ allow = [
     "CC0-1.0",
 ]
 confidence-threshold = 0.8
-exceptions = []
+# Narrowly admit the current reqwest TLS root-store dependency. This is a
+# package/version exception, not a global license-policy widening.
+[[licenses.exceptions]]
+allow = ["CDLA-Permissive-2.0"]
+name = "webpki-roots"
+version = "1.0.9"
 
 [licenses.private]
 ignore = false

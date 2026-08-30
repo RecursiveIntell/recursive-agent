@@ -1,0 +1,23 @@
+schema: OwnerMapV1
+version: 1
+source_root: /home/sikmindz/Coding/recursive-agent
+owners:
+  - semantic_surface: run lifecycle and terminal evidence
+    owner: recursive-agent-runner::RuntimeService + recursive-agent-ledger
+    source_paths:
+      - crates/recursive-agent-runner/src/runtime.rs
+      - crates/recursive-agent-ledger/src/lib.rs
+      - crates/recursive-agent-daemon/src/server.rs
+    adapter_paths:
+      - integrations/hermes-native/client.py
+      - integrations/hermes-native/__init__.py
+    rule: adapter may transport/project daemon facts but may not derive terminal truth
+  - semantic_surface: Hermes-native result presentation
+    owner: integrations/hermes-native
+    source_paths:
+      - integrations/hermes-native/client.py
+      - integrations/hermes-native/__init__.py
+    rule: preserve daemon-derived status, verification, and typed failure details without claiming availability when a run actually failed
+forbidden_owners:
+  - crates/recursive-agent-runner/src/runtime.rs
+  - integrations/hermes-native/schema.py

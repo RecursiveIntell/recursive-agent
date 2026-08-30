@@ -1,0 +1,32 @@
+[package]
+name = "recursive-agent-fuzz"
+version = "0.0.0"
+publish = false
+edition = "2021"
+
+[package.metadata]
+cargo-fuzz = true
+
+[dependencies]
+libfuzzer-sys = "0.4"
+serde_json = "1"
+recursive-agent-contracts = { path = "../crates/recursive-agent-contracts" }
+recursive-agent-sandbox = { path = "../crates/recursive-agent-sandbox" }
+
+[[bin]]
+name = "receipt"
+path = "fuzz_targets/receipt.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "sandbox_spec"
+path = "fuzz_targets/sandbox_spec.rs"
+test = false
+doc = false
+bench = false
+
+# Fuzzing is an intentionally isolated nightly/libFuzzer workspace. It must not
+# be captured by the stable production workspace.
+[workspace]

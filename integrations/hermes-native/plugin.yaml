@@ -3,3 +3,5 @@ version: 1.0.0
 description: "Translate one bounded recursive-agent action over authenticated native IPC. No MCP, no Hermes core edits. Submits a fixed native V1 operation to a local recursive-agent daemon and returns daemon-derived terminal status plus strict verification facts; the plugin owns no evidence."
 author: RecursiveIntell
 kind: standalone
+provides_tools:
+  - recursive_agent_execute

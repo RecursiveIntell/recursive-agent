@@ -2,8 +2,10 @@
 
 Every field returned to the plugin comes from the runtime's framed response —
 this module never synthesizes evidence. If the socket is absent, the version
-probe fails, or a response is malformed, the client raises a typed error and
-the tool reports ``unavailable``.
+probe fails, or a response is malformed, the client raises a transport/error
+boundary exception and the tool reports ``unavailable``. If the daemon answers
+with terminal failure evidence, ``DaemonRunFailure`` preserves those facts so
+the tool does not mislabel a real failed run as unavailable.
 """
 
 from __future__ import annotations
@@ -21,7 +23,35 @@ class DaemonClientError(Exception):
     """Any failure to reach, authenticate, or parse the daemon response."""
 
 
+class DaemonRunFailure(DaemonClientError):
+    """A daemon-confirmed terminal run or strict-verification failure.
+
+    Transport failures remain ``DaemonClientError`` and are reported as
+    unavailable by the plugin. This subtype is different: the daemon answered
+    and supplied authoritative terminal/verification facts, so callers must
+    not collapse it into an availability claim.
+    """
+
+    def __init__(
+        self,
+        *,
+        code: str,
+        message: str,
+        run_id: str,
+        run_dir: str,
+        status: dict,
+        verification: dict,
+    ) -> None:
+        super().__init__(message)
+        self.code = code
+        self.run_id = run_id
+        self.run_dir = run_dir
+        self.status = status
+        self.verification = verification
+
+
 def _frame(payload: bytes) -> bytes:
+    _frame_len_check(len(payload))
     return struct.pack(">I", len(payload)) + payload
 
 
@@ -73,10 +103,15 @@ def check_socket_available(socket_path: str) -> bool:
         try:
             conn.settimeout(1.0)
             conn.connect(socket_path)
-            return True
+            response = _request(conn, "plugin-ping-1", {"kind": "ping"})
+            return (
+                response.get("pong") is True
+                and response.get("protocol_version") == PROTOCOL_VERSION
+                and response.get("schema") == SCHEMA
+            )
         finally:
             conn.close()
-    except (OSError, ConnectionError):
+    except (OSError, ConnectionError, DaemonClientError):
         return False
 
 
@@ -126,6 +161,20 @@ def verify_run(socket_path: str, run_id: str) -> dict:
         raise DaemonClientError(f"cannot reach daemon: {error}") from error
 
 
+def cancel_run(socket_path: str, run_id: str) -> dict:
+    """Request cancellation; the daemon remains the sole authority."""
+    try:
+        conn = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
+        try:
+            conn.settimeout(5.0)
+            conn.connect(socket_path)
+            return _request(conn, "plugin-cancel-1", {"kind": "cancel", "run_id": run_id})
+        finally:
+            conn.close()
+    except (OSError, ConnectionError) as error:
+        raise DaemonClientError(f"cannot reach daemon: {error}") from error
+
+
 def submit_and_status(socket_path: str, envelope: dict) -> dict:
     """Submit, observe terminal status, then require daemon strict verification.
 
@@ -141,17 +190,46 @@ def submit_and_status(socket_path: str, envelope: dict) -> dict:
     if not isinstance(run_dir, str) or not run_dir:
         raise DaemonClientError("submit did not return a run directory")
     status = status_of_run(socket_path, run_id)
-    state = status.get("status", {}).get("state", "unknown")
+    status_payload = status.get("status")
+    if not isinstance(status_payload, dict):
+        raise DaemonClientError("status response missing status object")
+    state = status_payload.get("state", "unknown")
     if state != "terminal":
         raise DaemonClientError(f"daemon did not report terminal state: {state}")
     verification_response = verify_run(socket_path, run_id)
     if verification_response.get("run_id") != run_id:
         raise DaemonClientError("verification response run id mismatch")
+    response_error = verification_response.get("error")
+    if isinstance(response_error, dict):
+        message = response_error.get("message")
+        if not isinstance(message, str) or not message:
+            message = "daemon verification request failed"
+        raise DaemonRunFailure(
+            code="strict_verification_error",
+            message=message,
+            run_id=run_id,
+            run_dir=run_dir,
+            status=status,
+            verification=verification_response,
+        )
     verification = verification_response.get("verification")
     if not isinstance(verification, dict):
         raise DaemonClientError("verification response missing verification object")
     if verification.get("ok") is not True or verification.get("current_strict_success") is not True:
-        raise DaemonClientError("daemon strict verification did not succeed")
+        terminal_state = status_payload.get("terminal_state")
+        code = (
+            "terminal_run_failed"
+            if terminal_state not in (None, "succeeded")
+            else "strict_verification_failed"
+        )
+        raise DaemonRunFailure(
+            code=code,
+            message="daemon terminal evidence did not satisfy strict success",
+            run_id=run_id,
+            run_dir=run_dir,
+            status=status,
+            verification=verification_response,
+        )
     if not isinstance(verification.get("length"), int) or verification["length"] < 1:
         raise DaemonClientError("verification response has invalid chain length")
     if not isinstance(verification.get("final_head"), str) or not verification["final_head"]:

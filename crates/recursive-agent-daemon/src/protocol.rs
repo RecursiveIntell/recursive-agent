@@ -3,7 +3,10 @@
 //! Framing is deliberately separate from payload decoding so an untrusted
 //! length prefix is admitted before any payload allocation or JSON parsing.
 
-use recursive_agent_contracts::{parse_strict_json_value, OperationEnvelopeV1, StrictJsonError};
+use recursive_agent_contracts::{
+    parse_strict_json_value, CurrentPermitId, OperationEnvelopeV1, StrictJsonError, ToolCallSpecV1,
+};
+use recursive_agent_policy::{PermitBindingV1, ReportedEffectOutcomeV1};
 use serde::{Deserialize, Serialize};
 use std::collections::BTreeSet;
 
@@ -109,6 +112,8 @@ pub struct IpcRequestEnvelopeV1 {
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(tag = "kind", rename_all = "snake_case", deny_unknown_fields)]
 pub enum IpcRequestV1 {
+    /// Version/availability probe that performs no runtime read or effect.
+    Ping,
     /// Read ledger-derived status for an authoritative run identifier.
     Status {
         /// Authoritative run identifier.
@@ -121,10 +126,40 @@ pub enum IpcRequestV1 {
         /// Authoritative run identifier.
         run_id: String,
     },
+    /// Request cancellation through the canonical runtime owner.
+    Cancel {
+        /// Authoritative run identifier.
+        run_id: String,
+    },
     /// Submit one canonical native V1 operation for execution.
     Submit {
         /// Complete canonical operation envelope.
         operation: Box<OperationEnvelopeV1>,
+    },
+    /// Consume one pre-issued policy-owned effect permit for the exact call.
+    ///
+    /// The daemon recomputes canonical action and argument digests from
+    /// `call` before it asks the `DurablePermitStore` to consume the permit.
+    /// The client cannot supply a policy decision, a consumed state, or receipt
+    /// evidence.
+    PermitConsume {
+        /// Canonical pre-issued effect permit.
+        permit_id: CurrentPermitId,
+        /// Complete binding previously issued by the policy owner. The daemon
+        /// reconstructs action and argument digests from `call` before use.
+        binding: Box<PermitBindingV1>,
+        /// Exact typed call that Ares is about to dispatch after authorization.
+        call: ToolCallSpecV1,
+    },
+    /// Record the bounded executor-reported outcome for one consumed preflight.
+    PermitOutcomeRecord {
+        /// Permit consumed by the paired preflight RPC.
+        permit_id: CurrentPermitId,
+        /// Digest returned by the paired daemon-owned preflight receipt.
+        preflight_receipt_digest: recursive_agent_contracts::ContentDigest,
+        /// Bounded result reported after Ares observes a local tool return,
+        /// local error, or an ambiguous outcome.
+        reported: ReportedEffectOutcomeV1,
     },
 }
 

@@ -1,0 +1,52 @@
+{
+  "schema": "RecursiveAgentCurrentVerificationReceiptV1",
+  "version": 1,
+  "run_id": "closeout-20260822",
+  "recorded_at_utc": "2026-08-22T10:47:00Z",
+  "source_identity": {
+    "root": "/home/sikmindz/Coding/recursive-agent",
+    "branch": "main",
+    "head": "e310cf9ca116855d3a4aa8f39faa267705a97865",
+    "porcelain_entry_count": 45,
+    "tracked_diff_paths_observed": 19,
+    "scope_note": "Current worktree is dirty; unrelated dirty paths were not reset, deleted, or normalized."
+  },
+  "objective": "Reconcile and independently verify the locally actionable recursive-agent remediation without promoting external or release claims.",
+  "verified_gates": [
+    {"id": "C-002", "command": "cargo test --workspace --all-targets --locked --no-fail-fast", "status": "PASS"},
+    {"id": "C-003", "command": "cargo clippy --workspace --all-targets --locked -- -D warnings", "status": "PASS"},
+    {"id": "C-004", "command": "cargo fmt --all -- --check", "status": "PASS"},
+    {"id": "C-005", "command": "cargo deny check advisories bans licenses sources", "status": "PASS"},
+    {"id": "C-006", "command": "cargo fuzz --version; cargo fuzz list", "status": "PASS", "detail": "cargo-fuzz 0.13.2; receipt and sandbox_spec targets"},
+    {"id": "C-007", "command": "cargo fuzz run receipt --sanitizer none -- -max_total_time=10 -runs=1000 -print_final_stats=1", "status": "PASS", "executions": 1281},
+    {"id": "C-008", "command": "cargo fuzz run sandbox_spec --sanitizer none -- -max_total_time=10 -runs=1000 -print_final_stats=1", "status": "PASS", "executions": 1448},
+    {"id": "C-009", "command": "python3 scripts/phase5_offline_conformance.py --root docs/receipts/closeout-20260822/phase5-generated-final", "status": "PASS", "receipt": "docs/receipts/closeout-20260822/phase5-generated-final/phase5-conformance.json", "receipt_sha256": "44b79db17d2fc8d0bda31b34744a976d751d877cdedd0a699cad609b47d4c996"},
+    {"id": "C-010", "command": "cargo test -p recursive-agent-ledger --test pack_vault_recovery", "status": "PASS", "passed": 14},
+    {"id": "C-011", "command": "cargo test -p recursive-agent-runner autonomous::tests::mcts_selection_executes_only_the_highest_scored_intent -- --exact", "status": "PASS", "passed": 1},
+    {"id": "C-012", "command": "cargo test -p recursive-agent-runner autonomous::tests::recursive_child_is_lineaged_and_restart_verifiable -- --exact", "status": "PASS", "passed": 1},
+    {"id": "C-017", "command": "python3 -m pytest -q integrations/hermes-native/tests", "status": "PASS", "passed": 13},
+    {"id": "C-018", "command": "cargo test -p recursive-agent-daemon --test ipc_runtime daemon_returns_correlated_verify_error_for_tampered_run -- --exact", "status": "PASS", "passed": 1}
+  ],
+  "not_run_or_blocked": [
+    {"id": "C-013", "status": "NOT_RUN", "claim": "real provider/public CLI acceptance"},
+    {"id": "C-014", "status": "NOT_RUN", "claim": "installed-host Hermes integration"},
+    {"id": "C-015", "status": "NOT_RUN", "claim": "reliability/unattended operation"},
+    {"id": "C-016", "status": "BLOCKED", "claim": "production/release readiness", "reason": "dirty development worktree plus C-013 through C-015 open"}
+  ],
+  "changed_in_this_closeout": [
+    "docs/receipts/closeout-20260822/VALIDATION_MATRIX.csv",
+    "docs/receipts/closeout-20260822/VERIFICATION_RECEIPT.json",
+    "docs/receipts/closeout-20260822/CURRENT_VERIFICATION.md",
+    "docs/receipts/closeout-20260822/phase5-generated/",
+    "docs/receipts/closeout-20260822/phase5-generated-final/",
+    "docs/claims.md",
+    "integrations/hermes-native/client.py",
+    "integrations/hermes-native/__init__.py",
+    "integrations/hermes-native/tests/test_registration.py",
+    "crates/recursive-agent-daemon/src/server.rs",
+    "crates/recursive-agent-daemon/tests/ipc_runtime.rs",
+    "docs/receipts/closeout-20260822/hermes-adapter-failure-surfacing/"
+  ],
+  "rollback": "Remove only the additive closeout-20260822 receipt directory if its evidence is no longer wanted. Do not reset the dirty worktree or delete prior receipts without explicit authorization.",
+  "completion": "locally_verified_including_native_adapter_failure_surfacing_with_external_and_release_claims_unverified"
+}

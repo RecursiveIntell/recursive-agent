@@ -8,7 +8,7 @@ use llm_tool_runtime::{
 use recursive_agent_contracts::{
     content_digest, derive_child_operation_id, derive_child_operation_proposal_digest,
     derive_operation_id, derive_step_id, parse_operation_envelope_bytes, ChildOperationEnvelopeV2,
-    ChildOperationProposalV2, ChildRunAuthorityV1, ContractError, CurrentRunId,
+    ChildOperationProposalV2, ChildRunAuthorityV1, ContractError, CurrentPermitId, CurrentRunId,
     OperationEnvelopeV1, ReceiptKindV1, RunTerminalStateV1, RuntimeEventV1, ToolCallSpecV1,
 };
 use recursive_agent_ledger::{
@@ -17,8 +17,9 @@ use recursive_agent_ledger::{
     verify_directory_bound, ChainVerification, ChildRunLinkV1, LedgerError, RunPaths,
 };
 use recursive_agent_policy::{
-    ActorPrincipalV1, ChildRunCeilingV1, FamilyAuthorityStore, FamilyChildRequestV1,
-    FamilyRootGrantV1, PermitBudgetV1, PermitEvidenceV1,
+    ActorPrincipalV1, ChildRunCeilingV1, DurablePermitStore, FamilyAuthorityStore,
+    FamilyChildRequestV1, FamilyRootGrantV1, PermitBudgetV1, PermitEvidenceV1,
+    PermitOutcomeReceiptV1, PermitPreflightReceiptV1, PolicyError, ReportedEffectOutcomeV1,
 };
 use recursive_agent_provider::{CompletionBackend, ProviderSpecV1};
 use stack_ids::{AttemptId, TraceCtx, TrialId};
@@ -117,6 +118,12 @@ pub enum RuntimeCancelResultV1 {
 /// Typed failures at the canonical runtime-service boundary.
 #[derive(Debug, Error)]
 pub enum RuntimeServiceError {
+    /// Native permit root could not be opened.
+    #[error("io: {0}")]
+    Io(#[from] std::io::Error),
+    /// Policy-owned permit admission, consumption, or outcome recording failed.
+    #[error("policy: {0}")]
+    Policy(#[from] PolicyError),
     /// Native operation validation or identity derivation failed before effects.
     #[error("operation contract: {0}")]
     Contract(#[from] ContractError),
@@ -412,6 +419,49 @@ impl RuntimeService {
         *guard = Some(store);
         drop(guard);
         Ok(self)
+    }
+
+    /// Atomically consume one pre-issued permit and persist daemon-owned
+    /// preflight evidence. The exact action and argument digests are rebuilt
+    /// from `call`; caller-provided digest fields cannot authorize a different
+    /// effect.
+    pub fn consume_external_permit(
+        &self,
+        permit_id: &CurrentPermitId,
+        binding: &recursive_agent_policy::PermitBindingV1,
+        call: &ToolCallSpecV1,
+    ) -> Result<PermitPreflightReceiptV1, RuntimeServiceError> {
+        let mut dispatch = binding.clone();
+        dispatch.tool = call.tool.clone();
+        dispatch.action_digest = content_digest(call)?;
+        dispatch.args_digest = content_digest(&call.args)?;
+        let root = std::fs::File::open(self.dependencies.output_root())?;
+        let permits = DurablePermitStore::from_dir_fd(&root)?;
+        Ok(
+            permits.consume_with_preflight(
+                permit_id,
+                &dispatch,
+                self.dependencies.clock().now(),
+            )?,
+        )
+    }
+
+    /// Persist a bounded executor-reported outcome bound to a consumed
+    /// preflight receipt. A reported success is not external confirmation.
+    pub fn record_external_permit_outcome(
+        &self,
+        permit_id: &CurrentPermitId,
+        preflight_receipt_digest: &recursive_agent_contracts::ContentDigest,
+        reported: ReportedEffectOutcomeV1,
+    ) -> Result<PermitOutcomeReceiptV1, RuntimeServiceError> {
+        let root = std::fs::File::open(self.dependencies.output_root())?;
+        let permits = DurablePermitStore::from_dir_fd(&root)?;
+        Ok(permits.record_reported_outcome(
+            permit_id,
+            preflight_receipt_digest,
+            reported,
+            self.dependencies.clock().now(),
+        )?)
     }
 
     /// Execute a direct V1 root operation's own declared steps, then retain

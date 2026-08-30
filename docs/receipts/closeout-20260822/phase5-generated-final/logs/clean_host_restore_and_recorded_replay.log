@@ -1,0 +1,16 @@
+$ cargo test -p recursive-agent-cli --test run_pack_clean_process copied_pack_verifies_and_replays_from_a_clean_root_after_source_removal -- --exact
+# cwd: /home/sikmindz/Coding/recursive-agent
+# exit: 0
+
+[stdout]
+
+running 1 test
+test copied_pack_verifies_and_replays_from_a_clean_root_after_source_removal ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.30s
+
+
+[stderr]
+   Compiling recursive-agent-cli v0.1.0 (/home/sikmindz/Coding/recursive-agent/crates/recursive-agent-cli)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 2.25s
+     Running tests/run_pack_clean_process.rs (target/debug/deps/run_pack_clean_process-055b0516c27637d7)

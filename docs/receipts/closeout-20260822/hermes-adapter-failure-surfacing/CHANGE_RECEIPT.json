@@ -1,0 +1,47 @@
+{
+  "schema": "ChangeReceiptV1",
+  "version": 1,
+  "task_id": "adapter-failure-surfacing-20260822",
+  "source_identity": {
+    "root": "/home/sikmindz/Coding/recursive-agent",
+    "branch": "main",
+    "head": "e310cf9ca116855d3a4aa8f39faa267705a97865"
+  },
+  "goal": "Surface daemon-derived terminal and transcript failure details through the Hermes-native adapter without changing execution authority.",
+  "non_goals": [
+    "provider or deployment behavior",
+    "runner/runtime authority changes",
+    "operation or schema contract changes",
+    "credentials, installation, gateway, or release effects"
+  ],
+  "changed_paths": [
+    "integrations/hermes-native/client.py",
+    "integrations/hermes-native/__init__.py",
+    "integrations/hermes-native/tests/test_registration.py",
+    "crates/recursive-agent-daemon/src/server.rs",
+    "crates/recursive-agent-daemon/tests/ipc_runtime.rs"
+  ],
+  "checks": [
+    {"gate_id": "A-001", "status": "PASS", "command": "python3 -m pytest -q integrations/hermes-native/tests/test_registration.py", "detail": "RED observed before implementation; final 13-test suite passed"},
+    {"gate_id": "A-002", "status": "PASS", "command": "python3 -m pytest -q integrations/hermes-native/tests", "detail": "13 passed; terminal failure, strict-verification failure, divergence payload, transport unavailable, and success-shape cases covered"},
+    {"gate_id": "A-002B", "status": "PASS", "command": "cargo test -p recursive-agent-daemon --test ipc_runtime daemon_returns_correlated_verify_error_for_tampered_run -- --exact", "detail": "1 passed; tampered receipt returns request-correlated runtime_error"},
+    {"gate_id": "A-003", "status": "PASS", "command": "transport failure case in integrations/hermes-native/tests", "detail": "Transport failure remains unavailable"},
+    {"gate_id": "A-004", "status": "PASS", "command": "success-shape case in integrations/hermes-native/tests", "detail": "Existing verified JSON shape unchanged"},
+    {"gate_id": "A-005", "status": "PASS", "command": "python3 -m pytest -q integrations/hermes-native/tests", "passed": 13},
+    {"gate_id": "A-006", "status": "PASS", "command": "python3 -m ruff check ...; python3 -m py_compile ...; git diff --check -- <allowed paths>"},
+    {"gate_id": "A-007", "status": "PASS", "command": "cargo test --workspace --all-targets --locked --no-fail-fast; cargo clippy --workspace --all-targets --locked -- -D warnings; cargo fmt --all -- --check"},
+    {"gate_id": "A-008", "status": "PASS", "command": "cargo deny check advisories bans licenses sources"},
+    {"gate_id": "A-009", "status": "PASS", "command": "cargo fuzz run receipt ...; cargo fuzz run sandbox_spec ...", "detail": "1,281 and 1,448 executions; no crash artifacts"},
+    {"gate_id": "A-010", "status": "PASS", "command": "python3 scripts/phase5_offline_conformance.py --root docs/receipts/closeout-20260822/phase5-generated-final", "detail": "state=verified, passed=true; receipt sha256 44b79db17d2fc8d0bda31b34744a976d751d877cdedd0a699cad609b47d4c996"}
+  ],
+  "authority_boundary": "Daemon/runtime remains the canonical owner of terminal status and verification. The adapter only preserves and projects daemon response bytes; it does not infer success or mint evidence.",
+  "remaining_delta": [
+    "real provider/public CLI acceptance",
+    "installed-host integration acceptance",
+    "reliability/unattended operation acceptance",
+    "production/release authority"
+  ],
+  "rollback": "Revert only the five changed source/test paths listed above, or quarantine the additive run packet. Do not reset unrelated dirty paths, activate a runtime, restart a gateway, or publish a release.",
+  "complete": true,
+  "evidence_state": "phase_locally_verified_external_and_release_claims_unverified"
+}
