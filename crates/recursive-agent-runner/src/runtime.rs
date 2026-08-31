@@ -18,9 +18,10 @@ use recursive_agent_ledger::{
 };
 use recursive_agent_policy::{
     ActorPrincipalV1, ChildRunCeilingV1, DurablePermitStore, FamilyAuthorityStore,
-    FamilyChildRequestV1, FamilyRootGrantV1, PermitBudgetV1, PermitEvidenceV1,
-    OperatorApprovalVerifierV1, OperatorApprovalWitnessV1, PermitApprovalRequestV1,
-    PermitOutcomeReceiptV1, PermitPreflightReceiptV1, PolicyError, ReportedEffectOutcomeV1,
+    FamilyChildRequestV1, FamilyRootGrantV1, OperatorApprovalVerifierV1, OperatorApprovalWitnessV1,
+    PermitApprovalRequestV1, PermitBudgetV1, PermitEvidenceV1, PermitOutcomeReceiptV1,
+    PermitPreflightReceiptV1, PolicyError, ProductionApprovalVerifierV1,
+    ProductionApprovalWitnessV1, ReportedEffectOutcomeV1,
 };
 use recursive_agent_provider::{CompletionBackend, ProviderSpecV1};
 use stack_ids::{AttemptId, TraceCtx, TrialId};
@@ -400,6 +401,7 @@ pub struct RuntimeService {
     /// cancellation and admission are persisted across restarts.
     scheduler: std::sync::Mutex<Option<crate::SchedulerStore>>,
     operator_approval_verifier: Option<OperatorApprovalVerifierV1>,
+    production_approval_verifier: Option<ProductionApprovalVerifierV1>,
 }
 
 impl RuntimeService {
@@ -411,6 +413,7 @@ impl RuntimeService {
             live_families: Mutex::new(BTreeMap::new()),
             scheduler: std::sync::Mutex::new(None),
             operator_approval_verifier: None,
+            production_approval_verifier: None,
         }
     }
 
@@ -419,22 +422,57 @@ impl RuntimeService {
         self
     }
 
+    /// Explicitly inject the daemon-owned production public verifier key.
+    pub fn with_production_approval_verifier(
+        mut self,
+        verifier: ProductionApprovalVerifierV1,
+    ) -> Self {
+        self.production_approval_verifier = Some(verifier);
+        self
+    }
+
+    pub fn issue_production_permit(
+        &self,
+        witness: &ProductionApprovalWitnessV1,
+    ) -> Result<recursive_agent_policy::ExecutionPermitV1, RuntimeServiceError> {
+        let verifier = self
+            .production_approval_verifier
+            .as_ref()
+            .ok_or(RuntimeServiceError::PermitIssuanceDisabled)?;
+        let now = self.dependencies.clock().now();
+        let binding = verifier.verify_and_build_binding(witness, now)?;
+        let root = std::fs::File::open(self.dependencies.output_root())?;
+        let permits = DurablePermitStore::from_dir_fd(&root)?;
+        let candidate =
+            recursive_agent_policy::ExecutionPermitV1::effect(binding.clone(), Vec::new())?;
+        if permits.state(&candidate.permit_id).is_ok() {
+            return Err(RuntimeServiceError::Policy(
+                PolicyError::PermitStateConflict,
+            ));
+        }
+        Ok(permits.issue(&binding, now)?)
+    }
+
     /// Narrow test-only issuance; policy reconstructs every binding field.
     pub fn issue_approved_echo_permit(
         &self,
         request: &PermitApprovalRequestV1,
         approval: &OperatorApprovalWitnessV1,
     ) -> Result<recursive_agent_policy::ExecutionPermitV1, RuntimeServiceError> {
-        let verifier = self.operator_approval_verifier.as_ref().ok_or(
-            RuntimeServiceError::PermitIssuanceDisabled,
-        )?;
+        let verifier = self
+            .operator_approval_verifier
+            .as_ref()
+            .ok_or(RuntimeServiceError::PermitIssuanceDisabled)?;
         let now = self.dependencies.clock().now();
         let binding = verifier.verify_and_build_echo_binding(request, approval, now)?;
         let root = std::fs::File::open(self.dependencies.output_root())?;
         let permits = DurablePermitStore::from_dir_fd(&root)?;
-        let candidate = recursive_agent_policy::ExecutionPermitV1::effect(binding.clone(), Vec::new())?;
+        let candidate =
+            recursive_agent_policy::ExecutionPermitV1::effect(binding.clone(), Vec::new())?;
         if permits.state(&candidate.permit_id).is_ok() {
-            return Err(RuntimeServiceError::Policy(PolicyError::PermitStateConflict));
+            return Err(RuntimeServiceError::Policy(
+                PolicyError::PermitStateConflict,
+            ));
         }
         Ok(permits.issue(&binding, now)?)
     }

@@ -67,38 +67,396 @@ pub struct OperatorApprovalWitnessV1 {
 /// Verifier-owned key material. Its constructor is compiled only for the
 /// explicit test fixture feature; production therefore fails closed.
 #[derive(Clone)]
-pub struct OperatorApprovalVerifierV1 { key: [u8; 32] }
+pub struct OperatorApprovalVerifierV1 {
+    key: [u8; 32],
+}
 
 impl OperatorApprovalVerifierV1 {
     #[cfg(feature = "test-only-approval-fixture")]
-    pub fn from_key(key: [u8; 32]) -> Result<Self, PolicyError> { Ok(Self { key }) }
+    pub fn from_key(key: [u8; 32]) -> Result<Self, PolicyError> {
+        Ok(Self { key })
+    }
 
     #[cfg(feature = "test-only-approval-fixture")]
-    pub fn issue_witness(&self, request: &PermitApprovalRequestV1, operator_case: &str) -> Result<OperatorApprovalWitnessV1, PolicyError> {
-        if operator_case.is_empty() || operator_case.len() > 256 || operator_case.chars().any(char::is_control) { return Err(PolicyError::InvalidLease("invalid operator approval case".into())); }
+    pub fn issue_witness(
+        &self,
+        request: &PermitApprovalRequestV1,
+        operator_case: &str,
+    ) -> Result<OperatorApprovalWitnessV1, PolicyError> {
+        if operator_case.is_empty()
+            || operator_case.len() > 256
+            || operator_case.chars().any(char::is_control)
+        {
+            return Err(PolicyError::InvalidLease(
+                "invalid operator approval case".into(),
+            ));
+        }
         let request_digest = content_digest(request)?;
-        Ok(OperatorApprovalWitnessV1 { authenticator: self.authenticate(&request_digest, operator_case), operator_case: operator_case.into(), request_digest })
+        Ok(OperatorApprovalWitnessV1 {
+            authenticator: self.authenticate(&request_digest, operator_case),
+            operator_case: operator_case.into(),
+            request_digest,
+        })
     }
 
     fn authenticate(&self, digest: &ContentDigest, operator_case: &str) -> String {
-        let mut material = digest.hex().as_bytes().to_vec(); material.push(0); material.extend_from_slice(operator_case.as_bytes());
-        blake3::keyed_hash(&self.key, &material).to_hex().to_string()
+        let mut material = digest.hex().as_bytes().to_vec();
+        material.push(0);
+        material.extend_from_slice(operator_case.as_bytes());
+        blake3::keyed_hash(&self.key, &material)
+            .to_hex()
+            .to_string()
     }
 
-    pub fn verify_and_build_echo_binding(&self, request: &PermitApprovalRequestV1, witness: &OperatorApprovalWitnessV1, now: DateTime<Utc>) -> Result<PermitBindingV1, PolicyError> {
-        if request.requested_validity_ms != MAX_LIVE_LEASE_MILLISECONDS as u64 || request.call.tool != "echo" || !request.call.args.is_object() || request.call.frozen_clock.is_some() || witness.operator_case.is_empty() || witness.operator_case.chars().any(char::is_control) { return Err(PolicyError::InvalidLease("test-only echo approval contract rejected".into())); }
+    pub fn verify_and_build_echo_binding(
+        &self,
+        request: &PermitApprovalRequestV1,
+        witness: &OperatorApprovalWitnessV1,
+        now: DateTime<Utc>,
+    ) -> Result<PermitBindingV1, PolicyError> {
+        if request.requested_validity_ms != MAX_LIVE_LEASE_MILLISECONDS as u64
+            || request.call.tool != "echo"
+            || !request.call.args.is_object()
+            || request.call.frozen_clock.is_some()
+            || witness.operator_case.is_empty()
+            || witness.operator_case.chars().any(char::is_control)
+        {
+            return Err(PolicyError::InvalidLease(
+                "test-only echo approval contract rejected".into(),
+            ));
+        }
         let request_digest = content_digest(request)?;
         let expected = self.authenticate(&request_digest, &witness.operator_case);
-        if request_digest != witness.request_digest || !constant_time_eq(expected.as_bytes(), witness.authenticator.as_bytes()) { return Err(PolicyError::InvalidLease("operator approval witness authentication failed".into())); }
-        let spec = RunSpecV1 { name: "test-only-approved-echo".into(), steps: vec![recursive_agent_contracts::StepSpecV1 { name: "echo".into(), call: request.call.clone() }], frozen_clock: None, policy_version: "test-only-echo-v1".into() };
+        if request_digest != witness.request_digest
+            || !constant_time_eq(expected.as_bytes(), witness.authenticator.as_bytes())
+        {
+            return Err(PolicyError::InvalidLease(
+                "operator approval witness authentication failed".into(),
+            ));
+        }
+        let spec = RunSpecV1 {
+            name: "test-only-approved-echo".into(),
+            steps: vec![recursive_agent_contracts::StepSpecV1 {
+                name: "echo".into(),
+                call: request.call.clone(),
+            }],
+            frozen_clock: None,
+            policy_version: "test-only-echo-v1".into(),
+        };
         let run_id = recursive_agent_contracts::derive_run_id(&spec)?;
         let step_id = recursive_agent_contracts::derive_step_id(&run_id, 0, "echo", &request.call)?;
-        let effect = EffectScopeV1 { scope_name: "test-only-deterministic-echo".into(), read_roots: Vec::new(), write_roots: Vec::new(), network_allowed: false };
-        Ok(PermitBindingV1 { actor: ActorPrincipalV1::try_new("operator:local")?, action_digest: content_digest(&request.call)?, effect_digest: content_digest(&effect)?, effect, budget: PermitBudgetV1 { max_wall_time_ms: 300_000, max_output_bytes: 4_096, max_artifact_bytes: 8_192 }, policy_version: "test-only-echo-v1".into(), parent_permit_id: None, parent_operation_id: None, issued_at: now, not_before: now, expires_at: now + chrono::TimeDelta::milliseconds(MAX_LIVE_LEASE_MILLISECONDS), run_id, step_id, tool: "echo".into(), args_digest: content_digest(&request.call.args)? })
+        let effect = EffectScopeV1 {
+            scope_name: "test-only-deterministic-echo".into(),
+            read_roots: Vec::new(),
+            write_roots: Vec::new(),
+            network_allowed: false,
+        };
+        Ok(PermitBindingV1 {
+            actor: ActorPrincipalV1::try_new("operator:local")?,
+            action_digest: content_digest(&request.call)?,
+            effect_digest: content_digest(&effect)?,
+            effect,
+            budget: PermitBudgetV1 {
+                max_wall_time_ms: 300_000,
+                max_output_bytes: 4_096,
+                max_artifact_bytes: 8_192,
+            },
+            policy_version: "test-only-echo-v1".into(),
+            parent_permit_id: None,
+            parent_operation_id: None,
+            issued_at: now,
+            not_before: now,
+            expires_at: now + chrono::TimeDelta::milliseconds(MAX_LIVE_LEASE_MILLISECONDS),
+            run_id,
+            step_id,
+            tool: "echo".into(),
+            args_digest: content_digest(&request.call.args)?,
+        })
     }
 }
 
-fn constant_time_eq(left: &[u8], right: &[u8]) -> bool { let mut diff = left.len() ^ right.len(); for (a, b) in left.iter().zip(right.iter()) { diff |= usize::from(a ^ b); } diff == 0 }
+fn constant_time_eq(left: &[u8], right: &[u8]) -> bool {
+    let mut diff = left.len() ^ right.len();
+    for (a, b) in left.iter().zip(right.iter()) {
+        diff |= usize::from(a ^ b);
+    }
+    diff == 0
+}
+
+/// Production production-effect target. A witness may authorize only this root.
+pub const PRODUCTION_PERMIT_TARGET_ROOT: &str =
+    "/home/sikmindz/work/ares-production-permit-20260830";
+pub const PRODUCTION_PERMIT_MAX_VALIDITY_MS: i64 = 300_000;
+pub const PRODUCTION_PERMIT_MAX_OUTPUT_BYTES: u64 = 4_096;
+pub const PRODUCTION_PERMIT_MAX_ARTIFACT_BYTES: u64 = 8_192;
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum RetryPolicyV1 {
+    NoRetry,
+}
+#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum DelegationPolicyV1 {
+    Forbidden,
+}
+#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum OutcomePolicyV1 {
+    TerminalQuarantine,
+}
+
+/// Closed, serialized decision from the Ares Desktop interactive controller.
+/// The signature is Ed25519 over every field except `signature`, encoded as JCS.
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct ProductionApprovalWitnessV1 {
+    pub approval_id: String,
+    pub mission_ref: String,
+    pub target_ref: String,
+    pub call: ToolCallSpecV1,
+    pub actor: ActorPrincipalV1,
+    pub effect: EffectScopeV1,
+    pub budget: PermitBudgetV1,
+    pub policy_version: String,
+    pub issued_at: DateTime<Utc>,
+    pub not_before: DateTime<Utc>,
+    pub expires_at: DateTime<Utc>,
+    pub retry: RetryPolicyV1,
+    pub delegation: DelegationPolicyV1,
+    pub outcome_policy: OutcomePolicyV1,
+    pub key_id: String,
+    pub signature: Vec<u8>,
+}
+
+#[derive(serde::Serialize)]
+struct ProductionApprovalSigningPayload<'a> {
+    approval_id: &'a str,
+    mission_ref: &'a str,
+    target_ref: &'a str,
+    call: &'a ToolCallSpecV1,
+    actor: &'a ActorPrincipalV1,
+    effect: &'a EffectScopeV1,
+    budget: &'a PermitBudgetV1,
+    policy_version: &'a str,
+    issued_at: DateTime<Utc>,
+    not_before: DateTime<Utc>,
+    expires_at: DateTime<Utc>,
+    retry: RetryPolicyV1,
+    delegation: DelegationPolicyV1,
+    outcome_policy: OutcomePolicyV1,
+    key_id: &'a str,
+}
+
+impl ProductionApprovalWitnessV1 {
+    fn signing_bytes(&self) -> Result<Vec<u8>, PolicyError> {
+        Ok(jcs_canonical(&ProductionApprovalSigningPayload {
+            approval_id: &self.approval_id,
+            mission_ref: &self.mission_ref,
+            target_ref: &self.target_ref,
+            call: &self.call,
+            actor: &self.actor,
+            effect: &self.effect,
+            budget: &self.budget,
+            policy_version: &self.policy_version,
+            issued_at: self.issued_at,
+            not_before: self.not_before,
+            expires_at: self.expires_at,
+            retry: self.retry,
+            delegation: self.delegation,
+            outcome_policy: self.outcome_policy,
+            key_id: &self.key_id,
+        })?)
+    }
+
+    fn validate_contract(&self, trusted_now: DateTime<Utc>) -> Result<(), PolicyError> {
+        for value in [
+            &self.approval_id,
+            &self.mission_ref,
+            &self.target_ref,
+            &self.policy_version,
+            &self.key_id,
+        ] {
+            if value.is_empty() || value.len() > 256 || value.chars().any(char::is_control) {
+                return Err(PolicyError::InvalidLease(
+                    "invalid production witness identifier".into(),
+                ));
+            }
+        }
+        let args = self.call.args.as_object().ok_or_else(|| {
+            PolicyError::InvalidLease(
+                "production write_file call arguments must be an object".into(),
+            )
+        })?;
+        if self.target_ref.is_empty()
+            || self.target_ref.len() > 256
+            || self.target_ref.chars().any(char::is_control)
+            || self.call.tool != "write_file"
+            || self.call.frozen_clock.is_some()
+            || args.len() != 2
+            || !args.contains_key("path")
+            || !args.contains_key("content")
+            || args
+                .get("path")
+                .and_then(serde_json::Value::as_str)
+                .is_none()
+            || args
+                .get("content")
+                .and_then(serde_json::Value::as_str)
+                .is_none()
+            || self.effect.scope_name != format!("production-per-call:{}", self.approval_id)
+            || self.effect.read_roots != Vec::<String>::new()
+            || self.effect.write_roots != vec![PRODUCTION_PERMIT_TARGET_ROOT.to_string()]
+            || self.effect.network_allowed
+            || self.budget.max_wall_time_ms > PRODUCTION_PERMIT_MAX_VALIDITY_MS as u64
+            || self.budget.max_output_bytes > PRODUCTION_PERMIT_MAX_OUTPUT_BYTES
+            || self.budget.max_artifact_bytes > PRODUCTION_PERMIT_MAX_ARTIFACT_BYTES
+            || self.signature.len() != 64
+            || self.issued_at > self.not_before
+            || self.not_before >= self.expires_at
+            || self
+                .expires_at
+                .signed_duration_since(self.not_before)
+                .num_milliseconds()
+                > PRODUCTION_PERMIT_MAX_VALIDITY_MS
+            || trusted_now < self.not_before
+            || trusted_now >= self.expires_at
+        {
+            return Err(PolicyError::InvalidLease(
+                "production witness contract rejected".into(),
+            ));
+        }
+        let path = self
+            .call
+            .args
+            .get("path")
+            .and_then(serde_json::Value::as_str)
+            .ok_or_else(|| {
+                PolicyError::InvalidLease("production write_file call lacks path".into())
+            })?;
+        let target = Path::new(PRODUCTION_PERMIT_TARGET_ROOT);
+        let candidate = Path::new(path);
+        if !candidate.is_absolute()
+            || !candidate.starts_with(target)
+            || candidate == target
+            || candidate
+                .components()
+                .any(|part| matches!(part, std::path::Component::ParentDir))
+        {
+            return Err(PolicyError::InvalidLease(
+                "production write target escapes approved root".into(),
+            ));
+        }
+        Ok(())
+    }
+}
+
+/// Daemon-held verification key explicitly injected by its owner. No environment,
+/// config file, client field, or ambient key source can construct this verifier.
+#[derive(Clone)]
+pub struct ProductionApprovalVerifierV1 {
+    key_id: String,
+    public_key: ed25519_dalek::VerifyingKey,
+}
+impl ProductionApprovalVerifierV1 {
+    pub fn from_public_key_bytes(key_id: String, bytes: [u8; 32]) -> Result<Self, PolicyError> {
+        if key_id.is_empty() || key_id.len() > 256 || key_id.chars().any(char::is_control) {
+            return Err(PolicyError::InvalidLease(
+                "invalid production verifier key id".into(),
+            ));
+        }
+        let public_key = ed25519_dalek::VerifyingKey::from_bytes(&bytes)
+            .map_err(|_| PolicyError::InvalidLease("invalid Ed25519 verifier public key".into()))?;
+        Ok(Self { key_id, public_key })
+    }
+    pub fn verify_and_build_binding(
+        &self,
+        witness: &ProductionApprovalWitnessV1,
+        now: DateTime<Utc>,
+    ) -> Result<PermitBindingV1, PolicyError> {
+        use ed25519_dalek::Verifier;
+        witness.validate_contract(now)?;
+        if witness.key_id != self.key_id {
+            return Err(PolicyError::InvalidLease(
+                "production witness key id does not match injected verifier".into(),
+            ));
+        }
+        let signature = ed25519_dalek::Signature::from_slice(&witness.signature)
+            .map_err(|_| PolicyError::InvalidLease("invalid Ed25519 signature encoding".into()))?;
+        self.public_key
+            .verify(&witness.signing_bytes()?, &signature)
+            .map_err(|_| {
+                PolicyError::InvalidLease("production witness Ed25519 verification failed".into())
+            })?;
+        let spec = RunSpecV1 {
+            name: witness.mission_ref.clone(),
+            steps: vec![recursive_agent_contracts::StepSpecV1 {
+                name: witness.approval_id.clone(),
+                call: witness.call.clone(),
+            }],
+            frozen_clock: None,
+            policy_version: witness.policy_version.clone(),
+        };
+        let run_id = recursive_agent_contracts::derive_run_id(&spec)?;
+        let step_id = recursive_agent_contracts::derive_step_id(
+            &run_id,
+            0,
+            &witness.approval_id,
+            &witness.call,
+        )?;
+        Ok(PermitBindingV1 {
+            actor: witness.actor.clone(),
+            action_digest: content_digest(&witness.call)?,
+            effect_digest: content_digest(&witness.effect)?,
+            effect: witness.effect.clone(),
+            budget: witness.budget.clone(),
+            policy_version: witness.policy_version.clone(),
+            parent_permit_id: None,
+            parent_operation_id: None,
+            issued_at: witness.issued_at,
+            not_before: witness.not_before,
+            expires_at: witness.expires_at,
+            run_id,
+            step_id,
+            tool: witness.call.tool.clone(),
+            args_digest: content_digest(&witness.call.args)?,
+        })
+    }
+}
+
+#[cfg(feature = "test-only-approval-fixture")]
+pub struct ProductionApprovalSignerV1 {
+    key_id: String,
+    signing_key: ed25519_dalek::SigningKey,
+}
+#[cfg(feature = "test-only-approval-fixture")]
+impl ProductionApprovalSignerV1 {
+    pub fn from_seed(key_id: String, seed: [u8; 32]) -> Self {
+        Self {
+            key_id,
+            signing_key: ed25519_dalek::SigningKey::from_bytes(&seed),
+        }
+    }
+    pub fn verifier(&self) -> Result<ProductionApprovalVerifierV1, PolicyError> {
+        ProductionApprovalVerifierV1::from_public_key_bytes(
+            self.key_id.clone(),
+            self.signing_key.verifying_key().to_bytes(),
+        )
+    }
+    pub fn sign(
+        &self,
+        mut witness: ProductionApprovalWitnessV1,
+    ) -> Result<ProductionApprovalWitnessV1, PolicyError> {
+        use ed25519_dalek::Signer;
+        witness.key_id = self.key_id.clone();
+        witness.signature = self
+            .signing_key
+            .sign(&witness.signing_bytes()?)
+            .to_bytes()
+            .to_vec();
+        Ok(witness)
+    }
+}
 
 /// Explicit grantor, delegate, audience, and delegation depth for one edge.
 #[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
@@ -1600,15 +1958,22 @@ impl DurablePermitStore {
         for executable in &executable_authority {
             executable.validate()?;
         }
-        if binding.issued_at != trusted_now {
+        // A signer necessarily creates the witness before the daemon receives it.
+        // The daemon remains authoritative for current validity and the maximum
+        // expiry; it must reject future-dated tokens, not require millisecond
+        // equality with a token created in another process.
+        if binding.issued_at > trusted_now {
             return Err(PolicyError::InvalidLease(
-                "issued_at must come from the trusted clock".into(),
+                "issued_at must not be in the future of the trusted clock".into(),
             ));
         }
         let maximum_expiry = trusted_now
             .checked_add_signed(chrono::TimeDelta::milliseconds(MAX_LIVE_LEASE_MILLISECONDS))
             .ok_or_else(|| PolicyError::InvalidLease("lease maximum overflow".into()))?;
-        if binding.not_before < trusted_now || binding.expires_at > maximum_expiry {
+        if binding.not_before > trusted_now
+            || binding.expires_at <= trusted_now
+            || binding.expires_at > maximum_expiry
+        {
             return Err(PolicyError::InvalidLease(
                 "requested permit validity is outside the trusted policy window".into(),
             ));

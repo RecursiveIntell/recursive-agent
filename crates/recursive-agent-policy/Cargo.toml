@@ -20,6 +20,7 @@ thiserror = { workspace = true }
 stack-ids = { workspace = true }
 rustix = { workspace = true }
 blake3 = { workspace = true }
+ed25519-dalek = { workspace = true }
 
 [dev-dependencies]
 tempfile = "3"

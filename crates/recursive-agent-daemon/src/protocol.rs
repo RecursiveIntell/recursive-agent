@@ -6,7 +6,10 @@
 use recursive_agent_contracts::{
     parse_strict_json_value, CurrentPermitId, OperationEnvelopeV1, StrictJsonError, ToolCallSpecV1,
 };
-use recursive_agent_policy::{OperatorApprovalWitnessV1, PermitApprovalRequestV1, PermitBindingV1, ReportedEffectOutcomeV1};
+use recursive_agent_policy::{
+    OperatorApprovalWitnessV1, PermitApprovalRequestV1, PermitBindingV1,
+    ProductionApprovalWitnessV1, ReportedEffectOutcomeV1,
+};
 use serde::{Deserialize, Serialize};
 use std::collections::BTreeSet;
 
@@ -156,6 +159,12 @@ pub enum IpcRequestV1 {
     PermitIssue {
         request: PermitApprovalRequestV1,
         approval: OperatorApprovalWitnessV1,
+    },
+    /// Production-only per-call Ed25519 witness. The daemon verifies this
+    /// closed witness with its explicitly injected public key, then derives
+    /// the binding itself and durably issues one single-use permit.
+    PermitIssueProduction {
+        witness: Box<ProductionApprovalWitnessV1>,
     },
     /// Record the bounded executor-reported outcome for one consumed preflight.
     PermitOutcomeRecord {
