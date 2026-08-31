@@ -7,10 +7,14 @@
 //!
 //!   ra-daemon serve --root <runs> --socket <path> [--max-concurrent N]
 
+use std::fs;
+#[cfg(unix)]
+use std::os::unix::fs::MetadataExt;
 use std::path::PathBuf;
 use std::sync::Arc;
 
 use async_trait::async_trait;
+use base64::Engine;
 use clap::{Parser, Subcommand};
 use llm_tool_runtime::{
     McpSurfaceKind, Tool, ToolApprovalKind, ToolBackendKind, ToolCtx, ToolDescriptor, ToolError,
@@ -24,6 +28,7 @@ use recursive_agent_contracts::{
 };
 use recursive_agent_daemon::repo_audit::AuditLimits;
 use recursive_agent_daemon::{bind_private_socket, serve};
+use recursive_agent_policy::ProductionApprovalVerifierV1;
 use recursive_agent_runner::{
     Clock, RuntimeDependencies, RuntimeLedgerDependencyV1, RuntimePolicyDependencyV1,
     RuntimeProviderDependencyV1, RuntimeSandboxDependencyV1, RuntimeService,
@@ -54,6 +59,10 @@ enum Cmd {
         /// Max concurrent connections.
         #[arg(long, default_value_t = 4)]
         max_concurrent: usize,
+        /// Strictly owned JSON enrollment record containing the Electron public
+        /// verifier key. When omitted, production permit issuance stays disabled.
+        #[arg(long)]
+        production_verifier_file: Option<PathBuf>,
     },
     /// Emit one canonical native operation envelope as JSON (for the Hermes
     /// integration and tests to submit over IPC).
@@ -211,9 +220,58 @@ impl Tool for RepoAuditDescriptorOwner {
     }
 }
 
+const PRODUCTION_VERIFIER_ENROLLMENT_SCHEMA: &str =
+    "recursive-agent.desktop-production-public-key/v1";
+const MAX_PRODUCTION_VERIFIER_ENROLLMENT_BYTES: u64 = 8 * 1024;
+
+#[derive(serde::Deserialize)]
+#[serde(deny_unknown_fields)]
+struct ProductionVerifierEnrollmentV1 {
+    schema: String,
+    key_id: String,
+    /// Standard Base64 encoding of the exact 32-byte Ed25519 verifying key.
+    public_key: String,
+}
+
+/// Load verifier material from an operator-owned, mode-restricted enrollment
+/// record. This binary never accepts a verifier key from IPC, environment, or a
+/// tool request; startup configuration is the sole live admission boundary.
+fn load_production_verifier(
+    enrollment_path: &std::path::Path,
+) -> Result<ProductionApprovalVerifierV1, Box<dyn std::error::Error>> {
+    let metadata = fs::symlink_metadata(enrollment_path)?;
+    if !metadata.file_type().is_file() || metadata.len() > MAX_PRODUCTION_VERIFIER_ENROLLMENT_BYTES
+    {
+        return Err("production verifier enrollment must be a bounded regular file".into());
+    }
+    #[cfg(unix)]
+    {
+        if metadata.uid() != rustix::process::getuid().as_raw() || metadata.mode() & 0o077 != 0 {
+            return Err(
+                "production verifier enrollment must be owned by the daemon user and mode 0600"
+                    .into(),
+            );
+        }
+    }
+    let bytes = fs::read(enrollment_path)?;
+    let record: ProductionVerifierEnrollmentV1 = serde_json::from_slice(&bytes)?;
+    if record.schema != PRODUCTION_VERIFIER_ENROLLMENT_SCHEMA {
+        return Err("unsupported production verifier enrollment schema".into());
+    }
+    let decoded = base64::engine::general_purpose::STANDARD.decode(record.public_key)?;
+    let public_key: [u8; 32] = decoded
+        .try_into()
+        .map_err(|_| "production verifier enrollment public key must be exactly 32 bytes")?;
+    Ok(ProductionApprovalVerifierV1::from_public_key_bytes(
+        record.key_id,
+        public_key,
+    )?)
+}
+
 fn build_runtime(
     root: &std::path::Path,
     audit_root: Option<PathBuf>,
+    production_verifier: Option<ProductionApprovalVerifierV1>,
 ) -> Result<RuntimeService, Box<dyn std::error::Error>> {
     let mut registry = ToolRegistry::new();
     registry.register(EchoDescriptorOwner::new());
@@ -230,7 +288,11 @@ fn build_runtime(
         .store(RuntimeStoreDependencyV1::Native)
         .output_root(root)
         .build()?;
-    Ok(RuntimeService::new(dependencies))
+    let runtime = RuntimeService::new(dependencies);
+    Ok(match production_verifier {
+        Some(verifier) => runtime.with_production_approval_verifier(verifier),
+        None => runtime,
+    })
 }
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {
@@ -241,9 +303,14 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             socket,
             audit_root,
             max_concurrent,
+            production_verifier_file,
         } => {
-            std::fs::create_dir_all(&root)?;
-            let runtime = build_runtime(&root, audit_root)?;
+            fs::create_dir_all(&root)?;
+            let production_verifier = production_verifier_file
+                .as_deref()
+                .map(load_production_verifier)
+                .transpose()?;
+            let runtime = build_runtime(&root, audit_root, production_verifier)?;
             // The socket parent is the directory containing the socket path.
             let parent = socket
                 .parent()

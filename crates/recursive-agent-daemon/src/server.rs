@@ -333,6 +333,15 @@ fn dispatch(
                 "issuance_evidence": { "state": { "state": "issued" } },
             }))
         }
+        IpcRequestV1::PermitIssueProduction { witness } => {
+            let permit = runtime.issue_production_permit(witness)?;
+            Ok(serde_json::json!({
+                "request_id": request.request_id,
+                "permit_id": permit.permit_id,
+                "binding": permit.binding,
+                "issuance_evidence": { "state": { "state": "issued" }, "contract": "production_ed25519_per_call_v1" },
+            }))
+        }
         IpcRequestV1::PermitOutcomeRecord {
             permit_id,
             preflight_receipt_digest,
