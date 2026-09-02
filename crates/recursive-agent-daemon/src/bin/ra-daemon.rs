@@ -63,6 +63,10 @@ enum Cmd {
         /// verifier key. When omitted, production permit issuance stays disabled.
         #[arg(long)]
         production_verifier_file: Option<PathBuf>,
+        /// Exact existing root that a production witness may write beneath.
+        /// Required whenever a production verifier enrollment is configured.
+        #[arg(long)]
+        production_write_root: Option<PathBuf>,
     },
     /// Emit one canonical native operation envelope as JSON (for the Hermes
     /// integration and tests to submit over IPC).
@@ -238,6 +242,7 @@ struct ProductionVerifierEnrollmentV1 {
 /// tool request; startup configuration is the sole live admission boundary.
 fn load_production_verifier(
     enrollment_path: &std::path::Path,
+    target_root: &std::path::Path,
 ) -> Result<ProductionApprovalVerifierV1, Box<dyn std::error::Error>> {
     let metadata = fs::symlink_metadata(enrollment_path)?;
     if !metadata.file_type().is_file() || metadata.len() > MAX_PRODUCTION_VERIFIER_ENROLLMENT_BYTES
@@ -262,10 +267,18 @@ fn load_production_verifier(
     let public_key: [u8; 32] = decoded
         .try_into()
         .map_err(|_| "production verifier enrollment public key must be exactly 32 bytes")?;
-    Ok(ProductionApprovalVerifierV1::from_public_key_bytes(
-        record.key_id,
-        public_key,
-    )?)
+    let target_root = target_root
+        .canonicalize()?
+        .to_str()
+        .ok_or("production verifier target root must be UTF-8")?
+        .to_string();
+    Ok(
+        ProductionApprovalVerifierV1::from_public_key_bytes_for_target_root(
+            record.key_id,
+            public_key,
+            target_root,
+        )?,
+    )
 }
 
 fn build_runtime(
@@ -304,12 +317,18 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             audit_root,
             max_concurrent,
             production_verifier_file,
+            production_write_root,
         } => {
             fs::create_dir_all(&root)?;
-            let production_verifier = production_verifier_file
-                .as_deref()
-                .map(load_production_verifier)
-                .transpose()?;
+            let production_verifier = match (production_verifier_file.as_deref(), production_write_root.as_deref()) {
+                (None, None) => None,
+                (Some(enrollment), Some(target_root)) => {
+                    Some(load_production_verifier(enrollment, target_root)?)
+                }
+                _ => return Err(
+                    "production verifier file and production write root must be configured together".into(),
+                ),
+            };
             let runtime = build_runtime(&root, audit_root, production_verifier)?;
             // The socket parent is the directory containing the socket path.
             let parent = socket

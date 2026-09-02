@@ -269,7 +269,11 @@ impl ProductionApprovalWitnessV1 {
         })?)
     }
 
-    fn validate_contract(&self, trusted_now: DateTime<Utc>) -> Result<(), PolicyError> {
+    fn validate_contract(
+        &self,
+        trusted_now: DateTime<Utc>,
+        target_root: &str,
+    ) -> Result<(), PolicyError> {
         for value in [
             &self.approval_id,
             &self.mission_ref,
@@ -306,7 +310,7 @@ impl ProductionApprovalWitnessV1 {
                 .is_none()
             || self.effect.scope_name != format!("production-per-call:{}", self.approval_id)
             || self.effect.read_roots != Vec::<String>::new()
-            || self.effect.write_roots != vec![PRODUCTION_PERMIT_TARGET_ROOT.to_string()]
+            || self.effect.write_roots != vec![target_root.to_string()]
             || self.effect.network_allowed
             || self.budget.max_wall_time_ms > PRODUCTION_PERMIT_MAX_VALIDITY_MS as u64
             || self.budget.max_output_bytes > PRODUCTION_PERMIT_MAX_OUTPUT_BYTES
@@ -334,7 +338,7 @@ impl ProductionApprovalWitnessV1 {
             .ok_or_else(|| {
                 PolicyError::InvalidLease("production write_file call lacks path".into())
             })?;
-        let target = Path::new(PRODUCTION_PERMIT_TARGET_ROOT);
+        let target = Path::new(target_root);
         let candidate = Path::new(path);
         if !candidate.is_absolute()
             || !candidate.starts_with(target)
@@ -357,9 +361,21 @@ impl ProductionApprovalWitnessV1 {
 pub struct ProductionApprovalVerifierV1 {
     key_id: String,
     public_key: ed25519_dalek::VerifyingKey,
+    target_root: String,
 }
 impl ProductionApprovalVerifierV1 {
     pub fn from_public_key_bytes(key_id: String, bytes: [u8; 32]) -> Result<Self, PolicyError> {
+        Self::from_public_key_bytes_for_target_root(
+            key_id,
+            bytes,
+            PRODUCTION_PERMIT_TARGET_ROOT.to_string(),
+        )
+    }
+    pub fn from_public_key_bytes_for_target_root(
+        key_id: String,
+        bytes: [u8; 32],
+        target_root: String,
+    ) -> Result<Self, PolicyError> {
         if key_id.is_empty() || key_id.len() > 256 || key_id.chars().any(char::is_control) {
             return Err(PolicyError::InvalidLease(
                 "invalid production verifier key id".into(),
@@ -367,7 +383,22 @@ impl ProductionApprovalVerifierV1 {
         }
         let public_key = ed25519_dalek::VerifyingKey::from_bytes(&bytes)
             .map_err(|_| PolicyError::InvalidLease("invalid Ed25519 verifier public key".into()))?;
-        Ok(Self { key_id, public_key })
+        let target = Path::new(&target_root);
+        if !target.is_absolute()
+            || target == Path::new("/")
+            || target
+                .components()
+                .any(|part| matches!(part, std::path::Component::ParentDir))
+        {
+            return Err(PolicyError::InvalidLease(
+                "invalid production verifier target root".into(),
+            ));
+        }
+        Ok(Self {
+            key_id,
+            public_key,
+            target_root,
+        })
     }
     pub fn verify_and_build_binding(
         &self,
@@ -375,7 +406,7 @@ impl ProductionApprovalVerifierV1 {
         now: DateTime<Utc>,
     ) -> Result<PermitBindingV1, PolicyError> {
         use ed25519_dalek::Verifier;
-        witness.validate_contract(now)?;
+        witness.validate_contract(now, &self.target_root)?;
         if witness.key_id != self.key_id {
             return Err(PolicyError::InvalidLease(
                 "production witness key id does not match injected verifier".into(),
