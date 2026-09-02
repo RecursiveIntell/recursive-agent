@@ -21,6 +21,8 @@ fn serve_with_enrollment(
         .arg(socket)
         .arg("--production-verifier-file")
         .arg(enrollment)
+        .arg("--production-write-root")
+        .arg(parent)
         .output()?)
 }
 
@@ -87,5 +89,33 @@ fn daemon_refuses_wrong_length_production_verifier_key() -> TestResult {
     let output = serve_with_enrollment(&enrollment)?;
     assert!(!output.status.success());
     assert!(String::from_utf8_lossy(&output.stderr).contains("exactly 32 bytes"));
+    Ok(())
+}
+
+#[test]
+fn daemon_requires_explicit_write_root_with_production_verifier() -> TestResult {
+    let temp = tempfile::tempdir()?;
+    let enrollment = write_enrollment(
+        temp.path(),
+        serde_json::json!({
+            "schema": "recursive-agent.desktop-production-public-key/v1",
+            "key_id": "desktop-key",
+            "public_key": base64::engine::general_purpose::STANDARD.encode([7_u8; 32]),
+        }),
+        0o600,
+    )?;
+    let output = Command::new(env!("CARGO_BIN_EXE_ra-daemon"))
+        .arg("serve")
+        .arg("--root")
+        .arg(temp.path().join("runs"))
+        .arg("--socket")
+        .arg(temp.path().join("ra.sock"))
+        .arg("--production-verifier-file")
+        .arg(enrollment)
+        .output()?;
+    assert!(!output.status.success());
+    assert!(String::from_utf8_lossy(&output.stderr).contains(
+        "production verifier file and production write root must be configured together"
+    ));
     Ok(())
 }
