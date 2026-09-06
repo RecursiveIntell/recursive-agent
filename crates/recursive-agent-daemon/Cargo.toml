@@ -28,6 +28,7 @@ base64 = "0.22"
 tempfile = "3"
 async-trait = "0.1"
 recursive-agent-policy = { path = "../recursive-agent-policy", features = ["test-only-approval-fixture"] }
+recursive-agent-provider = { path = "../recursive-agent-provider" }
 
 [lints]
 workspace = true

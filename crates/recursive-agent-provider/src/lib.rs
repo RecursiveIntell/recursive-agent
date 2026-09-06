@@ -223,6 +223,30 @@ impl<'de> Deserialize<'de> for ProviderSpecV1 {
     }
 }
 
+impl ProviderSpecV1 {
+    /// Canonical secret-free provider identity used by native egress bindings.
+    pub fn egress_provider_identity(&self) -> String {
+        let (kind, base_url) = match self {
+            Self::Ollama { base_url, .. } => ("ollama", base_url),
+            Self::OpenAiCompatible { base_url, .. } => ("openai_compatible", base_url),
+        };
+        format!("{kind}:{}", base_url.as_str().trim_end_matches('/'))
+    }
+
+    /// Canonical model reference used by native egress bindings.
+    pub fn egress_model_ref(&self) -> String {
+        let model = match self {
+            Self::Ollama { model, .. } | Self::OpenAiCompatible { model, .. } => model,
+        };
+        format!("model:{model}")
+    }
+
+    /// Require policy-facing binding metadata to describe this exact decoded route.
+    pub fn matches_egress_binding(&self, provider_identity: &str, model_ref: &str) -> bool {
+        self.egress_provider_identity() == provider_identity && self.egress_model_ref() == model_ref
+    }
+}
+
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct CompletionRequestV1 {
     pub provider: ProviderSpecV1,
@@ -517,6 +541,22 @@ mod tests {
         };
         let encoded = serde_json::to_value(&spec)?;
         assert_eq!(serde_json::from_value::<ProviderSpecV1>(encoded)?, spec);
+        Ok(())
+    }
+
+    #[test]
+    fn provider_specs_derive_stable_secret_free_egress_binding_identity() -> TestResult {
+        let spec = ProviderSpecV1::Ollama {
+            base_url: ValidatedEndpoint::try_new("http://127.0.0.1:11434/")?,
+            model: "fixture-model".into(),
+        };
+        assert_eq!(
+            spec.egress_provider_identity(),
+            "ollama:http://127.0.0.1:11434"
+        );
+        assert_eq!(spec.egress_model_ref(), "model:fixture-model");
+        assert!(spec.matches_egress_binding("ollama:http://127.0.0.1:11434", "model:fixture-model"));
+        assert!(!spec.matches_egress_binding("ollama:http://127.0.0.1:11434", "model:other"));
         Ok(())
     }
 

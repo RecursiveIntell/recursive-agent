@@ -1293,6 +1293,7 @@ dependencies = [
  "recursive-agent-contracts",
  "recursive-agent-ledger",
  "recursive-agent-policy",
+ "recursive-agent-provider",
  "recursive-agent-runner",
  "recursive-agent-tools",
  "rustix",

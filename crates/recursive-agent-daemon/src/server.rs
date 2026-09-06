@@ -92,8 +92,15 @@ pub fn serve(
             continue;
         }
         std::thread::spawn(move || {
-            let _guard = ActiveGuard(&active);
-            if let Err(error) = handle_connection(stream, runtime) {
+            let _guard = match ActiveGuard::new(&active, &runtime) {
+                Ok(guard) => guard,
+                Err(error) => {
+                    active.fetch_sub(1, Ordering::SeqCst);
+                    eprintln!("connection accounting error: {error}");
+                    return;
+                }
+            };
+            if let Err(error) = handle_connection(stream, Arc::clone(&runtime)) {
                 eprintln!("connection error: {error}");
             }
         });
@@ -101,7 +108,17 @@ pub fn serve(
     Ok(())
 }
 
-struct ActiveGuard<'a>(&'a AtomicUsize);
+struct ActiveGuard<'a> {
+    active: &'a AtomicUsize,
+    runtime: &'a RuntimeService,
+}
+
+impl<'a> ActiveGuard<'a> {
+    fn new(active: &'a AtomicUsize, runtime: &'a RuntimeService) -> Result<Self, ServerError> {
+        runtime.managed_ipc_connection_opened()?;
+        Ok(Self { active, runtime })
+    }
+}
 
 /// Atomically reserve one bounded worker slot. A separate load then increment
 /// can oversubscribe `max` when acceptors race.
@@ -125,7 +142,8 @@ fn try_reserve_connection_slot(active: &AtomicUsize, max: usize) -> bool {
 
 impl Drop for ActiveGuard<'_> {
     fn drop(&mut self) {
-        self.0.fetch_sub(1, Ordering::SeqCst);
+        let _ = self.runtime.managed_ipc_connection_closed();
+        self.active.fetch_sub(1, Ordering::SeqCst);
     }
 }
 
@@ -365,6 +383,16 @@ fn dispatch(
                 "run_id": handle.run_id().to_string(),
                 "run_dir": handle.run_dir().display().to_string(),
                 "submitted": true,
+            }))
+        }
+        IpcRequestV1::SubmitProviderEgressV3 { operation } => {
+            let handle = runtime.submit_provider_egress_v3(operation)?;
+            Ok(serde_json::json!({
+                "request_id": request.request_id,
+                "run_id": handle.run_id().to_string(),
+                "run_dir": handle.run_dir().display().to_string(),
+                "submitted": true,
+                "operation_family": "provider_egress_v3",
             }))
         }
     }

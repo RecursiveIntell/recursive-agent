@@ -3,27 +3,37 @@
 mod autonomous;
 mod deps;
 mod error;
+mod managed_admission;
 mod runtime;
 mod sandbox_engine;
 mod scheduler;
+mod sealed_completion;
 
 pub use autonomous::{
     AutonomousActionV1, AutonomousBudgetV1, AutonomousCancellation, AutonomousContextV1,
     AutonomousError, AutonomousExecutor, AutonomousIntentV1, AutonomousPlanV1, AutonomousPlanner,
     AutonomousReceiptV1, AutonomousResultV1, AutonomousRunner, AutonomousTranscript,
-    JsonAutonomousPlanner, ModelAutonomousPlanner,
+    JsonAutonomousPlanner, ModelAutonomousPlanner, ProviderEgressAuthorizer,
 };
 pub use deps::{
-    RuntimeDependencies, RuntimeDependenciesBuilder, RuntimeLedgerDependencyV1,
+    ActiveLeafConfigV1, RuntimeDependencies, RuntimeDependenciesBuilder, RuntimeLedgerDependencyV1,
     RuntimePolicyDependencyV1, RuntimeProviderDependencyV1, RuntimeSandboxDependencyV1,
     RuntimeStoreDependencyV1,
 };
 pub use error::RuntimeDependencyError;
+pub use managed_admission::{
+    LaneRequirementV1, ManagedAdmissionConfigV1, ManagedAdmissionDomain, ManagedAdmissionError,
+    ManagedAdmissionRequestV1, ManagedAdmissionSnapshotV1, ManagedBudgetV1, ManagedQueueClassV1,
+    ManagedReservation, ManagedUsageV1, PROVIDER_LANE, SANDBOX_PROCESS_LANE, TOOL_LANE,
+};
 pub use runtime::{
     NativeOperationExecutor, RuntimeCancelResultV1, RuntimeHandleV1, RuntimeLiveParentV2,
     RuntimeService, RuntimeServiceError, RuntimeStatusV1,
 };
-pub use scheduler::{OperationRow, ProjectedState, SchedulerStore, SchedulerStoreError};
+pub use scheduler::{
+    LeaseGrantV1, OperationRow, ProjectedState, SchedulerStore, SchedulerStoreError,
+};
+pub use sealed_completion::{tool_runtime_with_sealed_completion, SealedCompletionTool};
 
 use std::collections::{BTreeMap, BTreeSet};
 use std::fs::File;
@@ -36,8 +46,9 @@ use recursive_agent_contracts::{
     content_digest, derive_permit_id, derive_step_id, ActorAuthorityV1, ArtifactDescriptorV1,
     AuthorityOriginV1, CausalLinkV1, ContentDigest, ContractError, CurrentPermitId, CurrentRunId,
     CurrentStepId, DeclaredEffectsV1, OperationBudgetV1, OperationEnvelopeV1, OperationSchemaV1,
-    ProvenanceRefV1, ReceiptKindV1, ReceiptOutcomeV1, RecordedReplayResultV1, ReplayClassV1,
-    ReplayIntentV1, ReplaySpecV1, RunSpecV1, RunTerminalStateV1, StepSpecV1, ToolCallSpecV1,
+    ProvenanceRefV1, ProviderEgressOperationEnvelopeV3, ReceiptKindV1, ReceiptOutcomeV1,
+    RecordedReplayResultV1, ReplayClassV1, ReplayIntentV1, ReplaySpecV1, RunSpecV1,
+    RunTerminalStateV1, StepSpecV1, ToolCallSpecV1, MAX_RUN_SPEC_MATERIAL_BYTES,
     MAX_SHELL_OUTPUT_BYTES, MAX_SHELL_TIMEOUT_MS,
 };
 use recursive_agent_ledger::{
@@ -49,6 +60,7 @@ use recursive_agent_policy::{
     DelegationTransitionV1, DurablePermitStore, EffectScopeV1, FamilyAuthorityStore,
     FamilyChildRequestV1, FamilyRootGrantV1, PermitBindingV1, PermitBudgetV1, PermitEvidenceV1,
     PermitRejectionReasonV1, PermitRevocationReasonV1, PolicyError,
+    ValidatedProviderEgressAdmissionV1,
 };
 use thiserror::Error;
 
@@ -467,7 +479,7 @@ fn run_spec_internal_with_run_id(
         hook,
         run_id,
         tool_executor,
-        ExecutionMode::Finalized { family_guard: None },
+        ExecutionPlan::native(ExecutionMode::Finalized { family_guard: None }),
     )? {
         RunExecution::Finalized(summary) => Ok(summary),
         RunExecution::Live(_) => Err(RunError::LiveParentUnavailable),
@@ -488,7 +500,7 @@ pub(crate) fn run_live_parent_spec_with_run_id(
         &NoopRunnerHook,
         run_id,
         tool_executor,
-        ExecutionMode::LiveParent,
+        ExecutionPlan::native(ExecutionMode::LiveParent),
     )? {
         RunExecution::Live(parent) => {
             let mut parent = *parent;
@@ -517,8 +529,64 @@ pub(crate) fn run_child_spec_with_run_id(
         &NoopRunnerHook,
         run_id,
         tool_executor,
-        ExecutionMode::Finalized {
+        ExecutionPlan::native(ExecutionMode::Finalized {
             family_guard: Some(&family_guard),
+        }),
+    )? {
+        RunExecution::Finalized(summary) => Ok(summary),
+        RunExecution::Live(_) => Err(RunError::LiveParentUnavailable),
+    }
+}
+
+pub(crate) fn run_provider_egress_operation_v3_with_run_id(
+    operation: &ProviderEgressOperationEnvelopeV3,
+    out_root: &Path,
+    clock: &dyn Clock,
+    run_id: CurrentRunId,
+    tool_executor: &dyn RunnerToolExecutor,
+    admission: &ValidatedProviderEgressAdmissionV1,
+) -> Result<RunSummary, RunError> {
+    operation.validate_at(admission.verified_at())?;
+    let arguments = serde_json::to_value(&operation.sealed_completion.arguments)?;
+    if admission.binding() != &operation.sealed_completion.arguments.binding
+        || admission.tool_arguments_digest() != &content_digest(&arguments)?
+    {
+        return Err(PolicyError::InvalidLease(
+            "V3 operation does not bind the validated provider-egress admission".into(),
+        )
+        .into());
+    }
+    let spec = RunSpecV1 {
+        name: "provider-egress-operation-v3".into(),
+        steps: vec![StepSpecV1 {
+            name: "sealed_completion".into(),
+            call: ToolCallSpecV1 {
+                tool: "sealed_completion".into(),
+                args: arguments,
+                frozen_clock: None,
+            },
+        }],
+        frozen_clock: None,
+        policy_version: "candidate-egress-v1".into(),
+    };
+    let allowlist = Allowlist {
+        allowed: BTreeSet::from(["sealed_completion".into()]),
+        max_arg_bytes: MAX_RUN_SPEC_MATERIAL_BYTES,
+        policy_version: "candidate-egress-v1".into(),
+    };
+    match execute_spec_with_run_id(
+        &spec,
+        out_root,
+        clock,
+        &NoopRunnerHook,
+        run_id,
+        tool_executor,
+        ExecutionPlan {
+            mode: ExecutionMode::Finalized { family_guard: None },
+            allowlist,
+            provider_egress_admission: Some(admission),
+            provider_egress_budget: Some(&operation.budget),
+            root_spec_digest: Some(content_digest(operation)?),
         },
     )? {
         RunExecution::Finalized(summary) => Ok(summary),
@@ -590,6 +658,34 @@ enum ExecutionMode<'a> {
     LiveParent,
 }
 
+struct ExecutionPlan<'a> {
+    mode: ExecutionMode<'a>,
+    allowlist: Allowlist,
+    provider_egress_admission: Option<&'a ValidatedProviderEgressAdmissionV1>,
+    provider_egress_budget: Option<&'a OperationBudgetV1>,
+    root_spec_digest: Option<ContentDigest>,
+}
+
+impl<'a> ExecutionPlan<'a> {
+    fn native(mode: ExecutionMode<'a>) -> Self {
+        Self {
+            mode,
+            allowlist: Allowlist::default(),
+            provider_egress_admission: None,
+            provider_egress_budget: None,
+            root_spec_digest: None,
+        }
+    }
+}
+
+struct PermitBindingContext<'a> {
+    policy_version: &'a str,
+    parent_permit_id: Option<CurrentPermitId>,
+    trusted_now: DateTime<Utc>,
+    parent_expires_at: DateTime<Utc>,
+    provider_egress_budget: Option<&'a OperationBudgetV1>,
+}
+
 fn execute_spec_with_run_id(
     spec: &RunSpecV1,
     out_root: &Path,
@@ -597,18 +693,25 @@ fn execute_spec_with_run_id(
     hook: &dyn RunnerHook,
     run_id: CurrentRunId,
     tool_executor: &dyn RunnerToolExecutor,
-    mode: ExecutionMode<'_>,
+    plan: ExecutionPlan<'_>,
 ) -> Result<RunExecution, RunError> {
+    let ExecutionPlan {
+        mode,
+        allowlist,
+        provider_egress_admission,
+        provider_egress_budget,
+        root_spec_digest,
+    } = plan;
     let (family_guard, leave_appendable) = match mode {
         ExecutionMode::Finalized { family_guard } => (family_guard, false),
         ExecutionMode::LiveParent => (None, true),
     };
-    let allowlist = Allowlist::default();
     allowlist.validate_phase_one_boundary(spec)?;
     for step in &spec.steps {
         allowlist.authorize(spec, &step.name, &step.call)?;
     }
     let mut prepared_dispatches = prepare_step_dispatches(spec)?;
+    let spec_digest = root_spec_digest.unwrap_or(content_digest(spec)?);
     let lifecycle_issue_time = clock.now();
     let (delegation_ceiling, lifecycle_binding) = lifecycle_authority(
         spec,
@@ -616,6 +719,8 @@ fn execute_spec_with_run_id(
         &allowlist.policy_version,
         lifecycle_issue_time,
         &prepared_dispatches,
+        &spec_digest,
+        provider_egress_budget,
     )?;
     let run_directory_key = content_digest(&run_id)?.to_string();
     let pinned_root = PinnedRunRoot::open(out_root, &run_directory_key)?;
@@ -641,7 +746,6 @@ fn execute_spec_with_run_id(
     {
         return Err(RunError::SplitRunRoot);
     }
-    let spec_digest = content_digest(spec)?;
     let lifecycle_monotonic_start = clock.monotonic_now();
     let lifecycle_call = ToolCallSpecV1 {
         tool: "runner.lifecycle".into(),
@@ -708,6 +812,27 @@ fn execute_spec_with_run_id(
         vec![lifecycle_issue_evidence],
         ReceiptOutcomeV1::Ok,
     )?;
+    if let Some(admission) = provider_egress_admission {
+        let step = spec.steps.first().ok_or_else(|| {
+            ContractError::Malformed("provider-egress operation omitted its sealed step".into())
+        })?;
+        let admission_step_id = derive_step_id(&run_id, 0, &step.name, &step.call)?;
+        let admission_evidence = admission.evidence()?;
+        let admission_descriptor =
+            put_string(&store, &serde_json::to_string(&admission_evidence)?)?;
+        append_receipt!(
+            &mut chain,
+            run_id.clone(),
+            admission_step_id,
+            ReceiptKindV1::ProviderEgressAdmitted,
+            admission.verified_at(),
+            lifecycle_lineage.clone(),
+            spec_digest.clone(),
+            admission.tool_arguments_digest().clone(),
+            vec![admission_descriptor],
+            ReceiptOutcomeV1::Ok,
+        )?;
+    }
 
     let mut lifecycle = RunLifecycle::new();
     let mut terminal_reason = "all steps completed".to_string();
@@ -721,6 +846,8 @@ fn execute_spec_with_run_id(
             index,
             step,
             allowlist: &allowlist,
+            provider_egress_admission,
+            provider_egress_budget,
             parent_permit_id: &lifecycle_permit.permit_id,
             denial_lineage: &lifecycle_lineage,
             clock,
@@ -1043,6 +1170,8 @@ struct RunStepContext<'a> {
     index: usize,
     step: &'a StepSpecV1,
     allowlist: &'a Allowlist,
+    provider_egress_admission: Option<&'a ValidatedProviderEgressAdmissionV1>,
+    provider_egress_budget: Option<&'a OperationBudgetV1>,
     parent_permit_id: &'a CurrentPermitId,
     denial_lineage: &'a [recursive_agent_contracts::AuthorityLineageEntryV1],
     clock: &'a dyn Clock,
@@ -1066,6 +1195,8 @@ fn run_step(context: RunStepContext<'_>) -> Result<Option<(RunTerminalStateV1, S
         index,
         step,
         allowlist,
+        provider_egress_admission,
+        provider_egress_budget,
         parent_permit_id,
         denial_lineage,
         clock,
@@ -1198,10 +1329,13 @@ fn run_step(context: RunStepContext<'_>) -> Result<Option<(RunTerminalStateV1, S
         run_id,
         &step_id,
         &step.call,
-        &allowlist.policy_version,
-        Some(parent_permit_id.clone()),
-        issue_time,
-        parent_expires_at,
+        PermitBindingContext {
+            policy_version: &allowlist.policy_version,
+            parent_permit_id: Some(parent_permit_id.clone()),
+            trusted_now: issue_time,
+            parent_expires_at,
+            provider_egress_budget,
+        },
     )?;
     append_receipt!(
         chain,
@@ -1219,7 +1353,12 @@ fn run_step(context: RunStepContext<'_>) -> Result<Option<(RunTerminalStateV1, S
         Vec::new,
         sandbox_engine::PreparedDispatch::executable_authority,
     );
-    let permit = match permit_store.issue_effect(&binding, executable_authority, issue_time) {
+    let permit_result = if let Some(admission) = provider_egress_admission {
+        permit_store.issue_provider_egress(&binding, admission, issue_time)
+    } else {
+        permit_store.issue_effect(&binding, executable_authority, issue_time)
+    };
+    let permit = match permit_result {
         Ok(permit) => permit,
         Err(error) => {
             let reason = error.to_string();
@@ -1395,6 +1534,8 @@ fn run_step(context: RunStepContext<'_>) -> Result<Option<(RunTerminalStateV1, S
     } else {
         tool_result
     };
+    let tool_result =
+        tool_result.and_then(|output| enforce_tool_output_budget(output, &binding.budget));
 
     match tool_result {
         Ok(output) => {
@@ -1481,6 +1622,43 @@ fn run_step(context: RunStepContext<'_>) -> Result<Option<(RunTerminalStateV1, S
             Ok(Some((terminal, reason)))
         }
     }
+}
+
+fn enforce_tool_output_budget(
+    output: RunnerToolOutput,
+    budget: &PermitBudgetV1,
+) -> Result<RunnerToolOutput, recursive_agent_tools::ToolError> {
+    let output_bytes = u64::try_from(serde_json::to_vec(&output.body)?.len()).map_err(|_| {
+        recursive_agent_tools::ToolError::BudgetExceeded(
+            "serialized tool output length exceeds u64".into(),
+        )
+    })?;
+    if output_bytes > budget.max_output_bytes {
+        return Err(recursive_agent_tools::ToolError::BudgetExceeded(format!(
+            "serialized tool output bytes {output_bytes} exceed permit ceiling {}",
+            budget.max_output_bytes
+        )));
+    }
+    let mut artifact_bytes = output_bytes;
+    for evidence in &output.source_evidence {
+        let evidence_bytes = u64::try_from(serde_json::to_vec(evidence)?.len()).map_err(|_| {
+            recursive_agent_tools::ToolError::BudgetExceeded(
+                "serialized source evidence length exceeds u64".into(),
+            )
+        })?;
+        artifact_bytes = artifact_bytes.checked_add(evidence_bytes).ok_or_else(|| {
+            recursive_agent_tools::ToolError::BudgetExceeded(
+                "aggregate serialized artifact length overflowed".into(),
+            )
+        })?;
+    }
+    if artifact_bytes > budget.max_artifact_bytes {
+        return Err(recursive_agent_tools::ToolError::BudgetExceeded(format!(
+            "serialized artifact bytes {artifact_bytes} exceed permit ceiling {}",
+            budget.max_artifact_bytes
+        )));
+    }
+    Ok(output)
 }
 
 fn dispatch_tool(
@@ -1594,7 +1772,10 @@ fn lifecycle_authority(
     policy_version: &str,
     trusted_now: DateTime<Utc>,
     prepared: &[Option<sandbox_engine::PreparedDispatch>],
+    operation_digest: &ContentDigest,
+    provider_egress_budget: Option<&OperationBudgetV1>,
 ) -> Result<(DelegationCeilingV1, PermitBindingV1), RunError> {
+    let provider_egress = provider_egress_budget.is_some();
     let actor = ActorPrincipalV1::try_new("recursive-agent")?;
     let mut actions = BTreeMap::new();
     let mut total = PermitBudgetV1 {
@@ -1605,25 +1786,41 @@ fn lifecycle_authority(
     for (index, step) in spec.steps.iter().enumerate() {
         let read_roots = string_array(&step.call.args, "allowed_read_paths")?;
         let write_roots = string_array(&step.call.args, "allowed_write_paths")?;
+        let network_allowed = if provider_egress && step.call.tool == "sealed_completion" {
+            true
+        } else {
+            optional_bool(&step.call.args, "allow_network")?.unwrap_or(false)
+        };
         let effect = EffectScopeV1 {
             scope_name: step.call.tool.clone(),
             read_roots,
             write_roots,
-            network_allowed: optional_bool(&step.call.args, "allow_network")?.unwrap_or(false),
+            network_allowed,
         };
         let default_timeout = if step.call.tool == "shell" {
             120_000
         } else {
             1_000
         };
-        let wall = optional_u64(&step.call.args, "timeout_ms")?
-            .unwrap_or(default_timeout)
-            .max(1);
-        let budget = PermitBudgetV1 {
-            max_wall_time_ms: wall,
-            max_output_bytes: 128 * 1024,
-            max_artifact_bytes: recursive_agent_ledger::MAX_ARTIFACT_SIZE,
-        };
+        let wall = provider_egress_budget.map_or_else(
+            || {
+                optional_u64(&step.call.args, "timeout_ms")
+                    .map(|value| value.unwrap_or(default_timeout).max(1))
+            },
+            |budget| Ok(budget.max_wall_time_ms),
+        )?;
+        let budget = provider_egress_budget.map_or(
+            PermitBudgetV1 {
+                max_wall_time_ms: wall,
+                max_output_bytes: 128 * 1024,
+                max_artifact_bytes: recursive_agent_ledger::MAX_ARTIFACT_SIZE,
+            },
+            |budget| PermitBudgetV1 {
+                max_wall_time_ms: budget.max_wall_time_ms,
+                max_output_bytes: budget.max_output_bytes,
+                max_artifact_bytes: budget.max_artifact_bytes,
+            },
+        );
         total.max_wall_time_ms = total
             .max_wall_time_ms
             .checked_add(budget.max_wall_time_ms)
@@ -1676,10 +1873,14 @@ fn lifecycle_authority(
     let expires_at = trusted_now
         .checked_add_signed(TimeDelta::milliseconds(validity))
         .ok_or_else(|| PolicyError::BudgetOverrun("control expiry overflow".into()))?;
-    let spec_digest = content_digest(spec)?;
+    let lifecycle_args = if provider_egress {
+        serde_json::json!({"operation_digest": operation_digest})
+    } else {
+        serde_json::json!({"run_spec_digest": operation_digest})
+    };
     let lifecycle_call = ToolCallSpecV1 {
         tool: "runner.lifecycle".into(),
-        args: serde_json::json!({"run_spec_digest": spec_digest}),
+        args: lifecycle_args,
         frozen_clock: None,
     };
     let lifecycle_step_id =
@@ -1726,23 +1927,37 @@ fn permit_binding(
     run_id: &CurrentRunId,
     step_id: &CurrentStepId,
     call: &ToolCallSpecV1,
-    policy_version: &str,
-    parent_permit_id: Option<CurrentPermitId>,
-    trusted_now: DateTime<Utc>,
-    parent_expires_at: DateTime<Utc>,
+    context: PermitBindingContext<'_>,
 ) -> Result<PermitBindingV1, RunError> {
+    let PermitBindingContext {
+        policy_version,
+        parent_permit_id,
+        trusted_now,
+        parent_expires_at,
+        provider_egress_budget,
+    } = context;
+    let provider_egress = provider_egress_budget.is_some();
     let read_roots = string_array(&call.args, "allowed_read_paths")?;
     let write_roots = string_array(&call.args, "allowed_write_paths")?;
+    let network_allowed = if provider_egress && call.tool == "sealed_completion" {
+        true
+    } else {
+        optional_bool(&call.args, "allow_network")?.unwrap_or(false)
+    };
     let effect = EffectScopeV1 {
         scope_name: call.tool.clone(),
         read_roots,
         write_roots,
-        network_allowed: optional_bool(&call.args, "allow_network")?.unwrap_or(false),
+        network_allowed,
     };
     let default_timeout = if call.tool == "shell" { 120_000 } else { 1_000 };
-    let timeout = optional_u64(&call.args, "timeout_ms")?
-        .unwrap_or(default_timeout)
-        .max(1);
+    let timeout = provider_egress_budget.map_or_else(
+        || {
+            optional_u64(&call.args, "timeout_ms")
+                .map(|value| value.unwrap_or(default_timeout).max(1))
+        },
+        |budget| Ok(budget.max_wall_time_ms),
+    )?;
     let expiry_delta = i64::try_from(timeout.saturating_add(1_000))
         .map_err(|_| ContractError::Malformed("permit timeout exceeds i64".into()))?;
     let requested_expires_at = trusted_now
@@ -1754,11 +1969,18 @@ fn permit_binding(
         action_digest: content_digest(call)?,
         effect_digest: content_digest(&effect)?,
         effect,
-        budget: PermitBudgetV1 {
-            max_wall_time_ms: timeout,
-            max_output_bytes: 128 * 1024,
-            max_artifact_bytes: recursive_agent_ledger::MAX_ARTIFACT_SIZE,
-        },
+        budget: provider_egress_budget.map_or(
+            PermitBudgetV1 {
+                max_wall_time_ms: timeout,
+                max_output_bytes: 128 * 1024,
+                max_artifact_bytes: recursive_agent_ledger::MAX_ARTIFACT_SIZE,
+            },
+            |budget| PermitBudgetV1 {
+                max_wall_time_ms: budget.max_wall_time_ms,
+                max_output_bytes: budget.max_output_bytes,
+                max_artifact_bytes: budget.max_artifact_bytes,
+            },
+        ),
         policy_version: policy_version.into(),
         parent_permit_id,
         parent_operation_id: Some(run_id.clone()),

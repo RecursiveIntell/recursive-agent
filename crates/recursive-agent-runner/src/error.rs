@@ -9,4 +9,7 @@ pub enum RuntimeDependencyError {
         /// Stable dependency labels in validation order.
         names: Vec<&'static str>,
     },
+    /// The active-leaf ceiling must admit at least one leaf.
+    #[error("invalid active-leaf ceiling: {value}")]
+    InvalidActiveLeafCeiling { value: usize },
 }

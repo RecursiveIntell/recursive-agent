@@ -19,6 +19,13 @@ pub enum RuntimeEventSchemaV1 {
 pub enum RuntimeEventKindV1 {
     /// The run was durably admitted to its receipt chain.
     Submitted,
+    /// Current policy admitted one exact provider-egress binding.
+    ProviderEgressAdmitted {
+        /// Step whose sealed request was admitted.
+        step_id: CurrentStepId,
+        /// Non-authorizing admission-evidence artifact.
+        evidence: Vec<ArtifactDescriptorV1>,
+    },
     /// A step entered execution lifecycle.
     Started {
         /// Step whose lifecycle started.
@@ -158,6 +165,10 @@ pub fn validate_runtime_event_sequence(
 fn event_kind(receipt: &ReceiptV1) -> RuntimeEventKindV1 {
     match receipt.kind {
         ReceiptKindV1::RunStarted => RuntimeEventKindV1::Submitted,
+        ReceiptKindV1::ProviderEgressAdmitted => RuntimeEventKindV1::ProviderEgressAdmitted {
+            step_id: receipt.step_id.clone(),
+            evidence: receipt.artifact_refs.clone(),
+        },
         ReceiptKindV1::StepStarted => RuntimeEventKindV1::Started {
             step_id: receipt.step_id.clone(),
         },

@@ -2132,7 +2132,9 @@ fn validate_permit_continuity(
     receipts: &[ReceiptV1],
     store: &ArtifactStore,
 ) -> Result<(), LedgerError> {
-    use recursive_agent_policy::{PermitEvidenceStateV1, PermitEvidenceV1, PermitPurposeV1};
+    use recursive_agent_policy::{
+        PermitEvidenceStateV1, PermitEvidenceV1, PermitPurposeV1, ProviderEgressAdmissionEvidenceV1,
+    };
 
     #[derive(Clone, Copy, PartialEq, Eq)]
     enum ObservedPermitState {
@@ -2169,6 +2171,42 @@ fn validate_permit_continuity(
             recursive_agent_policy::PermitBudgetV1,
         >,
     >::new();
+    let mut provider_admissions = std::collections::BTreeMap::<
+        CurrentStepId,
+        (usize, ProviderEgressAdmissionEvidenceV1),
+    >::new();
+    for (index, receipt) in receipts.iter().enumerate() {
+        if receipt.kind != ReceiptKindV1::ProviderEgressAdmitted {
+            continue;
+        }
+        let descriptor = receipt.artifact_refs.first().ok_or_else(|| {
+            permit_divergence(index, "provider-egress admission evidence is missing")
+        })?;
+        let evidence: ProviderEgressAdmissionEvidenceV1 =
+            serde_json::from_slice(&store.get(descriptor)?).map_err(|error| {
+                permit_divergence(
+                    index,
+                    &format!("provider-egress admission evidence is malformed: {error}"),
+                )
+            })?;
+        evidence.validate().map_err(|error| {
+            permit_divergence(
+                index,
+                &format!("provider-egress admission evidence validation failed: {error}"),
+            )
+        })?;
+        if evidence.verified_at != receipt.valid_time
+            || evidence.tool_arguments_digest != receipt.args_digest
+            || provider_admissions
+                .insert(receipt.step_id.clone(), (index, evidence))
+                .is_some()
+        {
+            return Err(permit_divergence(
+                index,
+                "provider-egress admission evidence does not bind its receipt",
+            ));
+        }
+    }
 
     for (index, receipt) in receipts.iter().enumerate() {
         if matches!(
@@ -2322,6 +2360,27 @@ fn validate_permit_continuity(
                     control_states
                         .insert(evidence.permit_id.clone(), PermitEvidenceStateV1::Issued);
                 } else {
+                    if evidence.binding.effect.network_allowed {
+                        let (admission_index, admission) = provider_admissions
+                            .get(&receipt.step_id)
+                            .ok_or_else(|| {
+                                permit_divergence(
+                                    index,
+                                    "network effect permit lacks provider-egress admission evidence",
+                                )
+                            })?;
+                        if *admission_index >= index
+                            || evidence.binding.tool != "sealed_completion"
+                            || evidence.binding.args_digest != admission.tool_arguments_digest
+                            || evidence.binding.issued_at < admission.verified_at
+                            || evidence.binding.expires_at > admission.binding.not_after
+                        {
+                            return Err(permit_divergence(
+                                index,
+                                "network effect permit does not bind its provider-egress admission",
+                            ));
+                        }
+                    }
                     let parent_id =
                         evidence.binding.parent_permit_id.as_ref().ok_or_else(|| {
                             permit_divergence(index, "effect permit omits its control parent")

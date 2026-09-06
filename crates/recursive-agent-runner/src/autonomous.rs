@@ -174,6 +174,15 @@ pub trait AutonomousPlanner {
     }
 }
 
+pub trait ProviderEgressAuthorizer: Send + Sync {
+    fn authorize(
+        &self,
+        context: &AutonomousContextV1,
+        provider: &ProviderSpecV1,
+        max_tokens: Option<u32>,
+    ) -> Result<(), AutonomousError>;
+}
+
 /// Model-backed planner boundary. The backend is injected so deterministic
 /// tests can exercise malformed, unavailable, and valid model responses without
 /// network access. Runtime callers must choose an explicit provider backend.
@@ -181,15 +190,40 @@ pub struct ModelAutonomousPlanner<'a, B> {
     backend: &'a B,
     provider: ProviderSpecV1,
     max_tokens: Option<u32>,
+    egress_authorizer: Option<&'a dyn ProviderEgressAuthorizer>,
     last_model: std::sync::Mutex<Option<String>>,
 }
 
 impl<'a, B> ModelAutonomousPlanner<'a, B> {
     pub fn new(backend: &'a B, provider: ProviderSpecV1, max_tokens: Option<u32>) -> Self {
+        Self::new_without_egress_authorizer(backend, provider, max_tokens)
+    }
+
+    pub fn new_without_egress_authorizer(
+        backend: &'a B,
+        provider: ProviderSpecV1,
+        max_tokens: Option<u32>,
+    ) -> Self {
         Self {
             backend,
             provider,
             max_tokens,
+            egress_authorizer: None,
+            last_model: std::sync::Mutex::new(None),
+        }
+    }
+
+    pub fn new_with_egress_authorizer(
+        backend: &'a B,
+        provider: ProviderSpecV1,
+        authorizer: &'a dyn ProviderEgressAuthorizer,
+        max_tokens: Option<u32>,
+    ) -> Self {
+        Self {
+            backend,
+            provider,
+            max_tokens,
+            egress_authorizer: Some(authorizer),
             last_model: std::sync::Mutex::new(None),
         }
     }
@@ -219,6 +253,10 @@ impl<'a, B> ModelAutonomousPlanner<'a, B> {
 
 impl<B: CompletionBackend> AutonomousPlanner for ModelAutonomousPlanner<'_, B> {
     fn propose(&self, context: &AutonomousContextV1) -> Result<AutonomousPlanV1, AutonomousError> {
+        let authorizer = self
+            .egress_authorizer
+            .ok_or(AutonomousError::ProviderEgressPolicyRequired)?;
+        authorizer.authorize(context, &self.provider, self.max_tokens)?;
         let request = CompletionRequestV1 {
             provider: self.provider.clone(),
             prompt: Self::prompt(context)?,
@@ -303,6 +341,10 @@ pub enum AutonomousError {
     Cancelled,
     #[error("autonomous plan is invalid: {0}")]
     InvalidPlan(String),
+    #[error("provider egress requires an explicit current policy decision")]
+    ProviderEgressPolicyRequired,
+    #[error("provider egress denied: {0}")]
+    ProviderEgressDenied(String),
     #[error("autonomous transcript: {0}")]
     Transcript(String),
     #[error("memory: {0}")]
@@ -879,6 +921,37 @@ mod tests {
         }
     }
 
+    struct AllowProviderEgress;
+
+    impl ProviderEgressAuthorizer for AllowProviderEgress {
+        fn authorize(
+            &self,
+            _context: &AutonomousContextV1,
+            _provider: &ProviderSpecV1,
+            _max_tokens: Option<u32>,
+        ) -> Result<(), AutonomousError> {
+            Ok(())
+        }
+    }
+
+    struct DenyProviderEgress;
+
+    impl ProviderEgressAuthorizer for DenyProviderEgress {
+        fn authorize(
+            &self,
+            _context: &AutonomousContextV1,
+            _provider: &ProviderSpecV1,
+            _max_tokens: Option<u32>,
+        ) -> Result<(), AutonomousError> {
+            Err(AutonomousError::ProviderEgressDenied(
+                "fixture policy denied provider route".into(),
+            ))
+        }
+    }
+
+    static ALLOW_PROVIDER_EGRESS: AllowProviderEgress = AllowProviderEgress;
+    static DENY_PROVIDER_EGRESS: DenyProviderEgress = DenyProviderEgress;
+
     fn model_context() -> AutonomousContextV1 {
         AutonomousContextV1 {
             run_id: "run-model-fixture".into(),
@@ -913,7 +986,12 @@ mod tests {
             unavailable: false,
             calls: AtomicUsize::new(0),
         };
-        let planner = ModelAutonomousPlanner::new(&backend, model_provider()?, Some(128));
+        let planner = ModelAutonomousPlanner::new_with_egress_authorizer(
+            &backend,
+            model_provider()?,
+            &ALLOW_PROVIDER_EGRESS,
+            Some(128),
+        );
         let plan = planner.propose(&model_context())?;
         assert_eq!(plan.intents.len(), 1);
         assert_eq!(backend.calls.load(Ordering::Relaxed), 1);
@@ -930,7 +1008,12 @@ mod tests {
             unavailable: false,
             calls: AtomicUsize::new(0),
         };
-        let planner = ModelAutonomousPlanner::new(&malformed, model_provider()?, None);
+        let planner = ModelAutonomousPlanner::new_with_egress_authorizer(
+            &malformed,
+            model_provider()?,
+            &ALLOW_PROVIDER_EGRESS,
+            None,
+        );
         assert!(matches!(
             planner.propose(&model_context()),
             Err(AutonomousError::InvalidPlan(_))
@@ -946,7 +1029,12 @@ mod tests {
             unavailable: false,
             calls: AtomicUsize::new(0),
         };
-        let planner = ModelAutonomousPlanner::new(&copied_context, model_provider()?, None);
+        let planner = ModelAutonomousPlanner::new_with_egress_authorizer(
+            &copied_context,
+            model_provider()?,
+            &ALLOW_PROVIDER_EGRESS,
+            None,
+        );
         assert!(matches!(
             planner.propose(&model_context()),
             Err(AutonomousError::InvalidPlan(_))
@@ -957,13 +1045,42 @@ mod tests {
             unavailable: true,
             calls: AtomicUsize::new(0),
         };
-        let planner = ModelAutonomousPlanner::new(&unavailable, model_provider()?, None);
+        let planner = ModelAutonomousPlanner::new_with_egress_authorizer(
+            &unavailable,
+            model_provider()?,
+            &ALLOW_PROVIDER_EGRESS,
+            None,
+        );
         assert!(matches!(
             planner.propose(&model_context()),
             Err(AutonomousError::Provider(
                 recursive_agent_provider::ProviderError::Unavailable
             ))
         ));
+        Ok(())
+    }
+
+    #[test]
+    fn denied_provider_egress_never_calls_the_backend() -> Result<(), Box<dyn std::error::Error>> {
+        let backend = CompletionFixture {
+            text: serde_json::json!({"complete": true, "intents": []}).to_string(),
+            unavailable: false,
+            calls: AtomicUsize::new(0),
+        };
+        let mut context = model_context();
+        context.input = serde_json::json!({"private": "must-not-egress"});
+        let planner = ModelAutonomousPlanner::new_with_egress_authorizer(
+            &backend,
+            model_provider()?,
+            &DENY_PROVIDER_EGRESS,
+            Some(128),
+        );
+
+        assert!(matches!(
+            planner.propose(&context),
+            Err(AutonomousError::ProviderEgressDenied(_))
+        ));
+        assert_eq!(backend.calls.load(Ordering::Relaxed), 0);
         Ok(())
     }
 

@@ -15,6 +15,7 @@ fn scheduler_projection_survives_process_restart_without_duplication(
     // Child branch: mutate the store then abort (real process boundary).
     if std::env::var_os("RA_SCHED_RESTART_CHILD").is_some() {
         let path = std::path::PathBuf::from(std::env::var("RA_SCHED_STORE")?);
+        let sink_count = std::path::PathBuf::from(std::env::var("RA_SCHED_SINK_COUNT")?);
         let mut store = SchedulerStore::open(&path)?;
         store.admit("op-1", "digest-a")?;
         store.admit("op-2", "digest-b")?;
@@ -25,11 +26,14 @@ fn scheduler_projection_survives_process_restart_without_duplication(
         store.advance_cursor("op-2", 5)?;
         // op-3 is only admitted (never leased) to prove submitted rows persist.
         store.admit("op-3", "digest-c")?;
+        assert_eq!(std::fs::read_to_string(&sink_count)?, "0");
         std::process::abort();
     }
 
     let tmp = tempfile::tempdir()?;
     let store_path = tmp.path().join("scheduler.json");
+    let sink_count = tmp.path().join("sink-count.txt");
+    std::fs::write(&sink_count, "0")?;
     let executable = std::env::current_exe()?;
 
     let mut child = std::process::Command::new(&executable)
@@ -40,6 +44,7 @@ fn scheduler_projection_survives_process_restart_without_duplication(
         ])
         .env("RA_SCHED_RESTART_CHILD", "1")
         .env("RA_SCHED_STORE", &store_path)
+        .env("RA_SCHED_SINK_COUNT", &sink_count)
         .spawn()?;
     let status = child.wait()?;
     assert!(!status.success(), "child must have aborted");
@@ -61,6 +66,11 @@ fn scheduler_projection_survives_process_restart_without_duplication(
 
     let op3 = store.get("op-3").expect("op-3 present");
     assert_eq!(op3.state, ProjectedState::Submitted);
+    assert_eq!(
+        std::fs::read_to_string(&sink_count)?,
+        "0",
+        "pending admission invoked the external sink"
+    );
 
     // Exact duplicate admission after restart must not duplicate the row.
     let mut store = store;

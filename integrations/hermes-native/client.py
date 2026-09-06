@@ -133,6 +133,28 @@ def submit_envelope(socket_path: str, envelope: dict) -> dict:
         raise DaemonClientError(f"cannot reach daemon: {error}") from error
 
 
+def submit_provider_egress_v3(socket_path: str, envelope: dict) -> dict:
+    """Submit one closed native V3 provider-egress envelope.
+
+    The distinct request kind prevents a V3 operation from being parsed or
+    dispatched through the legacy V1 operation family.
+    """
+    try:
+        conn = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
+        try:
+            conn.settimeout(5.0)
+            conn.connect(socket_path)
+            return _request(
+                conn,
+                "plugin-submit-provider-egress-v3-1",
+                {"kind": "submit_provider_egress_v3", "operation": envelope},
+            )
+        finally:
+            conn.close()
+    except (OSError, ConnectionError) as error:
+        raise DaemonClientError(f"cannot reach daemon: {error}") from error
+
+
 def status_of_run(socket_path: str, run_id: str) -> dict:
     """Query terminal status for a submitted run over IPC."""
     try:
@@ -182,7 +204,10 @@ def submit_and_status(socket_path: str, envelope: dict) -> dict:
     structural validation. This client never derives a receipt reference or a
     verification outcome from a run identifier.
     """
-    submitted = submit_envelope(socket_path, envelope)
+    if envelope.get("schema") == "recursive-agent.operation/v3":
+        submitted = submit_provider_egress_v3(socket_path, envelope)
+    else:
+        submitted = submit_envelope(socket_path, envelope)
     run_id = str(submitted.get("run_id", ""))
     run_dir = submitted.get("run_dir")
     if not run_id:

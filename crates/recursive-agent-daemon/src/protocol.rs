@@ -4,7 +4,8 @@
 //! length prefix is admitted before any payload allocation or JSON parsing.
 
 use recursive_agent_contracts::{
-    parse_strict_json_value, CurrentPermitId, OperationEnvelopeV1, StrictJsonError, ToolCallSpecV1,
+    parse_strict_json_value, CurrentPermitId, OperationEnvelopeV1,
+    ProviderEgressOperationEnvelopeV3, StrictJsonError, ToolCallSpecV1,
 };
 use recursive_agent_policy::{
     OperatorApprovalWitnessV1, PermitApprovalRequestV1, PermitBindingV1,
@@ -175,6 +176,12 @@ pub enum IpcRequestV1 {
         /// Bounded result reported after Ares observes a local tool return,
         /// local error, or an ambiguous outcome.
         reported: ReportedEffectOutcomeV1,
+    },
+    /// Submit one distinct closed V3 provider-egress operation. This variant is
+    /// never decoded as or downgraded to the V1 operation family.
+    SubmitProviderEgressV3 {
+        /// Complete closed provider-egress operation envelope.
+        operation: Box<ProviderEgressOperationEnvelopeV3>,
     },
 }
 

@@ -1,15 +1,17 @@
-use std::collections::{BTreeMap, BTreeSet};
+use std::collections::BTreeMap;
 use std::sync::Mutex;
 
 use llm_tool_runtime::{
-    ToolBudgetContext, ToolCall, ToolCtx, ToolOriginKind, ToolPlannerStage, ToolRetryOwner,
-    ToolRuntime,
+    ToolBudgetContext, ToolCall, ToolCtx, ToolExecutionPermit, ToolOriginKind, ToolPlannerStage,
+    ToolRetryOwner, ToolRuntime,
 };
 use recursive_agent_contracts::{
     content_digest, derive_child_operation_id, derive_child_operation_proposal_digest,
-    derive_operation_id, derive_step_id, parse_operation_envelope_bytes, ChildOperationEnvelopeV2,
-    ChildOperationProposalV2, ChildRunAuthorityV1, ContractError, CurrentPermitId, CurrentRunId,
-    OperationEnvelopeV1, ReceiptKindV1, RunTerminalStateV1, RuntimeEventV1, ToolCallSpecV1,
+    derive_operation_id, derive_provider_egress_operation_id, derive_step_id,
+    parse_operation_envelope_bytes, ChildOperationEnvelopeV2, ChildOperationProposalV2,
+    ChildRunAuthorityV1, ContractError, CurrentPermitId, CurrentRunId, OperationEnvelopeV1,
+    ProviderEgressOperationEnvelopeV3, ReceiptKindV1, RunTerminalStateV1, RuntimeEventV1,
+    ToolCallSpecV1,
 };
 use recursive_agent_ledger::{
     committed_events_directory_bound, verified_snapshot_directory_bound,
@@ -17,22 +19,25 @@ use recursive_agent_ledger::{
     verify_directory_bound, ChainVerification, ChildRunLinkV1, LedgerError, RunPaths,
 };
 use recursive_agent_policy::{
-    ActorPrincipalV1, ChildRunCeilingV1, DurablePermitStore, FamilyAuthorityStore,
-    FamilyChildRequestV1, FamilyRootGrantV1, OperatorApprovalVerifierV1, OperatorApprovalWitnessV1,
-    PermitApprovalRequestV1, PermitBudgetV1, PermitEvidenceV1, PermitOutcomeReceiptV1,
-    PermitPreflightReceiptV1, PolicyError, ProductionApprovalVerifierV1,
-    ProductionApprovalWitnessV1, ReportedEffectOutcomeV1,
+    authorize_provider_egress, ActorPrincipalV1, ChildRunCeilingV1, DurablePermitStore,
+    FamilyAuthorityStore, FamilyChildRequestV1, FamilyRootGrantV1, OperatorApprovalVerifierV1,
+    OperatorApprovalWitnessV1, PermitApprovalRequestV1, PermitBudgetV1, PermitEvidenceV1,
+    PermitOutcomeReceiptV1, PermitPreflightReceiptV1, PolicyError, ProductionApprovalVerifierV1,
+    ProductionApprovalWitnessV1, ProviderEgressAdmissionRequestV1, ReportedEffectOutcomeV1,
 };
-use recursive_agent_provider::{CompletionBackend, ProviderSpecV1};
+use recursive_agent_provider::{CompletionBackend, CompletionRequestV1, ProviderSpecV1};
 use stack_ids::{AttemptId, TraceCtx, TrialId};
 use thiserror::Error;
 
 use crate::{
-    run_child_spec_with_run_id, run_live_parent_spec_with_run_id, run_spec_internal_with_run_id,
+    run_child_spec_with_run_id, run_live_parent_spec_with_run_id,
+    run_provider_egress_operation_v3_with_run_id, run_spec_internal_with_run_id,
     AutonomousBudgetV1, AutonomousCancellation, AutonomousError, AutonomousExecutor,
     AutonomousIntentV1, AutonomousPlanner, AutonomousResultV1, AutonomousTranscript,
-    JsonAutonomousPlanner, LiveParentRun, ModelAutonomousPlanner, NoopRunnerHook, RunError,
-    RunnerToolExecutor, RunnerToolOutput, RuntimeDependencies,
+    JsonAutonomousPlanner, LiveParentRun, ManagedAdmissionDomain, ManagedAdmissionError,
+    ManagedAdmissionRequestV1, ManagedBudgetV1, ManagedReservation, ModelAutonomousPlanner,
+    NoopRunnerHook, ProviderEgressAuthorizer, RunError, RunnerToolExecutor, RunnerToolOutput,
+    RuntimeDependencies,
 };
 
 /// Stable handle returned only after the authoritative run has reached a terminal receipt.
@@ -86,7 +91,6 @@ pub struct RuntimeLiveParentV2<'a> {
     service: &'a RuntimeService,
     parent: LiveParentRun,
     finalized: bool,
-    _active: ActiveOperationGuard<'a>,
 }
 
 /// Ledger-derived runtime state. No adapter-supplied terminal state is accepted.
@@ -148,12 +152,33 @@ pub enum RuntimeServiceError {
         /// Missing canonical tool name.
         name: String,
     },
+    /// Candidate V3 egress has no injected current policy owner.
+    #[error("candidate provider egress is disabled in this runtime composition")]
+    ProviderEgressDisabled,
+    /// Opaque V3 request did not decode as the provider owner's closed request.
+    #[error("candidate provider request is malformed")]
+    ProviderRequestMalformed,
+    /// V3 request provider differs from the explicitly configured dependency.
+    #[error("candidate provider request does not match runtime configuration")]
+    ProviderConfigurationMismatch,
+    /// Policy-facing provider/model metadata does not describe the decoded request.
+    #[error("candidate provider binding does not match the decoded request route")]
+    ProviderBindingMismatch,
+    /// Recorded replay was requested before a verified V3 run exists.
+    #[error("recorded provider-egress replay is unavailable")]
+    ProviderEgressReplayUnavailable,
     /// The same operation is already executing through this service instance.
     #[error("operation is already active: {operation_id}")]
     OperationAlreadyActive {
         /// Canonical operation identity.
         operation_id: String,
     },
+    /// The owner-controlled active-leaf capacity is currently exhausted.
+    #[error("active-leaf capacity exhausted: configured ceiling={configured}")]
+    ActiveLeafCapacityExceeded { configured: usize },
+    /// Managed native admission failed before physical dispatch.
+    #[error("managed admission: {0}")]
+    ManagedAdmission(ManagedAdmissionError),
     /// Internal concurrent state was poisoned; the service fails closed.
     #[error("runtime service state is poisoned")]
     StatePoisoned,
@@ -323,6 +348,35 @@ impl RunnerToolExecutor for AdmittedToolExecutor<'_> {
                 evidence.binding.run_id, evidence.binding.step_id, evidence.permit_id
             ),
         };
+        let tool_execution_permit = if call.tool == "sealed_completion" {
+            let target_key = call
+                .args
+                .get("binding")
+                .and_then(|binding| binding.get("binding_digest"))
+                .and_then(serde_json::Value::as_str)
+                .ok_or_else(|| {
+                    recursive_agent_tools::ToolError::Args(
+                        "sealed_completion binding digest is missing".into(),
+                    )
+                })?;
+            let execution_permit_id =
+                stack_ids::ExecutionPermitId::try_new(evidence.permit_id.to_string())
+                    .map_err(id_error)?;
+            let decision_id = stack_ids::PolicyDecisionId::deterministic(
+                "recursive-agent/provider-egress-policy",
+                evidence.binding_digest.hex(),
+            )
+            .map_err(id_error)?;
+            Some(ToolExecutionPermit::new(
+                execution_permit_id,
+                decision_id,
+                None,
+                "recursive-agent:sealed_completion",
+                target_key,
+            ))
+        } else {
+            None
+        };
         let joined = std::thread::scope(|scope| {
             scope
                 .spawn(|| {
@@ -335,7 +389,12 @@ impl RunnerToolExecutor for AdmittedToolExecutor<'_> {
                             ))
                         })?;
                     Ok::<llm_tool_runtime::ToolExecution, recursive_agent_tools::ToolError>(
-                        runtime.block_on(self.runtime.execute(&context, &owner_call, None, None)),
+                        runtime.block_on(self.runtime.execute(
+                            &context,
+                            &owner_call,
+                            tool_execution_permit.as_ref(),
+                            None,
+                        )),
                     )
                 })
                 .join()
@@ -393,7 +452,7 @@ fn admitted_tool_arguments(
 /// Canonical native owner of operation admission and terminal execution evidence.
 pub struct RuntimeService {
     dependencies: RuntimeDependencies,
-    active_operations: Mutex<BTreeSet<String>>,
+    admission: ManagedAdmissionDomain,
     /// Live-parent cancellation reaches the family authority directly; this is
     /// authority state, not a scheduler projection.
     live_families: Mutex<BTreeMap<String, FamilyAuthorityStore>>,
@@ -407,9 +466,22 @@ pub struct RuntimeService {
 impl RuntimeService {
     /// Construct a service from a complete, previously admitted dependency set.
     pub fn new(dependencies: RuntimeDependencies) -> Self {
+        let admission = ManagedAdmissionDomain::from_global(
+            dependencies.active_leaf_config().max_active_leaves,
+        );
+        Self::new_with_managed_admission(dependencies, admission)
+    }
+
+    /// Construct a managed facade over an explicitly shared physical-admission
+    /// owner. Multi-facade daemon/Graph/specialist compositions must use this
+    /// constructor rather than manufacturing independent capacity pools.
+    pub fn new_with_managed_admission(
+        dependencies: RuntimeDependencies,
+        admission: ManagedAdmissionDomain,
+    ) -> Self {
         Self {
             dependencies,
-            active_operations: Mutex::new(BTreeSet::new()),
+            admission,
             live_families: Mutex::new(BTreeMap::new()),
             scheduler: std::sync::Mutex::new(None),
             operator_approval_verifier: None,
@@ -477,6 +549,26 @@ impl RuntimeService {
         Ok(permits.issue(&binding, now)?)
     }
 
+    /// Return a cloneable handle to this service's one physical-admission owner.
+    /// The handle shares state; it is not a copied scheduler or capacity pool.
+    pub fn managed_admission_domain(&self) -> ManagedAdmissionDomain {
+        self.admission.clone()
+    }
+
+    /// Record one accepted IPC connection independently of physical workers.
+    pub fn managed_ipc_connection_opened(&self) -> Result<(), RuntimeServiceError> {
+        self.admission
+            .connection_opened()
+            .map_err(map_admission_error)
+    }
+
+    /// Release one accepted IPC connection independently of physical workers.
+    pub fn managed_ipc_connection_closed(&self) -> Result<(), RuntimeServiceError> {
+        self.admission
+            .connection_closed()
+            .map_err(map_admission_error)
+    }
+
     /// Attach a durable scheduler control projection (non-breaking; callers
     /// that do not need durability can keep using [`Self::new`]).
     pub fn with_scheduler(self, store: crate::SchedulerStore) -> Result<Self, RuntimeServiceError> {
@@ -532,6 +624,30 @@ impl RuntimeService {
         )?)
     }
 
+    /// Return the configured active-leaf ceiling owned by this service.
+    pub fn active_leaf_config(&self) -> crate::ActiveLeafConfigV1 {
+        self.dependencies.active_leaf_config()
+    }
+
+    /// Read the service-owned global queue/lane/draining projection. This is
+    /// operational state, not execution receipt truth.
+    pub fn managed_admission_snapshot(
+        &self,
+    ) -> Result<crate::ManagedAdmissionSnapshotV1, RuntimeServiceError> {
+        self.admission.snapshot().map_err(map_admission_error)
+    }
+
+    /// Apply an explicitly versioned managed admission configuration. Existing
+    /// reservations retain their original budgets and drain under the new cap.
+    pub fn reconfigure_managed_admission(
+        &self,
+        config: crate::ManagedAdmissionConfigV1,
+    ) -> Result<(), RuntimeServiceError> {
+        self.admission
+            .reconfigure(config)
+            .map_err(map_admission_error)
+    }
+
     /// Execute a direct V1 root operation's own declared steps, then retain
     /// its lifecycle permit and parent chain as an appendable, runtime-owned
     /// V2 child-admission session. `submit` deliberately does not use this
@@ -543,23 +659,7 @@ impl RuntimeService {
         operation.validate()?;
         self.require_registered_tools(&operation.run_spec.steps)?;
         let operation_id = derive_operation_id(operation)?;
-        let active_key = operation_id.to_string();
-        {
-            let mut active = self
-                .active_operations
-                .lock()
-                .map_err(|_| RuntimeServiceError::StatePoisoned)?;
-            if !active.insert(active_key.clone()) {
-                return Err(RuntimeServiceError::OperationAlreadyActive {
-                    operation_id: active_key,
-                });
-            }
-        }
-        let active = ActiveOperationGuard {
-            active_operations: &self.active_operations,
-            active_key,
-            released: false,
-        };
+        let active = self.acquire_active_operation(operation_id.to_string(), &operation.budget)?;
         let executor = AdmittedToolExecutor {
             runtime: self.dependencies.tool_runtime(),
         };
@@ -592,11 +692,14 @@ impl RuntimeService {
         )?;
         let family = parent.family_store()?;
         self.register_live_family(&operation_id, family)?;
+        // The parent has finished its physical work and now represents only a
+        // durable control/lifecycle boundary. It must not retain scarce leaf
+        // capacity while descendants wait or execute.
+        active.release().map_err(map_admission_error)?;
         Ok(RuntimeLiveParentV2 {
             service: self,
             parent,
             finalized: false,
-            _active: active,
         })
     }
 
@@ -624,23 +727,7 @@ impl RuntimeService {
         }
 
         let operation_id = derive_operation_id(operation)?;
-        let active_key = operation_id.to_string();
-        {
-            let mut active = self
-                .active_operations
-                .lock()
-                .map_err(|_| RuntimeServiceError::StatePoisoned)?;
-            if !active.insert(active_key.clone()) {
-                return Err(RuntimeServiceError::OperationAlreadyActive {
-                    operation_id: active_key,
-                });
-            }
-        }
-        let _guard = ActiveOperationGuard {
-            active_operations: &self.active_operations,
-            active_key,
-            released: false,
-        };
+        let _guard = self.acquire_active_operation(operation_id.to_string(), &operation.budget)?;
 
         let tool_executor = AdmittedToolExecutor {
             runtime: self.dependencies.tool_runtime(),
@@ -658,6 +745,135 @@ impl RuntimeService {
             operation_id,
             run_id: summary.run_id,
             run_dir: summary.run_dir,
+        })
+    }
+
+    /// Execute one closed V3 provider-egress operation through the native
+    /// permit, artifact, and terminal-receipt chain. This entry point exists
+    /// only on an explicitly configured candidate runtime; V1/V2/default
+    /// submission remains provider-disabled.
+    pub fn submit_provider_egress_v3(
+        &self,
+        operation: &ProviderEgressOperationEnvelopeV3,
+    ) -> Result<RuntimeHandleV1, RuntimeServiceError> {
+        operation.validate_structure()?;
+        let operation_id = derive_provider_egress_operation_id(operation)?;
+        let run_dir = self
+            .dependencies
+            .output_root()
+            .join(content_digest(&operation_id)?.to_string());
+        if run_dir.is_dir() {
+            return self.replay_provider_egress_v3(operation);
+        }
+        if self
+            .dependencies
+            .tool_runtime()
+            .registry()
+            .get("sealed_completion")
+            .is_none()
+        {
+            return Err(RuntimeServiceError::ToolNotRegistered {
+                name: "sealed_completion".into(),
+            });
+        }
+        let verifier = self
+            .dependencies
+            .provider_egress_verifier()
+            .ok_or(RuntimeServiceError::ProviderEgressDisabled)?;
+        let request: CompletionRequestV1 =
+            serde_json::from_value(operation.sealed_completion.arguments.request.clone())
+                .map_err(|_| RuntimeServiceError::ProviderRequestMalformed)?;
+        if content_digest(&request)? != operation.sealed_completion.arguments.binding.request_digest
+        {
+            return Err(RuntimeServiceError::ProviderRequestMalformed);
+        }
+        let binding = &operation.sealed_completion.arguments.binding;
+        if !request
+            .provider
+            .matches_egress_binding(&binding.provider_identity, &binding.model_ref)
+        {
+            return Err(RuntimeServiceError::ProviderBindingMismatch);
+        }
+        match self.dependencies.provider() {
+            crate::RuntimeProviderDependencyV1::Configured(configured)
+                if configured == &request.provider => {}
+            crate::RuntimeProviderDependencyV1::Disabled => {
+                return Err(RuntimeServiceError::ProviderEgressDisabled);
+            }
+            crate::RuntimeProviderDependencyV1::Configured(_) => {
+                return Err(RuntimeServiceError::ProviderConfigurationMismatch);
+            }
+        }
+        let trusted_now = self.dependencies.clock().now();
+        operation.validate_at(trusted_now)?;
+        let tool_arguments = serde_json::to_value(&operation.sealed_completion.arguments)
+            .map_err(|_| RuntimeServiceError::ProviderRequestMalformed)?;
+        let admission_request = ProviderEgressAdmissionRequestV1::new(
+            "sealed_completion",
+            operation.sealed_completion.arguments.binding.clone(),
+            content_digest(&request)?,
+            content_digest(&tool_arguments)?,
+        )
+        .map_err(RunError::Policy)?;
+        let admission = authorize_provider_egress(verifier, &admission_request, trusted_now)
+            .map_err(RunError::Policy)?;
+        let context_bytes =
+            u64::from(operation.sealed_completion.arguments.binding.input_tokens).saturating_mul(4);
+        let guard = self.acquire_provider_operation(
+            operation_id.to_string(),
+            &operation.sealed_completion.arguments.binding.model_ref,
+            &operation.budget,
+            context_bytes,
+            u64::from(operation.sealed_completion.arguments.binding.input_tokens).saturating_add(
+                u64::from(operation.sealed_completion.arguments.binding.output_reserve),
+            ),
+        )?;
+        guard
+            .mark_provider_in_flight()
+            .map_err(map_admission_error)?;
+        let tool_executor = AdmittedToolExecutor {
+            runtime: self.dependencies.tool_runtime(),
+        };
+        let execution = run_provider_egress_operation_v3_with_run_id(
+            operation,
+            self.dependencies.output_root(),
+            self.dependencies.clock(),
+            operation_id.clone(),
+            &tool_executor,
+            &admission,
+        );
+        guard
+            .mark_provider_complete()
+            .map_err(map_admission_error)?;
+        let summary = execution?;
+        Ok(RuntimeHandleV1 {
+            operation_id,
+            run_id: summary.run_id,
+            run_dir: summary.run_dir,
+        })
+    }
+
+    /// Read a previously verified V3 result without provider, tool, credential,
+    /// current-policy, or current-route access. This is recorded replay only:
+    /// absence or corruption fails closed, and no new receipt is appended.
+    pub fn replay_provider_egress_v3(
+        &self,
+        operation: &ProviderEgressOperationEnvelopeV3,
+    ) -> Result<RuntimeHandleV1, RuntimeServiceError> {
+        operation.validate_structure()?;
+        let operation_id = derive_provider_egress_operation_id(operation)?;
+        let run_dir = self
+            .dependencies
+            .output_root()
+            .join(content_digest(&operation_id)?.to_string());
+        if !run_dir.is_dir() {
+            return Err(RuntimeServiceError::ProviderEgressReplayUnavailable);
+        }
+        self.verify(&operation_id)?;
+        Ok(RuntimeHandleV1 {
+            operation_id: operation_id.clone(),
+            run_id: operation_id,
+            run_dir,
         })
     }
 
@@ -732,7 +948,41 @@ impl RuntimeService {
         backend: &B,
         max_tokens: Option<u32>,
     ) -> Result<AutonomousResultV1, RuntimeServiceError> {
-        let planner = ModelAutonomousPlanner::new(backend, provider, max_tokens);
+        let _ = (
+            input,
+            memory,
+            skills,
+            transcript,
+            budget,
+            cancellation,
+            provider,
+            backend,
+            max_tokens,
+        );
+        Err(RuntimeServiceError::Autonomous(
+            AutonomousError::ProviderEgressPolicyRequired,
+        ))
+    }
+
+    /// Run a model-backed autonomous loop only after the caller supplies the
+    /// current policy/access decision for the exact provider route and context.
+    #[allow(clippy::too_many_arguments)]
+    pub fn run_model_autonomous_with_egress_authorizer<B: CompletionBackend>(
+        &self,
+        input: serde_json::Value,
+        memory: &recursive_agent_memory::MemoryStore,
+        skills: Option<&recursive_agent_skills::SkillRegistry>,
+        transcript: AutonomousTranscript,
+        budget: AutonomousBudgetV1,
+        cancellation: &AutonomousCancellation,
+        provider: ProviderSpecV1,
+        backend: &B,
+        authorizer: &dyn ProviderEgressAuthorizer,
+        max_tokens: Option<u32>,
+    ) -> Result<AutonomousResultV1, RuntimeServiceError> {
+        let planner = ModelAutonomousPlanner::new_with_egress_authorizer(
+            backend, provider, authorizer, max_tokens,
+        );
         let executor = NativeOperationExecutor::new(self);
         self.run_autonomous(
             input,
@@ -783,15 +1033,16 @@ impl RuntimeService {
             .as_mut()
             .ok_or(RuntimeServiceError::IdempotentSubmissionUnavailable)?;
 
-        // Canonical request digest bound to the idempotency key.
+        // Canonical request digest bound to the idempotency-key digest.
         let incoming = derive_operation_id(operation)?.to_string();
+        let key_digest = content_digest(&idempotency_key)?.to_string();
 
         // Existing rows keyed by operation id carry the digest the key was
-        // originally bound to. Find a prior binding by idempotency key.
+        // originally bound to. Find a prior binding by its native digest.
         if let Some(prior) = store
             .live_rows()
             .into_iter()
-            .find(|row| row.idempotency_key_digest.as_deref() == Some(idempotency_key))
+            .find(|row| row.idempotency_key_digest.as_deref() == Some(key_digest.as_str()))
         {
             if prior.operation_id != incoming {
                 return Err(RuntimeServiceError::IdempotencyKeyConflict {
@@ -803,16 +1054,18 @@ impl RuntimeService {
             // Exact duplicate: return a handle referencing the prior run.
             let run_id = CurrentRunId::try_new(&prior.operation_id)
                 .map_err(|_| RuntimeServiceError::StatePoisoned)?;
+            let run_dir = self.run_paths(&run_id)?.root;
+            self.verify(&run_id)?;
             return Ok(RuntimeHandleV1 {
                 operation_id: run_id.clone(),
                 run_id,
-                run_dir: prior.operation_id.into(),
+                run_dir,
             });
         }
 
         // Fresh key: admit durably, then execute.
         store
-            .admit(&incoming, idempotency_key.to_string())
+            .admit(&incoming, key_digest)
             .map_err(|_| RuntimeServiceError::StatePoisoned)?;
         drop(guard);
         self.submit(operation)
@@ -870,6 +1123,9 @@ impl RuntimeService {
                     family
                         .revoke_parent(self.dependencies.clock().now())
                         .map_err(RunError::Policy)?;
+                    self.admission
+                        .mark_descendants_draining(&run_id.to_string())
+                        .map_err(map_admission_error)?;
                     return Ok(RuntimeCancelResultV1::CancellationRequested {
                         run_id: run_id.to_string(),
                     });
@@ -884,6 +1140,9 @@ impl RuntimeService {
                     store
                         .request_cancel(&run_id.to_string())
                         .map_err(|_| RuntimeServiceError::StatePoisoned)?;
+                    self.admission
+                        .mark_active_draining(&run_id.to_string())
+                        .map_err(map_admission_error)?;
                     Ok(RuntimeCancelResultV1::CancellationRequested {
                         run_id: run_id.to_string(),
                     })
@@ -926,11 +1185,117 @@ impl RuntimeService {
     }
 
     fn is_active(&self, run_id: &CurrentRunId) -> Result<bool, RuntimeServiceError> {
-        let active = self
-            .active_operations
+        if self
+            .admission
+            .contains_active(&run_id.to_string())
+            .map_err(map_admission_error)?
+        {
+            return Ok(true);
+        }
+        // A V2 parent can remain logically active while it is idle between
+        // physical leaves. Its family store is the lifecycle owner; it must
+        // remain cancellable/status-visible without consuming leaf capacity.
+        let families = self
+            .live_families
             .lock()
             .map_err(|_| RuntimeServiceError::StatePoisoned)?;
-        Ok(active.contains(&run_id.to_string()))
+        Ok(families.contains_key(&run_id.to_string()))
+    }
+
+    /// Reserve one physical tool leaf under the sole native runtime owner.
+    /// Legacy/direct calls retain fail-fast capacity behavior.
+    fn acquire_active_operation(
+        &self,
+        active_key: String,
+        budget: &recursive_agent_contracts::OperationBudgetV1,
+    ) -> Result<ManagedReservation, RuntimeServiceError> {
+        self.acquire_tool_operation(active_key, None, budget)
+    }
+
+    fn acquire_child_operation(
+        &self,
+        active_key: String,
+        parent_operation_id: String,
+        budget: &recursive_agent_contracts::OperationBudgetV1,
+    ) -> Result<ManagedReservation, RuntimeServiceError> {
+        self.acquire_tool_operation(active_key, Some(parent_operation_id), budget)
+    }
+
+    fn acquire_tool_operation(
+        &self,
+        active_key: String,
+        parent_operation_id: Option<String>,
+        budget: &recursive_agent_contracts::OperationBudgetV1,
+    ) -> Result<ManagedReservation, RuntimeServiceError> {
+        let managed_budget = if parent_operation_id.is_some() {
+            // FamilyAuthorityStore owns the actual child-count and effect
+            // ceiling. Admission tracks the same family scope without minting a
+            // second competing budget authority.
+            ManagedBudgetV1 {
+                max_attempts: u64::MAX,
+                max_wall_time_ms: u64::MAX,
+                max_tokens: u64::MAX,
+                max_cost_microunits: u64::MAX,
+                max_artifact_bytes: u64::MAX,
+                max_context_bytes: u64::MAX,
+            }
+        } else {
+            ManagedBudgetV1 {
+                max_attempts: 1,
+                max_wall_time_ms: budget.max_wall_time_ms,
+                max_tokens: u64::MAX,
+                max_cost_microunits: u64::MAX,
+                max_artifact_bytes: budget.max_artifact_bytes,
+                max_context_bytes: 1,
+            }
+        };
+        let mut request =
+            ManagedAdmissionRequestV1::tool(active_key, "native-tool-runtime", managed_budget);
+        request.parent_operation_id = parent_operation_id.clone();
+        request.budget_scope_id = parent_operation_id.map(|parent| format!("family:{parent}"));
+        request.estimated_artifact_bytes = budget.max_artifact_bytes;
+        let reservation = self
+            .admission
+            .reserve(request)
+            .map_err(map_admission_error)?;
+        reservation
+            .charge_attempt(0, 0, 0, 0, 0)
+            .map_err(map_admission_error)?;
+        Ok(reservation)
+    }
+
+    /// Queue one provider-backed managed leaf under the same global/lane owner.
+    fn acquire_provider_operation(
+        &self,
+        active_key: String,
+        model_ref: &str,
+        budget: &recursive_agent_contracts::OperationBudgetV1,
+        context_bytes: u64,
+        token_reserve: u64,
+    ) -> Result<ManagedReservation, RuntimeServiceError> {
+        let mut request = ManagedAdmissionRequestV1::provider(
+            active_key,
+            model_ref,
+            ManagedBudgetV1 {
+                max_attempts: 1,
+                max_wall_time_ms: budget.max_wall_time_ms,
+                max_tokens: token_reserve.max(1),
+                max_cost_microunits: u64::MAX,
+                max_artifact_bytes: budget.max_artifact_bytes,
+                max_context_bytes: context_bytes.max(1),
+            },
+        );
+        request.context_bytes = context_bytes;
+        request.estimated_artifact_bytes = budget.max_artifact_bytes;
+        request.queue_timeout_ms = budget.max_wall_time_ms.min(300_000);
+        let reservation = self
+            .admission
+            .reserve(request)
+            .map_err(map_admission_error)?;
+        reservation
+            .charge_attempt(0, token_reserve, 0, 0, context_bytes)
+            .map_err(map_admission_error)?;
+        Ok(reservation)
     }
 
     fn require_registered_tools(
@@ -1067,6 +1432,11 @@ impl RuntimeLiveParentV2<'_> {
         };
         child.validate()?;
         let child_run_id = derive_child_operation_id(&child)?;
+        let _active = self.service.acquire_child_operation(
+            child_run_id.to_string(),
+            parent_id.to_string(),
+            &proposal.budget,
+        )?;
         let request = FamilyChildRequestV1 {
             child_run_id: child_run_id.clone(),
             parent_operation_id: parent_id.clone(),
@@ -1184,7 +1554,6 @@ impl RuntimeLiveParentV2<'_> {
         self.service.verify(&summary.run_id)?;
         self.service.unregister_live_family(&summary.run_id)?;
         self.finalized = true;
-        self._active.release();
         Ok(RuntimeHandleV1 {
             operation_id: summary.run_id.clone(),
             run_id: summary.run_id,
@@ -1225,25 +1594,16 @@ fn child_receipt_step_id(
     derive_step_id(parent_run_id, usize::MAX, &format!("child-{phase}"), &call)
 }
 
-struct ActiveOperationGuard<'a> {
-    active_operations: &'a Mutex<BTreeSet<String>>,
-    active_key: String,
-    released: bool,
-}
-
-impl ActiveOperationGuard<'_> {
-    fn release(&mut self) {
-        if !self.released {
-            if let Ok(mut active) = self.active_operations.lock() {
-                active.remove(&self.active_key);
-            }
-            self.released = true;
+fn map_admission_error(error: ManagedAdmissionError) -> RuntimeServiceError {
+    match error {
+        ManagedAdmissionError::DuplicateOperation(operation_id) => {
+            RuntimeServiceError::OperationAlreadyActive { operation_id }
         }
-    }
-}
-
-impl Drop for ActiveOperationGuard<'_> {
-    fn drop(&mut self) {
-        self.release();
+        ManagedAdmissionError::Capacity { configured }
+        | ManagedAdmissionError::SimultaneousCapacity { configured, .. } => {
+            RuntimeServiceError::ActiveLeafCapacityExceeded { configured }
+        }
+        ManagedAdmissionError::StatePoisoned => RuntimeServiceError::StatePoisoned,
+        other => RuntimeServiceError::ManagedAdmission(other),
     }
 }

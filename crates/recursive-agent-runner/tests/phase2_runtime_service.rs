@@ -325,6 +325,14 @@ fn service_dependencies_with_runtime(
     output_root: &std::path::Path,
     tool_runtime: Arc<ToolRuntime>,
 ) -> Result<RuntimeDependencies, Box<dyn std::error::Error>> {
+    service_dependencies_with_runtime_and_active_leaf_ceiling(output_root, tool_runtime, 10)
+}
+
+fn service_dependencies_with_runtime_and_active_leaf_ceiling(
+    output_root: &std::path::Path,
+    tool_runtime: Arc<ToolRuntime>,
+    max_active_leaves: usize,
+) -> Result<RuntimeDependencies, Box<dyn std::error::Error>> {
     Ok(RuntimeDependencies::builder()
         .policy(RuntimePolicyDependencyV1::Native)
         .sandbox(RuntimeSandboxDependencyV1::Native)
@@ -338,6 +346,7 @@ fn service_dependencies_with_runtime(
         .ledger(RuntimeLedgerDependencyV1::Native)
         .clock(Arc::new(FixedClock))
         .store(RuntimeStoreDependencyV1::Native)
+        .active_leaf_config(recursive_agent_runner::ActiveLeafConfigV1 { max_active_leaves })
         .output_root(output_root)
         .build()?)
 }
@@ -501,9 +510,10 @@ fn live_parent_cancellation_during_child_effect_prevents_child_success_and_cance
     let child = child_proposal(&parent)?;
     let (started_tx, started_rx) = mpsc::channel();
     let (release_tx, release_rx) = mpsc::channel();
-    let service = RuntimeService::new(service_dependencies_with_runtime(
+    let service = RuntimeService::new(service_dependencies_with_runtime_and_active_leaf_ceiling(
         output_root.path(),
         blocking_tool_runtime(started_tx, release_rx),
+        1,
     )?);
     let mut live_parent = service.begin_parent_v2(&parent)?;
     let parent_run_id = live_parent.run_id().clone();
@@ -515,12 +525,25 @@ fn live_parent_cancellation_during_child_effect_prevents_child_success_and_cance
             service.cancel(&parent_run_id)?,
             RuntimeCancelResultV1::CancellationRequested { .. }
         ));
+        let draining = service.managed_admission_snapshot()?;
+        assert!(draining.active.is_empty());
+        assert_eq!(draining.draining.len(), 1);
+        let mut independent = sample_operation()?;
+        independent.run_spec.name = "cancelled-child-capacity-probe".into();
+        independent.effects.action_digest = content_digest(&independent.run_spec)?;
+        assert!(matches!(
+            service.submit(&independent),
+            Err(RuntimeServiceError::ActiveLeafCapacityExceeded { configured: 1 })
+        ));
         release_tx.send(())?;
         Ok(worker
             .join()
             .map_err(|_| std::io::Error::other("child worker panicked"))??)
     })?;
 
+    let after_stop = service.managed_admission_snapshot()?;
+    assert!(after_stop.active.is_empty());
+    assert!(after_stop.draining.is_empty());
     let child_verification = service.verify(child_handle.run_id())?;
     assert_ne!(
         child_verification.terminal_state,
@@ -532,6 +555,62 @@ fn live_parent_cancellation_during_child_effect_prevents_child_success_and_cance
         service.verify(parent_handle.run_id())?.terminal_state,
         RunTerminalStateV1::Cancelled
     );
+    Ok(())
+}
+
+#[test]
+fn idle_live_parents_yield_capacity_while_physical_children_consume_it(
+) -> Result<(), Box<dyn std::error::Error>> {
+    let output_root = tempfile::tempdir()?;
+    let mut first_parent = sample_operation()?;
+    first_parent.run_spec.name = "capacity-parent-one".into();
+    first_parent.effects.action_digest = content_digest(&first_parent.run_spec)?;
+    let mut second_parent = sample_operation()?;
+    second_parent.run_spec.name = "capacity-parent-two".into();
+    second_parent.effects.action_digest = content_digest(&second_parent.run_spec)?;
+    let child = child_proposal(&first_parent)?;
+    let (started_tx, started_rx) = mpsc::channel();
+    let (release_tx, release_rx) = mpsc::channel();
+    let service = RuntimeService::new(service_dependencies_with_runtime_and_active_leaf_ceiling(
+        output_root.path(),
+        blocking_tool_runtime(started_tx, release_rx),
+        1,
+    )?);
+
+    let mut first_live = service.begin_parent_v2(&first_parent)?;
+    let mut second_live = service.begin_parent_v2(&second_parent)?;
+    let child_result = std::thread::scope(|scope| -> Result<_, Box<dyn std::error::Error>> {
+        let worker = scope.spawn(|| first_live.submit_child(&child));
+        started_rx.recv_timeout(std::time::Duration::from_secs(2))?;
+        let mut capacity_probe = sample_operation()?;
+        capacity_probe.run_spec.name = "capacity-probe-while-child-runs".into();
+        capacity_probe.effects.action_digest = content_digest(&capacity_probe.run_spec)?;
+        assert!(matches!(
+            service.submit(&capacity_probe),
+            Err(RuntimeServiceError::ActiveLeafCapacityExceeded { configured: 1 })
+        ));
+        release_tx.send(())?;
+        Ok(worker
+            .join()
+            .map_err(|_| std::io::Error::other("child worker panicked"))??)
+    })?;
+
+    assert!(
+        service
+            .verify(child_result.run_id())?
+            .current_strict_success
+    );
+    let mut independent = sample_operation()?;
+    independent.run_spec.name = "capacity-independent-root".into();
+    independent.effects.action_digest = content_digest(&independent.run_spec)?;
+    assert!(
+        service
+            .verify(service.submit(&independent)?.run_id())?
+            .current_strict_success,
+        "releasing the child must restore capacity before either idle parent finalizes"
+    );
+    first_live.finalize()?;
+    second_live.finalize()?;
     Ok(())
 }
 
@@ -832,6 +911,21 @@ impl CompletionBackend for ModelPlanFixture {
     }
 }
 
+struct AllowProviderEgress;
+
+impl recursive_agent_runner::ProviderEgressAuthorizer for AllowProviderEgress {
+    fn authorize(
+        &self,
+        _context: &recursive_agent_runner::AutonomousContextV1,
+        _provider: &ProviderSpecV1,
+        _max_tokens: Option<u32>,
+    ) -> Result<(), recursive_agent_runner::AutonomousError> {
+        Ok(())
+    }
+}
+
+static ALLOW_PROVIDER_EGRESS: AllowProviderEgress = AllowProviderEgress;
+
 #[test]
 fn runtime_service_model_loop_executes_fixture_plan_through_native_submit(
 ) -> Result<(), Box<dyn std::error::Error>> {
@@ -853,7 +947,7 @@ fn runtime_service_model_loop_executes_fixture_plan_through_native_submit(
     let service = RuntimeService::new(service_dependencies(output_root.path())?);
     let memory = MemoryStore::open(&output_root.path().join("memory.db"))?;
     let cancellation = AutonomousCancellation::new();
-    let result = service.run_model_autonomous(
+    let result = service.run_model_autonomous_with_egress_authorizer(
         serde_json::json!({"goal": "execute the admitted fixture operation"}),
         &memory,
         None,
@@ -871,6 +965,7 @@ fn runtime_service_model_loop_executes_fixture_plan_through_native_submit(
             model: "fixture-model".into(),
         },
         &backend,
+        &ALLOW_PROVIDER_EGRESS,
         Some(256),
     )?;
     assert_eq!(result.output["verified"], true);
@@ -944,7 +1039,7 @@ fn model_autonomous_rejects_nonterminal_plans_without_complete_receipts(
             prompts: Mutex::new(Vec::new()),
         };
         assert!(service
-            .run_model_autonomous(
+            .run_model_autonomous_with_egress_authorizer(
                 serde_json::json!({"goal": "must not infer completion"}),
                 &memory,
                 None,
@@ -962,6 +1057,7 @@ fn model_autonomous_rejects_nonterminal_plans_without_complete_receipts(
                     model: "fixture-model".into(),
                 },
                 &backend,
+                &ALLOW_PROVIDER_EGRESS,
                 Some(256),
             )
             .is_err());
@@ -989,7 +1085,7 @@ fn model_autonomous_budget_rejection_never_emits_complete_receipt(
     let memory = MemoryStore::open(&output_root.path().join("memory.db"))?;
     let cancellation = AutonomousCancellation::new();
     assert!(service
-        .run_model_autonomous(
+        .run_model_autonomous_with_egress_authorizer(
             serde_json::json!({"goal": "must not complete after exhausted budget"}),
             &memory,
             None,
@@ -1007,6 +1103,7 @@ fn model_autonomous_budget_rejection_never_emits_complete_receipt(
                 model: "fixture-model".into(),
             },
             &backend,
+            &ALLOW_PROVIDER_EGRESS,
             Some(256),
         )
         .is_err());
