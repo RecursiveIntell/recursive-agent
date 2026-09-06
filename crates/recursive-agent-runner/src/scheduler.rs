@@ -26,6 +26,16 @@ pub enum SchedulerStoreError {
     UnknownAdmission(String),
     #[error("lease conflict: operation {operation} is held by {holder}")]
     LeaseConflict { operation: String, holder: String },
+    #[error("lease is fenced: operation={operation} holder={holder} generation={generation}")]
+    LeaseFenced {
+        operation: String,
+        holder: String,
+        generation: u64,
+    },
+    #[error("lease generation exhausted for operation {0}")]
+    LeaseGenerationExhausted(String),
+    #[error("lease holder must be non-empty")]
+    InvalidLeaseHolder,
     #[error("invalid store: {0}")]
     Invalid(String),
 }
@@ -64,6 +74,10 @@ pub struct OperationRow {
     pub idempotency_key_digest: Option<String>,
     /// Lease holder identity (e.g. a worker/session id).
     pub lease_holder: Option<String>,
+    /// Monotonic fencing generation. A transferred generation permanently
+    /// invalidates every earlier in-process grant.
+    #[serde(default)]
+    pub lease_generation: u64,
     /// Monotonic heartbeat counter (incremented while the lease is held).
     pub heartbeat: u64,
     /// Durable cancel flag.
@@ -83,11 +97,39 @@ impl OperationRow {
             children: Vec::new(),
             idempotency_key_digest: None,
             lease_holder: None,
+            lease_generation: 0,
             heartbeat: 0,
             cancel_requested: false,
             projection_cursor: 0,
             state: ProjectedState::Submitted,
         }
+    }
+}
+
+/// Non-serializable in-process lease capability issued by the scheduler owner.
+///
+/// It is a physical scheduling fence, not policy authority or receipt truth.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct LeaseGrantV1 {
+    operation_id: String,
+    holder: String,
+    generation: u64,
+}
+
+impl LeaseGrantV1 {
+    #[must_use]
+    pub fn operation_id(&self) -> &str {
+        &self.operation_id
+    }
+
+    #[must_use]
+    pub fn holder(&self) -> &str {
+        &self.holder
+    }
+
+    #[must_use]
+    pub const fn generation(&self) -> u64 {
+        self.generation
     }
 }
 
@@ -198,8 +240,11 @@ impl SchedulerStore {
         &mut self,
         operation_id: &str,
         holder: impl Into<String>,
-    ) -> Result<(), SchedulerStoreError> {
+    ) -> Result<LeaseGrantV1, SchedulerStoreError> {
         let holder = holder.into();
+        if holder.is_empty() {
+            return Err(SchedulerStoreError::InvalidLeaseHolder);
+        }
         let row = self
             .file
             .rows
@@ -212,13 +257,86 @@ impl SchedulerStore {
                     holder: existing.clone(),
                 });
             }
+            (None, _) => {
+                row.lease_generation = row.lease_generation.checked_add(1).ok_or_else(|| {
+                    SchedulerStoreError::LeaseGenerationExhausted(operation_id.to_string())
+                })?;
+            }
             _ => {}
         }
-        row.lease_holder = Some(holder);
+        row.lease_holder = Some(holder.clone());
         row.heartbeat += 1;
         row.state = ProjectedState::Authorized;
+        let grant = LeaseGrantV1 {
+            operation_id: row.operation_id.clone(),
+            holder,
+            generation: row.lease_generation,
+        };
         self.persist()?;
-        Ok(())
+        Ok(grant)
+    }
+
+    /// Explicitly transfer one current lease to a new generation. The old
+    /// generation remains useful only as historical reconciliation input.
+    pub fn transfer_lease(
+        &mut self,
+        current: &LeaseGrantV1,
+        next_holder: impl Into<String>,
+    ) -> Result<LeaseGrantV1, SchedulerStoreError> {
+        self.validate_grant(current)?;
+        let next_holder = next_holder.into();
+        if next_holder.is_empty() {
+            return Err(SchedulerStoreError::InvalidLeaseHolder);
+        }
+        let row = self
+            .file
+            .rows
+            .get_mut(&current.operation_id)
+            .ok_or_else(|| SchedulerStoreError::UnknownAdmission(current.operation_id.clone()))?;
+        row.lease_generation = row.lease_generation.checked_add(1).ok_or_else(|| {
+            SchedulerStoreError::LeaseGenerationExhausted(current.operation_id.clone())
+        })?;
+        row.lease_holder = Some(next_holder.clone());
+        row.heartbeat += 1;
+        let grant = LeaseGrantV1 {
+            operation_id: current.operation_id.clone(),
+            holder: next_holder,
+            generation: row.lease_generation,
+        };
+        self.persist()?;
+        Ok(grant)
+    }
+
+    /// Require the current lease generation before a worker starts another
+    /// effect. Policy/permit admission remains a separate mandatory gate.
+    pub fn authorize_effect_start(&self, grant: &LeaseGrantV1) -> Result<(), SchedulerStoreError> {
+        self.validate_grant(grant)
+    }
+
+    /// Require the current lease generation before publishing a result as
+    /// current. Receipt verification remains authoritative for terminal truth.
+    pub fn authorize_publish(&self, grant: &LeaseGrantV1) -> Result<(), SchedulerStoreError> {
+        self.validate_grant(grant)
+    }
+
+    fn validate_grant(&self, grant: &LeaseGrantV1) -> Result<(), SchedulerStoreError> {
+        let row = self
+            .file
+            .rows
+            .get(&grant.operation_id)
+            .ok_or_else(|| SchedulerStoreError::UnknownAdmission(grant.operation_id.clone()))?;
+        let current = row.state == ProjectedState::Authorized
+            && !row.cancel_requested
+            && row.lease_holder.as_deref() == Some(grant.holder.as_str())
+            && row.lease_generation == grant.generation;
+        if current {
+            return Ok(());
+        }
+        Err(SchedulerStoreError::LeaseFenced {
+            operation: grant.operation_id.clone(),
+            holder: grant.holder.clone(),
+            generation: grant.generation,
+        })
     }
 
     /// Record a durable cancellation request (idempotent).

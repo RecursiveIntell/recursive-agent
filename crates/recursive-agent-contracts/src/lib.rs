@@ -5,10 +5,16 @@
 //! is content-addressed at every step. No provider, no `unwrap`, no
 //! `panic!` in this crate.
 
+mod egress;
 mod event;
 mod operation;
+mod provider_egress_operation;
 mod run_pack_projection;
 
+pub use egress::{
+    parse_provider_egress_binding_v1_bytes, ProviderEgressBindingIngressError,
+    ProviderEgressBindingMaterialV1, ProviderEgressBindingV1,
+};
 pub use event::{
     project_runtime_events, validate_runtime_event_sequence, RuntimeEventKindV1,
     RuntimeEventSchemaV1, RuntimeEventV1,
@@ -21,6 +27,11 @@ pub use operation::{
     ChildOperationEnvelopeV2, ChildOperationProposalV2, ChildRunAuthorityV1, DeclaredEffectsV1,
     OperationBudgetV1, OperationEnvelopeV1, OperationIngressError, OperationSchemaV1,
     ProvenanceRefV1, ReplayClassV1, ReplayIntentV1, ReplaySpecV1,
+};
+pub use provider_egress_operation::{
+    derive_provider_egress_operation_id, parse_provider_egress_operation_v3_bytes,
+    ProviderEgressOperationEnvelopeV3, ProviderEgressOperationIngressError,
+    ProviderEgressOperationSchemaV1, SealedCompletionArgumentsV3, SealedCompletionCallV3,
 };
 pub use run_pack_projection::{
     RunPackEventSummaryV1, RunPackEvidenceProjectionV1, RunPackProjectionOriginV1,
@@ -1041,6 +1052,9 @@ pub struct ReceiptV1 {
 #[serde(rename_all = "snake_case")]
 pub enum ReceiptKindV1 {
     RunStarted,
+    /// Current policy admitted one exact V3 provider-egress binding. The sole
+    /// referenced artifact is a non-authorizing decision-evidence projection.
+    ProviderEgressAdmitted,
     StepStarted,
     PermitIssued,
     PermitConsumed,
@@ -1205,6 +1219,7 @@ pub fn validate_receipt_sequence(
     let mut prepared_children = std::collections::BTreeSet::new();
     let mut linked_children = std::collections::BTreeSet::new();
     let mut closed_children = std::collections::BTreeSet::new();
+    let mut provider_egress_admissions = std::collections::BTreeSet::new();
     for (index, receipt) in receipts.iter().enumerate() {
         receipt.validate_material()?;
         if finalized {
@@ -1231,6 +1246,19 @@ pub fn validate_receipt_sequence(
                 if index != 0 || !matches!(receipt.outcome, ReceiptOutcomeV1::Ok) {
                     return Err(ContractError::Malformed(
                         "RunStarted must be the first successful receipt".into(),
+                    ));
+                }
+            }
+            ReceiptKindV1::ProviderEgressAdmitted => {
+                if terminal.is_some()
+                    || !matches!(receipt.outcome, ReceiptOutcomeV1::Ok)
+                    || receipt.artifact_refs.len() != 1
+                    || steps.contains_key(&receipt.step_id)
+                    || !provider_egress_admissions.insert(receipt.step_id.clone())
+                {
+                    return Err(ContractError::Malformed(
+                        "ProviderEgressAdmitted requires one unique pre-step evidence artifact"
+                            .into(),
                     ));
                 }
             }

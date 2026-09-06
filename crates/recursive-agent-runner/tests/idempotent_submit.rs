@@ -23,6 +23,7 @@ use recursive_agent_runner::{
     RuntimeProviderDependencyV1, RuntimeSandboxDependencyV1, RuntimeService, RuntimeServiceError,
     RuntimeStoreDependencyV1, SchedulerStore,
 };
+use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::Arc;
 
 type TestResult = Result<(), Box<dyn std::error::Error>>;
@@ -40,9 +41,10 @@ impl Clock for FixedClock {
 
 struct EchoDescriptorOwner {
     descriptor: ToolDescriptor,
+    calls: Arc<AtomicUsize>,
 }
 impl EchoDescriptorOwner {
-    fn new() -> Self {
+    fn new(calls: Arc<AtomicUsize>) -> Self {
         Self {
             descriptor: ToolDescriptor {
                 name: "echo".into(),
@@ -65,6 +67,7 @@ impl EchoDescriptorOwner {
                 output_size_limit_bytes: Some(4_096),
                 provider_payload: None,
             },
+            calls,
         }
     }
 }
@@ -78,6 +81,7 @@ impl Tool for EchoDescriptorOwner {
         _ctx: &ToolCtx,
         call: &llm_tool_runtime::ToolCall,
     ) -> Result<ToolResult, ToolError> {
+        self.calls.fetch_add(1, Ordering::SeqCst);
         Ok(ToolResult::json(call.arguments.clone()))
     }
 }
@@ -134,9 +138,10 @@ fn echo_operation(text: &str) -> Result<OperationEnvelopeV1, Box<dyn std::error:
 fn service_with_scheduler(
     output_root: &std::path::Path,
     store: SchedulerStore,
+    calls: Arc<AtomicUsize>,
 ) -> Result<RuntimeService, Box<dyn std::error::Error>> {
     let mut registry = ToolRegistry::new();
-    registry.register(EchoDescriptorOwner::new());
+    registry.register(EchoDescriptorOwner::new(calls));
     let dependencies = RuntimeDependencies::builder()
         .policy(RuntimePolicyDependencyV1::Native)
         .sandbox(RuntimeSandboxDependencyV1::Native)
@@ -154,17 +159,41 @@ fn service_with_scheduler(
 fn exact_duplicate_returns_prior_handle_without_reexecution() -> TestResult {
     let tmp = tempfile::tempdir()?;
     let store = SchedulerStore::open(tmp.path().join("scheduler.json"))?;
-    let service = service_with_scheduler(tmp.path(), store)?;
+    let calls = Arc::new(AtomicUsize::new(0));
+    let service = service_with_scheduler(tmp.path(), store, Arc::clone(&calls))?;
     let op = echo_operation("dup")?;
 
     let first = service.idempotent_submit(&op, "key-1")?;
     let first_id = first.operation_id().to_string();
+    let first_run_dir = first.run_dir().to_path_buf();
     let second = service.idempotent_submit(&op, "key-1")?;
     assert_eq!(
         second.operation_id().to_string(),
         first_id,
         "exact duplicate returns same handle"
     );
+    assert_eq!(second.run_dir(), first_run_dir);
+    assert!(second.run_dir().is_dir());
+    assert!(service.verify(second.run_id())?.current_strict_success);
+    assert_eq!(
+        calls.load(Ordering::SeqCst),
+        1,
+        "exact retry re-executed the sink"
+    );
+    let projection = SchedulerStore::open(tmp.path().join("scheduler.json"))?;
+    let row = projection
+        .live_rows()
+        .into_iter()
+        .find(|row| row.operation_id == first_id)
+        .ok_or("idempotent scheduler row missing")?;
+    let key_digest = row
+        .idempotency_key_digest
+        .ok_or("idempotency key digest missing")?;
+    assert_ne!(key_digest, "key-1");
+    assert_eq!(key_digest.len(), 64);
+    assert!(key_digest
+        .chars()
+        .all(|character| character.is_ascii_hexdigit()));
     Ok(())
 }
 
@@ -172,14 +201,22 @@ fn exact_duplicate_returns_prior_handle_without_reexecution() -> TestResult {
 fn same_key_different_operation_is_a_typed_conflict() -> TestResult {
     let tmp = tempfile::tempdir()?;
     let store = SchedulerStore::open(tmp.path().join("scheduler.json"))?;
-    let service = service_with_scheduler(tmp.path(), store)?;
+    let calls = Arc::new(AtomicUsize::new(0));
+    let service = service_with_scheduler(tmp.path(), store, Arc::clone(&calls))?;
+    let original = echo_operation("alpha")?;
+    let original_id = recursive_agent_contracts::derive_operation_id(&original)?.to_string();
 
-    service.idempotent_submit(&echo_operation("alpha")?, "key-2")?;
+    service.idempotent_submit(&original, "key-2")?;
     let conflict = service.idempotent_submit(&echo_operation("beta")?, "key-2");
     assert!(matches!(
         conflict,
         Err(RuntimeServiceError::IdempotencyKeyConflict { .. })
     ));
+    assert_eq!(calls.load(Ordering::SeqCst), 1, "conflict reached the sink");
+    let projection = SchedulerStore::open(tmp.path().join("scheduler.json"))?;
+    let rows = projection.live_rows();
+    assert_eq!(rows.len(), 1);
+    assert_eq!(rows[0].operation_id, original_id);
     Ok(())
 }
 
@@ -187,7 +224,7 @@ fn same_key_different_operation_is_a_typed_conflict() -> TestResult {
 fn without_scheduler_idempotent_submit_is_unavailable() -> TestResult {
     let tmp = tempfile::tempdir()?;
     let mut registry = ToolRegistry::new();
-    registry.register(EchoDescriptorOwner::new());
+    registry.register(EchoDescriptorOwner::new(Arc::new(AtomicUsize::new(0))));
     let dependencies = RuntimeDependencies::builder()
         .policy(RuntimePolicyDependencyV1::Native)
         .sandbox(RuntimeSandboxDependencyV1::Native)

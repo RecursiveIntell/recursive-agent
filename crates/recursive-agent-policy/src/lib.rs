@@ -14,7 +14,7 @@ use chrono::{DateTime, Utc};
 use recursive_agent_contracts::{
     content_digest, derive_permit_id, jcs_canonical, AuthorityLineageEntryV1, ContentDigest,
     ContractError, CurrentPermitId, CurrentRunId, CurrentStepId, LineageOrigin,
-    PermitIdentityMaterialV1, ReceiptV1, RunSpecV1, ToolCallSpecV1,
+    PermitIdentityMaterialV1, ProviderEgressBindingV1, ReceiptV1, RunSpecV1, ToolCallSpecV1,
 };
 use rustix::fs::{FlockOperation, Mode, OFlags, ResolveFlags};
 use thiserror::Error;
@@ -529,6 +529,14 @@ pub struct EffectScopeV1 {
     pub network_allowed: bool,
 }
 
+fn is_closed_provider_egress_effect(tool: &str, effect: &EffectScopeV1) -> bool {
+    tool == SEALED_COMPLETION_LANE
+        && effect.scope_name == SEALED_COMPLETION_LANE
+        && effect.network_allowed
+        && effect.read_roots.is_empty()
+        && effect.write_roots.is_empty()
+}
+
 #[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct PermitBudgetV1 {
@@ -666,7 +674,8 @@ impl DelegationCeilingV1 {
         for action in &self.actions {
             if action.tool.is_empty()
                 || action.effect.scope_name.is_empty()
-                || action.effect.network_allowed
+                || (action.effect.network_allowed
+                    && !is_closed_provider_egress_effect(&action.tool, &action.effect))
                 || action.effect_digest != content_digest(&action.effect)?
             {
                 return Err(PolicyError::InvalidLease(
@@ -737,7 +746,9 @@ impl PermitBindingV1 {
         {
             return Err(PolicyError::InvalidLease("invalid effect scope".into()));
         }
-        if self.effect.network_allowed {
+        if self.effect.network_allowed
+            && !is_closed_provider_egress_effect(&self.tool, &self.effect)
+        {
             return Err(PolicyError::NetworkUnavailable);
         }
         if self.issued_at > self.not_before || self.not_before >= self.expires_at {
@@ -856,6 +867,9 @@ impl ExecutionPermitV1 {
             return Err(PolicyError::InvalidLease(
                 "delegated effects must be issued through DurablePermitStore".into(),
             ));
+        }
+        if binding.effect.network_allowed {
+            return Err(PolicyError::NetworkUnavailable);
         }
         let purpose = PermitPurposeV1::Effect;
         let delegation_ceiling = None;
@@ -1437,6 +1451,246 @@ pub enum PolicyError {
     PolicyVersionMismatch { submitted: String, active: String },
 }
 
+const PROVIDER_EGRESS_ADMISSION_SCHEMA: &str = "recursive-agent.provider-egress-admission/v1";
+const PROVIDER_EGRESS_ADMISSION_EVIDENCE_SCHEMA: &str =
+    "recursive-agent.provider-egress-admission-evidence/v1";
+const DEFAULT_PROVIDER_EGRESS_VERIFIER_CONTRACT: &str =
+    "recursive-agent.provider-egress-verifier/v1";
+const SEALED_COMPLETION_LANE: &str = "sealed_completion";
+
+/// Non-authorizing correlation material for one candidate provider-egress
+/// decision. The request is safe to serialize but cannot itself authorize a
+/// provider call: a current policy owner must evaluate it through an injected
+/// [`ProviderEgressAdmissionVerifier`].
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct ProviderEgressAdmissionRequestV1 {
+    /// Exact schema discriminator for the candidate-only admission request.
+    pub schema: String,
+    /// Closed native operation lane; this contract admits no generic provider tool.
+    pub lane: String,
+    /// Native-owned binding over the exact provider request.
+    pub binding: ProviderEgressBindingV1,
+    /// Repeated request digest, checked against `binding` before a verifier observes it.
+    pub request_digest: ContentDigest,
+    /// Digest of the exact closed `{binding, request}` tool arguments. The
+    /// durable provider-egress permit must bind this same value.
+    pub tool_arguments_digest: ContentDigest,
+}
+
+impl ProviderEgressAdmissionRequestV1 {
+    /// Construct correlation material for the sole candidate egress lane.
+    pub fn new(
+        lane: impl Into<String>,
+        binding: ProviderEgressBindingV1,
+        request_digest: ContentDigest,
+        tool_arguments_digest: ContentDigest,
+    ) -> Result<Self, PolicyError> {
+        let request = Self {
+            schema: PROVIDER_EGRESS_ADMISSION_SCHEMA.into(),
+            lane: lane.into(),
+            binding,
+            request_digest,
+            tool_arguments_digest,
+        };
+        request.validate_shape()?;
+        Ok(request)
+    }
+
+    /// Validate the closed request and re-check the native binding at the
+    /// verifier-supplied current time. This does not evaluate the external
+    /// policy/context references; that authority remains injected, never a
+    /// caller-controlled serialized status field.
+    pub fn validate_at(&self, now: DateTime<Utc>) -> Result<(), PolicyError> {
+        self.validate_shape()?;
+        self.binding.validate_at(now)?;
+        if self.request_digest != self.binding.request_digest {
+            return Err(PolicyError::InvalidLease(
+                "provider-egress admission request digest does not match the sealed binding".into(),
+            ));
+        }
+        for (field, value) in [
+            ("provider_identity", self.binding.provider_identity.as_str()),
+            ("model_ref", self.binding.model_ref.as_str()),
+        ] {
+            if looks_like_credential_material(value) {
+                return Err(PolicyError::InvalidLease(format!(
+                    "provider-egress admission {field} contains credential-like material"
+                )));
+            }
+        }
+        Ok(())
+    }
+
+    fn validate_shape(&self) -> Result<(), PolicyError> {
+        if self.schema != PROVIDER_EGRESS_ADMISSION_SCHEMA {
+            return Err(PolicyError::InvalidLease(
+                "unsupported provider-egress admission schema".into(),
+            ));
+        }
+        if self.lane != SEALED_COMPLETION_LANE {
+            return Err(PolicyError::ToolNotAllowed(self.lane.clone()));
+        }
+        Ok(())
+    }
+}
+
+/// Current policy authority for candidate provider egress. Implementations are
+/// injected by native composition and are intentionally not serializable. A
+/// serialized admission request, digest, or UI decision cannot substitute for
+/// this check.
+pub trait ProviderEgressAdmissionVerifier: Send + Sync {
+    /// Stable policy/verifier contract identity persisted with admission evidence.
+    fn contract_version(&self) -> &'static str {
+        DEFAULT_PROVIDER_EGRESS_VERIFIER_CONTRACT
+    }
+
+    /// Authorize a request only after the policy crate has validated its exact
+    /// binding at the supplied current time. Implementations cannot construct a
+    /// `ValidatedProviderEgressAdmissionV1` from caller-controlled bytes.
+    fn authorize(&self, admission: &ValidatedProviderEgressAdmissionV1) -> Result<(), PolicyError>;
+}
+
+/// Durable, non-authorizing projection of one successful current-policy check.
+/// The live capability remains in-process; this projection exists only for
+/// offline receipt verification and cannot be replayed as authority.
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct ProviderEgressAdmissionEvidenceV1 {
+    pub schema: String,
+    pub verifier_contract: String,
+    pub binding: ProviderEgressBindingV1,
+    pub request_digest: ContentDigest,
+    pub tool_arguments_digest: ContentDigest,
+    pub verified_at: DateTime<Utc>,
+}
+
+impl ProviderEgressAdmissionEvidenceV1 {
+    pub fn validate(&self) -> Result<(), PolicyError> {
+        if self.schema != PROVIDER_EGRESS_ADMISSION_EVIDENCE_SCHEMA
+            || self.verifier_contract.is_empty()
+            || self.verifier_contract.len() > 4096
+            || looks_like_credential_material(&self.verifier_contract)
+            || self.request_digest != self.binding.request_digest
+            || self.verified_at >= self.binding.not_after
+        {
+            return Err(PolicyError::InvalidLease(
+                "invalid provider-egress admission evidence".into(),
+            ));
+        }
+        self.binding.validate_structure()?;
+        Ok(())
+    }
+}
+
+/// Opaque-to-callers proof that the policy crate checked an exact admission
+/// request at one explicit current time. This is an in-process capability, not
+/// a serialized cross-owner witness.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ValidatedProviderEgressAdmissionV1 {
+    request: ProviderEgressAdmissionRequestV1,
+    verified_at: DateTime<Utc>,
+    verifier_contract: String,
+}
+
+impl ValidatedProviderEgressAdmissionV1 {
+    /// Borrow the only supported native operation lane.
+    pub fn lane(&self) -> &str {
+        &self.request.lane
+    }
+
+    /// Borrow the native-owned sealed request binding.
+    pub fn binding(&self) -> &ProviderEgressBindingV1 {
+        &self.request.binding
+    }
+
+    /// Borrow the exact request digest validated against the binding.
+    pub fn request_digest(&self) -> &ContentDigest {
+        &self.request.request_digest
+    }
+
+    /// Borrow the digest of the exact closed tool arguments admitted by policy.
+    pub fn tool_arguments_digest(&self) -> &ContentDigest {
+        &self.request.tool_arguments_digest
+    }
+
+    /// Return the policy-owned validation time supplied by the caller's trusted clock.
+    pub fn verified_at(&self) -> DateTime<Utc> {
+        self.verified_at
+    }
+
+    /// Stable contract identifier supplied by the injected policy owner.
+    pub fn verifier_contract(&self) -> &str {
+        &self.verifier_contract
+    }
+
+    /// Build the durable, non-authorizing evidence projection for the receipt chain.
+    pub fn evidence(&self) -> Result<ProviderEgressAdmissionEvidenceV1, PolicyError> {
+        let evidence = ProviderEgressAdmissionEvidenceV1 {
+            schema: PROVIDER_EGRESS_ADMISSION_EVIDENCE_SCHEMA.into(),
+            verifier_contract: self.verifier_contract.clone(),
+            binding: self.request.binding.clone(),
+            request_digest: self.request.request_digest.clone(),
+            tool_arguments_digest: self.request.tool_arguments_digest.clone(),
+            verified_at: self.verified_at,
+        };
+        evidence.validate()?;
+        Ok(evidence)
+    }
+}
+
+/// Validate candidate egress correlation material before it can reach the
+/// injected current-policy authority. This gate must be the only policy-side
+/// entry point used by later runtime composition.
+pub fn authorize_provider_egress(
+    verifier: &dyn ProviderEgressAdmissionVerifier,
+    request: &ProviderEgressAdmissionRequestV1,
+    now: DateTime<Utc>,
+) -> Result<ValidatedProviderEgressAdmissionV1, PolicyError> {
+    request.validate_at(now)?;
+    let verifier_contract = verifier.contract_version();
+    if verifier_contract.is_empty()
+        || verifier_contract.len() > 4096
+        || looks_like_credential_material(verifier_contract)
+    {
+        return Err(PolicyError::InvalidLease(
+            "invalid provider-egress verifier contract identity".into(),
+        ));
+    }
+    let admission = ValidatedProviderEgressAdmissionV1 {
+        request: request.clone(),
+        verified_at: now,
+        verifier_contract: verifier_contract.into(),
+    };
+    verifier.authorize(&admission)?;
+    Ok(admission)
+}
+
+/// Default egress posture. Candidate composition must replace this with a
+/// current policy owner; it cannot make provider access available implicitly.
+#[derive(Debug, Clone, Copy, Default)]
+pub struct DenyProviderEgressAdmission;
+
+impl ProviderEgressAdmissionVerifier for DenyProviderEgressAdmission {
+    fn authorize(
+        &self,
+        _admission: &ValidatedProviderEgressAdmissionV1,
+    ) -> Result<(), PolicyError> {
+        Err(PolicyError::NetworkUnavailable)
+    }
+}
+
+fn looks_like_credential_material(value: &str) -> bool {
+    let normalized = value.to_ascii_lowercase();
+    value.contains('@')
+        || value.contains('?')
+        || value.contains('#')
+        || normalized.contains("token")
+        || normalized.contains("secret")
+        || normalized.contains("password")
+        || normalized.contains("credential")
+}
+
 const FAMILY_STATE_NAME: &str = "family-authority.json";
 const FAMILY_LOCK_NAME: &str = ".family-authority.lock";
 const MAX_FAMILY_STATE_BYTES: u64 = 1024 * 1024;
@@ -1930,6 +2184,9 @@ impl DurablePermitStore {
                 "child effect issuance requires explicit executable authority".into(),
             ));
         }
+        if binding.effect.network_allowed {
+            return Err(PolicyError::NetworkUnavailable);
+        }
         self.issue_authority(
             binding,
             PermitPurposeV1::Effect,
@@ -1965,11 +2222,51 @@ impl DurablePermitStore {
                 "delegated effect permit requires a control parent".into(),
             ));
         }
+        if binding.effect.network_allowed {
+            return Err(PolicyError::NetworkUnavailable);
+        }
         self.issue_authority(
             binding,
             PermitPurposeV1::Effect,
             None,
             executable_authority,
+            trusted_now,
+        )
+    }
+
+    /// Issue the sole candidate network-capable effect only from a current,
+    /// in-process policy admission capability. Generic effect issuance remains
+    /// network-denying and cannot call this path implicitly.
+    pub fn issue_provider_egress(
+        &self,
+        binding: &PermitBindingV1,
+        admission: &ValidatedProviderEgressAdmissionV1,
+        trusted_now: DateTime<Utc>,
+    ) -> Result<ExecutionPermitV1, PolicyError> {
+        if trusted_now < admission.verified_at() {
+            return Err(PolicyError::InvalidLease(
+                "provider-egress permit clock precedes the current sealed admission".into(),
+            ));
+        }
+        // Clocks normally advance between policy evaluation and durable issue.
+        // Revalidate the sealed binding at issue time instead of requiring an
+        // impossible timestamp equality that only frozen-clock tests satisfy.
+        admission.request.validate_at(trusted_now)?;
+        if binding.parent_permit_id.is_none()
+            || !is_closed_provider_egress_effect(&binding.tool, &binding.effect)
+            || admission.lane() != SEALED_COMPLETION_LANE
+            || binding.args_digest != *admission.tool_arguments_digest()
+            || binding.expires_at > admission.binding().not_after
+        {
+            return Err(PolicyError::InvalidLease(
+                "provider-egress permit does not bind the current sealed admission".into(),
+            ));
+        }
+        self.issue_authority(
+            binding,
+            PermitPurposeV1::Effect,
+            None,
+            Vec::new(),
             trusted_now,
         )
     }
