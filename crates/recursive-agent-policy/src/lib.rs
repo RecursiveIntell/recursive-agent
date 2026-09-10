@@ -2934,6 +2934,70 @@ impl DurablePermitStore {
         })
     }
 
+    /// Read back the exact native outcome persisted for one normal-chat permit.
+    /// This is observation-only: it neither renews nor reissues authority.
+    pub fn normal_chat_outcome(
+        &self,
+        permit_id: &CurrentPermitId,
+    ) -> Result<PermitOutcomeReceiptV1, PolicyError> {
+        self.with_lock(|| {
+            let record = self.read_record_or_reject(permit_id)?;
+            if record.permit.binding.tool != NORMAL_CHAT_LANE {
+                return Err(PolicyError::InvalidLease("not a normal-chat permit".into()));
+            }
+            let preflight = record
+                .preflight_receipt
+                .ok_or(PolicyError::PermitStateConflict)?;
+            preflight.validate()?;
+            let outcome = record
+                .outcome_receipt
+                .ok_or(PolicyError::PermitStateConflict)?;
+            outcome.validate()?;
+            if outcome.permit_id != *permit_id
+                || outcome.preflight_receipt_digest != preflight.receipt_digest
+            {
+                return Err(PolicyError::PermitStateConflict);
+            }
+            Ok(outcome)
+        })
+    }
+
+    /// Resolve the attempt identity already reserved for a durable normal-chat
+    /// permit. This reads the canonical attempt-family record; callers cannot
+    /// supply or widen the mapping during replay.
+    pub fn normal_chat_attempt_for_permit(
+        &self,
+        permit_id: &CurrentPermitId,
+    ) -> Result<NormalChatAttemptId, PolicyError> {
+        self.with_lock(|| {
+            let record = self.read_record_or_reject(permit_id)?;
+            if record.permit.binding.tool != NORMAL_CHAT_LANE {
+                return Err(PolicyError::InvalidLease("not a normal-chat permit".into()));
+            }
+            let parent = record
+                .permit
+                .binding
+                .parent_permit_id
+                .as_ref()
+                .ok_or(PolicyError::PermitStateConflict)?;
+            let state = self.read_normal_chat_family_state()?;
+            let family = state
+                .families
+                .get(&parent.to_string())
+                .ok_or(PolicyError::PermitStateConflict)?;
+            let mut found = None;
+            for reservation in family.attempts.values() {
+                if reservation.permit_id == *permit_id {
+                    if found.is_some() {
+                        return Err(PolicyError::PermitStateConflict);
+                    }
+                    found = Some(reservation.attempt_id.clone());
+                }
+            }
+            found.ok_or(PolicyError::PermitStateConflict)
+        })
+    }
+
     /// Consume only after current normal-chat policy and exact call checks.
     /// The policy callback runs under the local permit lock and must not reenter
     /// this store. This serializes local revoke/consume; external owner changes

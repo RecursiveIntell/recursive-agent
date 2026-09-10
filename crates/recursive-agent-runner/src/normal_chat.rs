@@ -2,14 +2,16 @@
 //! host. This records observed backend outcomes, not a full terminal run chain.
 use crate::Clock;
 use recursive_agent_contracts::{
-    content_digest, ArtifactDescriptorV1, CurrentPermitId, ToolCallSpecV1,
+    content_digest, ArtifactDescriptorV1, ContentDigest, CurrentPermitId, NormalChatAttemptId,
+    ToolCallSpecV1,
 };
 use recursive_agent_ledger::{ArtifactStore, LedgerError};
 use recursive_agent_policy::{
-    DurablePermitStore, NormalChatAdmissionVerifier, PermitOutcomeReceiptV1, PolicyError,
-    ReportedEffectOutcomeV1, ReportedEffectStateV1, ValidatedNormalChatAdmissionV1,
+    DurablePermitStore, NormalChatAdmissionVerifier, PermitOutcomeReceiptV1,
+    PermitPreflightReceiptV1, PolicyError, ReportedEffectOutcomeV1, ReportedEffectStateV1,
+    ValidatedNormalChatAdmissionV1,
 };
-use recursive_agent_provider::{CompletionBackend, ConversationRequestV1};
+use recursive_agent_provider::{CompletionBackend, CompletionResponseV1, ConversationRequestV1};
 use thiserror::Error;
 
 #[derive(Debug, Error)]
@@ -24,6 +26,12 @@ pub enum NativeNormalChatError {
     Artifact(#[from] LedgerError),
     #[error("normal-chat encoding failed")]
     Encoding,
+    #[error("recorded normal-chat replay material is malformed or noncanonical")]
+    ReplayMalformed,
+    #[error("recorded normal-chat replay material does not bind durable execution evidence")]
+    ReplayBindingMismatch,
+    #[error("recorded normal-chat replay requires a durably reported successful outcome")]
+    ReplayOutcomeNotSucceeded,
     #[error("backend outcome is ambiguous; permit outcome retained")]
     BackendAmbiguous,
     #[error("observation publication failed; response and backend outcome retained; do not re-execute this permit")]
@@ -61,10 +69,39 @@ struct RecordedNormalChatResponseV1<'a> {
     response: &'a recursive_agent_provider::CompletionResponseV1,
 }
 
-#[derive(serde::Serialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 enum RecordedNormalChatResponseSchemaV1 {
     #[serde(rename = "recursive-agent.normal-chat-recorded-response/v1")]
     V1,
+}
+
+#[derive(serde::Serialize, serde::Deserialize)]
+#[serde(deny_unknown_fields)]
+struct RecordedNormalChatResponseReplayV1 {
+    schema: RecordedNormalChatResponseSchemaV1,
+    attempt_id: NormalChatAttemptId,
+    permit_id: CurrentPermitId,
+    preflight_receipt_digest: ContentDigest,
+    response: CompletionResponseV1,
+}
+
+#[derive(serde::Serialize)]
+struct RecordedNormalChatObservationV1<'a> {
+    schema: &'static str,
+    attempt: &'a NormalChatAttemptId,
+    response: &'a ArtifactDescriptorV1,
+    preflight: &'a PermitPreflightReceiptV1,
+    outcome: &'a PermitOutcomeReceiptV1,
+}
+
+#[derive(serde::Serialize, serde::Deserialize)]
+#[serde(deny_unknown_fields)]
+struct RecordedNormalChatObservationReplayV1 {
+    schema: String,
+    attempt: NormalChatAttemptId,
+    response: ArtifactDescriptorV1,
+    preflight: PermitPreflightReceiptV1,
+    outcome: PermitOutcomeReceiptV1,
 }
 
 pub struct NativeNormalChatObservation {
@@ -116,6 +153,69 @@ impl<'a, B: CompletionBackend> NativeNormalChatExecutor<'a, B> {
                 preflight_receipt_digest: preflight_receipt_digest.clone(),
                 source: Box::new(source),
             })
+    }
+
+    /// Replay one caller-selected recorded response without invoking the backend.
+    /// The observation descriptor must itself come from an external durable/
+    /// trusted evidence reference; this method verifies it but does not discover
+    /// replay authority from unanchored artifacts.
+    pub fn replay_recorded(
+        &self,
+        observation_artifact: &ArtifactDescriptorV1,
+    ) -> Result<CompletionResponseV1, NativeNormalChatError> {
+        let artifact_root = self.artifacts.run_root_identity();
+        if self.permits.run_root_identity() != (artifact_root.device, artifact_root.inode) {
+            return Err(NativeNormalChatError::StoreMismatch);
+        }
+        let observation_bytes = self.artifacts.get(observation_artifact)?;
+        let observation: RecordedNormalChatObservationReplayV1 =
+            serde_json::from_slice(&observation_bytes)
+                .map_err(|_| NativeNormalChatError::ReplayMalformed)?;
+        let canonical_observation = recursive_agent_contracts::jcs_canonical(&observation)
+            .map_err(|_| NativeNormalChatError::ReplayMalformed)?;
+        if canonical_observation != observation_bytes
+            || observation.schema != "recursive-agent.normal-chat-observation/v1"
+        {
+            return Err(NativeNormalChatError::ReplayMalformed);
+        }
+        observation.preflight.validate()?;
+        observation.outcome.validate()?;
+        if observation.preflight.permit_id != observation.outcome.permit_id
+            || observation.outcome.preflight_receipt_digest
+                != observation.preflight.receipt_digest
+        {
+            return Err(NativeNormalChatError::ReplayBindingMismatch);
+        }
+        let permit_id = &observation.outcome.permit_id;
+        let persisted_preflight = self.permits.normal_chat_preflight(permit_id)?;
+        let persisted_outcome = self.permits.normal_chat_outcome(permit_id)?;
+        let persisted_attempt = self.permits.normal_chat_attempt_for_permit(permit_id)?;
+        if persisted_preflight != observation.preflight
+            || persisted_outcome != observation.outcome
+            || persisted_attempt != observation.attempt
+        {
+            return Err(NativeNormalChatError::ReplayBindingMismatch);
+        }
+        if persisted_outcome.reported.state != ReportedEffectStateV1::Succeeded {
+            return Err(NativeNormalChatError::ReplayOutcomeNotSucceeded);
+        }
+        let response_bytes = self.artifacts.get(&observation.response)?;
+        let recorded: RecordedNormalChatResponseReplayV1 =
+            serde_json::from_slice(&response_bytes)
+                .map_err(|_| NativeNormalChatError::ReplayMalformed)?;
+        let canonical_response = recursive_agent_contracts::jcs_canonical(&recorded)
+            .map_err(|_| NativeNormalChatError::ReplayMalformed)?;
+        if canonical_response != response_bytes {
+            return Err(NativeNormalChatError::ReplayMalformed);
+        }
+        if recorded.schema != RecordedNormalChatResponseSchemaV1::V1
+            || recorded.attempt_id != observation.attempt
+            || recorded.permit_id != *permit_id
+            || recorded.preflight_receipt_digest != persisted_preflight.receipt_digest
+        {
+            return Err(NativeNormalChatError::ReplayBindingMismatch);
+        }
+        Ok(recorded.response)
     }
 
     pub fn execute(
@@ -227,15 +327,15 @@ impl<'a, B: CompletionBackend> NativeNormalChatExecutor<'a, B> {
             },
             self.clock.now(),
         )?;
-        let observation = serde_json::json!({
-            "schema": "recursive-agent.normal-chat-observation/v1",
-            "attempt": attempt.attempt_id,
-            "response": response_artifact,
-            "preflight": preflight,
-            "outcome": outcome,
-        });
-        let encoded_observation =
-            serde_json::to_vec(&observation).map_err(|_| NativeNormalChatError::Encoding)?;
+        let observation = RecordedNormalChatObservationV1 {
+            schema: "recursive-agent.normal-chat-observation/v1",
+            attempt: &attempt.attempt_id,
+            response: &response_artifact,
+            preflight: &preflight,
+            outcome: &outcome,
+        };
+        let encoded_observation = recursive_agent_contracts::jcs_canonical(&observation)
+            .map_err(|_| NativeNormalChatError::Encoding)?;
         let required_bytes = response_artifact
             .byte_length
             .checked_add(u64::try_from(encoded_observation.len()).unwrap_or(u64::MAX));

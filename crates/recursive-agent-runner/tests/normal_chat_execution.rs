@@ -410,6 +410,7 @@ fn run_fixture(mode: u8) -> Result<(), Box<dyn std::error::Error>> {
         std::fs::remove_dir(root.path().join("artifacts"))?;
     }
     let observed = executor.execute(&permit.permit_id, &admission, &request);
+    let mut replay_observation = None;
     if mode == 7 {
         use std::os::unix::fs::PermissionsExt;
         // Restore permissions before assertions so fixture cleanup is reliable.
@@ -506,7 +507,7 @@ fn run_fixture(mode: u8) -> Result<(), Box<dyn std::error::Error>> {
                 );
                 // Independently reconstruct the declared observation and prove
                 // it was not written beyond the admitted byte budget.
-                let withheld = serde_json::to_vec(&serde_json::json!({
+                let withheld = recursive_agent_contracts::jcs_canonical(&serde_json::json!({
                     "schema": "recursive-agent.normal-chat-observation/v1",
                     "attempt": admission.attempt().attempt_id,
                     "response": response_artifact,
@@ -535,6 +536,7 @@ fn run_fixture(mode: u8) -> Result<(), Box<dyn std::error::Error>> {
         ));
     } else if mode == 0 {
         let result = observed?;
+        replay_observation = Some(result.observation_artifact.clone());
         assert!(
             result.response_artifact.byte_length + result.observation_artifact.byte_length <= 4096
         );
@@ -631,9 +633,12 @@ fn run_fixture(mode: u8) -> Result<(), Box<dyn std::error::Error>> {
     }
     assert_eq!(matched, 1);
     let reopened = open_store(root.path())?;
+    let reopened_root_fd = std::fs::File::open(root.path())?;
+    let reopened_artifacts =
+        recursive_agent_ledger::ArtifactStore::from_run_root_fd(&reopened_root_fd, false)?;
     let restarted = recursive_agent_runner::NativeNormalChatExecutor::new(
         &reopened,
-        &artifacts,
+        &reopened_artifacts,
         &AllowCurrentEgress,
         &TestClock,
         &backend,
@@ -642,5 +647,45 @@ fn run_fixture(mode: u8) -> Result<(), Box<dyn std::error::Error>> {
         .execute(&permit.permit_id, &admission, &request)
         .is_err());
     assert_eq!(backend.0.load(std::sync::atomic::Ordering::SeqCst), 1);
+    if mode == 0 {
+        let observation = replay_observation.ok_or("missing replay observation")?;
+        let replayed = restarted.replay_recorded(&observation)?;
+        assert_eq!(replayed.text, "fixture response");
+        let replayed_again = restarted.replay_recorded(&observation)?;
+        assert_eq!(replayed_again, replayed);
+        assert_eq!(backend.0.load(std::sync::atomic::Ordering::SeqCst), 1);
+
+        let mut wrong_descriptor = observation.clone();
+        wrong_descriptor.byte_length = wrong_descriptor.byte_length.saturating_add(1);
+        assert!(restarted.replay_recorded(&wrong_descriptor).is_err());
+        assert_eq!(backend.0.load(std::sync::atomic::Ordering::SeqCst), 1);
+
+        let observation_bytes = reopened_artifacts.get(&observation)?;
+        let mut tampered_outcome: serde_json::Value = serde_json::from_slice(&observation_bytes)?;
+        tampered_outcome["outcome"]["reported"]["state"] = serde_json::json!("failed");
+        let tampered_outcome_bytes = recursive_agent_contracts::jcs_canonical(&tampered_outcome)?;
+        let tampered_outcome_artifact = reopened_artifacts.put(
+            &tampered_outcome_bytes,
+            "application/json",
+            None,
+        )?;
+        assert!(restarted.replay_recorded(&tampered_outcome_artifact).is_err());
+        assert_eq!(backend.0.load(std::sync::atomic::Ordering::SeqCst), 1);
+
+        let mut tampered_response: serde_json::Value = serde_json::from_slice(&observation_bytes)?;
+        let original_length = tampered_response["response"]["byte_length"]
+            .as_u64()
+            .ok_or("missing response byte length")?;
+        tampered_response["response"]["byte_length"] =
+            serde_json::json!(original_length.saturating_add(1));
+        let tampered_response_bytes = recursive_agent_contracts::jcs_canonical(&tampered_response)?;
+        let tampered_response_artifact = reopened_artifacts.put(
+            &tampered_response_bytes,
+            "application/json",
+            None,
+        )?;
+        assert!(restarted.replay_recorded(&tampered_response_artifact).is_err());
+        assert_eq!(backend.0.load(std::sync::atomic::Ordering::SeqCst), 1);
+    }
     Ok(())
 }
