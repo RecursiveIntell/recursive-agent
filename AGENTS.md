@@ -32,8 +32,11 @@ provider or network call.
    provider.
 8. **Bounded safety.** No `unsafe`, no `unwrap`/`expect` in lib code
    (`cargo clippy -D warnings`). Any panic is a bug.
-9. **Source hierarchy.** This workspace depends on Libraries by **path**.
-   No edits under `~/Coding/Libraries/`. AiDENs P32 is still
+9. **Source hierarchy.** External Libraries-owned crates resolve from the
+   single exact Git revision declared in root `Cargo.toml`; canonical source
+   never depends on a workstation filesystem layout. Coordinated local
+   development may use an explicit, uncommitted Cargo patch, but no committed
+   local-path fallback or duplicate owner is allowed. AiDENs P32 remains
    `feature_expansion_allowed: false`.
 
 ## Source-of-truth ownership
