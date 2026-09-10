@@ -25,7 +25,7 @@ pub enum NativeNormalChatError {
     Artifact(#[from] LedgerError),
     #[error("normal-chat encoding failed")]
     Encoding,
-    #[error("recorded normal-chat observation is malformed or noncanonical")]
+    #[error("recorded normal-chat observation is malformed")]
     ReplayObservationMalformed,
     #[error("recorded normal-chat evidence does not match the requested attempt or permit")]
     ReplayBindingMismatch,
@@ -77,6 +77,7 @@ enum RecordedNormalChatResponseSchemaV1 {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[serde(deny_unknown_fields)]
 struct RecordedNormalChatObservationV1 {
     schema: RecordedNormalChatObservationSchemaV1,
     attempt: NormalChatAttemptId,
@@ -121,11 +122,6 @@ impl NativeNormalChatObservation {
         let observation: RecordedNormalChatObservationV1 =
             serde_json::from_slice(&observation_bytes)
                 .map_err(|_| NativeNormalChatError::ReplayObservationMalformed)?;
-        let canonical_observation = recursive_agent_contracts::jcs_canonical(&observation)
-            .map_err(|_| NativeNormalChatError::ReplayObservationMalformed)?;
-        if canonical_observation != observation_bytes {
-            return Err(NativeNormalChatError::ReplayObservationMalformed);
-        }
 
         observation.preflight.validate()?;
         observation.outcome.validate()?;
@@ -323,8 +319,8 @@ impl<'a, B: CompletionBackend> NativeNormalChatExecutor<'a, B> {
             preflight,
             outcome: outcome.clone(),
         };
-        let encoded_observation = recursive_agent_contracts::jcs_canonical(&observation)
-            .map_err(|_| NativeNormalChatError::Encoding)?;
+        let encoded_observation =
+            serde_json::to_vec(&observation).map_err(|_| NativeNormalChatError::Encoding)?;
         let required_bytes = response_artifact
             .byte_length
             .checked_add(u64::try_from(encoded_observation.len()).unwrap_or(u64::MAX));
