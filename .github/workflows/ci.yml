@@ -65,7 +65,7 @@ jobs:
                   raise SystemExit(f'unexpected Libraries source for {package["name"]}: {source!r}')
       - name: Rust format
         run: cargo fmt --all -- --check
-      - name: Locked workspace check
+      - name: Locked clean-clone workspace check
         run: cargo check --locked --workspace
       - name: Locked workspace clippy
         run: cargo clippy --locked --workspace --all-targets -- -D warnings
