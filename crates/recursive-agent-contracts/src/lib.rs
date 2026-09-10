@@ -7,6 +7,7 @@
 
 mod egress;
 mod event;
+mod normal_chat_operation;
 mod operation;
 mod provider_egress_operation;
 mod run_pack_projection;
@@ -18,6 +19,13 @@ pub use egress::{
 pub use event::{
     project_runtime_events, validate_runtime_event_sequence, RuntimeEventKindV1,
     RuntimeEventSchemaV1, RuntimeEventV1,
+};
+pub use normal_chat_operation::{
+    derive_normal_chat_attempt_id, parse_normal_chat_attempt_v1_bytes,
+    parse_normal_chat_operation_v1_bytes, NormalChatAttemptId, NormalChatAttemptIngressError,
+    NormalChatAttemptSchemaV1, NormalChatAttemptV1, NormalChatBudgetV1,
+    NormalChatOperationIngressError, NormalChatOperationSchemaV1, NormalChatOperationV1,
+    NormalChatReplayV1,
 };
 pub use operation::{
     derive_child_operation_id, derive_child_operation_material_digest,

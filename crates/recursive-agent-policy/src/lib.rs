@@ -1,6 +1,6 @@
 //! Static allowlist and durable, single-use capability leases.
 
-use std::collections::BTreeSet;
+use std::collections::{BTreeMap, BTreeSet};
 use std::fs::File;
 use std::io::{Read, Write};
 use std::os::fd::AsFd;
@@ -14,7 +14,8 @@ use chrono::{DateTime, Utc};
 use recursive_agent_contracts::{
     content_digest, derive_permit_id, jcs_canonical, AuthorityLineageEntryV1, ContentDigest,
     ContractError, CurrentPermitId, CurrentRunId, CurrentStepId, LineageOrigin,
-    PermitIdentityMaterialV1, ProviderEgressBindingV1, ReceiptV1, RunSpecV1, ToolCallSpecV1,
+    NormalChatAttemptId, NormalChatAttemptV1, PermitIdentityMaterialV1, ProviderEgressBindingV1,
+    ReceiptV1, RunSpecV1, ToolCallSpecV1,
 };
 use rustix::fs::{FlockOperation, Mode, OFlags, ResolveFlags};
 use thiserror::Error;
@@ -529,6 +530,14 @@ pub struct EffectScopeV1 {
     pub network_allowed: bool,
 }
 
+fn is_closed_normal_chat_effect(tool: &str, effect: &EffectScopeV1) -> bool {
+    tool == NORMAL_CHAT_LANE
+        && effect.scope_name == NORMAL_CHAT_LANE
+        && effect.network_allowed
+        && effect.read_roots.is_empty()
+        && effect.write_roots.is_empty()
+}
+
 fn is_closed_provider_egress_effect(tool: &str, effect: &EffectScopeV1) -> bool {
     tool == SEALED_COMPLETION_LANE
         && effect.scope_name == SEALED_COMPLETION_LANE
@@ -675,7 +684,8 @@ impl DelegationCeilingV1 {
             if action.tool.is_empty()
                 || action.effect.scope_name.is_empty()
                 || (action.effect.network_allowed
-                    && !is_closed_provider_egress_effect(&action.tool, &action.effect))
+                    && !is_closed_provider_egress_effect(&action.tool, &action.effect)
+                    && !is_closed_normal_chat_effect(&action.tool, &action.effect))
                 || action.effect_digest != content_digest(&action.effect)?
             {
                 return Err(PolicyError::InvalidLease(
@@ -748,6 +758,7 @@ impl PermitBindingV1 {
         }
         if self.effect.network_allowed
             && !is_closed_provider_egress_effect(&self.tool, &self.effect)
+            && !is_closed_normal_chat_effect(&self.tool, &self.effect)
         {
             return Err(PolicyError::NetworkUnavailable);
         }
@@ -1680,6 +1691,322 @@ impl ProviderEgressAdmissionVerifier for DenyProviderEgressAdmission {
     }
 }
 
+const NORMAL_CHAT_ADMISSION_SCHEMA: &str = "recursive-agent.normal-chat-admission/v1";
+const DEFAULT_NORMAL_CHAT_VERIFIER_CONTRACT: &str = "recursive-agent.normal-chat-verifier/v1";
+const NORMAL_CHAT_LANE: &str = "normal_chat";
+const NORMAL_CHAT_FAMILY_SCHEMA: &str = "recursive-agent.normal-chat-attempt-family/v1";
+const NORMAL_CHAT_FAMILY_STATE_NAME: &str = "normal-chat-attempt-family.json";
+const NORMAL_CHAT_FAMILY_TEMP_PREFIX: &str = ".normal-chat-attempt-family.tmp";
+const MAX_NORMAL_CHAT_FAMILY_STATE_BYTES: u64 = 1024 * 1024;
+
+#[derive(Debug, Clone)]
+struct NormalChatFamilyReservationV1 {
+    parent_permit_id: CurrentPermitId,
+    operation_digest: ContentDigest,
+    max_attempts: u32,
+    attempt_number: u32,
+    attempt_id: NormalChatAttemptId,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[serde(deny_unknown_fields)]
+struct NormalChatAttemptReservationV1 {
+    attempt_id: NormalChatAttemptId,
+    permit_id: CurrentPermitId,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[serde(deny_unknown_fields)]
+struct NormalChatFamilyRecordV1 {
+    operation_digest: ContentDigest,
+    max_attempts: u32,
+    attempts: BTreeMap<u32, NormalChatAttemptReservationV1>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[serde(deny_unknown_fields)]
+struct NormalChatFamilyStateV1 {
+    schema: String,
+    families: BTreeMap<String, NormalChatFamilyRecordV1>,
+}
+
+impl NormalChatFamilyStateV1 {
+    fn empty() -> Self {
+        Self {
+            schema: NORMAL_CHAT_FAMILY_SCHEMA.into(),
+            families: BTreeMap::new(),
+        }
+    }
+
+    fn validate(&self) -> Result<(), PolicyError> {
+        if self.schema != NORMAL_CHAT_FAMILY_SCHEMA {
+            return Err(PolicyError::PermitStateConflict);
+        }
+        for (family_id, family) in &self.families {
+            if family_id.is_empty()
+                || family.max_attempts == 0
+                || family.attempts.len() > family.max_attempts as usize
+            {
+                return Err(PolicyError::PermitStateConflict);
+            }
+            for (number, reservation) in &family.attempts {
+                if *number == 0 || *number > family.max_attempts {
+                    return Err(PolicyError::PermitStateConflict);
+                }
+                if reservation.attempt_id.as_str().is_empty()
+                    || reservation.permit_id.as_str().is_empty()
+                {
+                    return Err(PolicyError::PermitStateConflict);
+                }
+            }
+        }
+        Ok(())
+    }
+}
+
+/// Non-authorizing correlation material for a native normal-chat attempt.
+/// The attempt remains inert until an injected current policy owner admits it.
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct NormalChatAdmissionRequestV1 {
+    pub schema: String,
+    pub lane: String,
+    pub attempt: NormalChatAttemptV1,
+    pub tool_arguments_digest: ContentDigest,
+}
+
+impl NormalChatAdmissionRequestV1 {
+    pub fn new(
+        lane: impl Into<String>,
+        attempt: NormalChatAttemptV1,
+        tool_arguments_digest: ContentDigest,
+    ) -> Result<Self, PolicyError> {
+        let request = Self {
+            schema: NORMAL_CHAT_ADMISSION_SCHEMA.into(),
+            lane: lane.into(),
+            attempt,
+            tool_arguments_digest,
+        };
+        request.validate_shape()?;
+        Ok(request)
+    }
+
+    /// Structural validation only. Freshness is checked against the live
+    /// verifier's returned validity window by authorize_normal_chat.
+    pub fn validate_structure(&self) -> Result<(), PolicyError> {
+        self.validate_shape()?;
+        self.attempt.validate()?;
+        for (field, value) in [
+            (
+                "provider_identity",
+                self.attempt.operation.provider_identity.as_str(),
+            ),
+            ("model_ref", self.attempt.operation.model_ref.as_str()),
+        ] {
+            if looks_like_credential_material(value) {
+                return Err(PolicyError::InvalidLease(format!(
+                    "normal-chat admission {field} contains credential-like material"
+                )));
+            }
+        }
+        Ok(())
+    }
+
+    fn validate_shape(&self) -> Result<(), PolicyError> {
+        if self.schema != NORMAL_CHAT_ADMISSION_SCHEMA {
+            return Err(PolicyError::InvalidLease(
+                "unsupported normal-chat admission schema".into(),
+            ));
+        }
+        if self.lane != NORMAL_CHAT_LANE {
+            return Err(PolicyError::ToolNotAllowed(self.lane.clone()));
+        }
+        Ok(())
+    }
+}
+
+/// Live verifier result, never deserialized from the caller's request.
+/// This is a bounded policy decision, not an execution permit or durable receipt.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct NormalChatPolicyValidityV1 {
+    pub not_before: DateTime<Utc>,
+    pub not_after: DateTime<Utc>,
+}
+
+/// Current policy authority for a normal-chat attempt. Implementations must
+/// resolve current owner state on every call and return its validity bounds.
+/// The caller may not substitute a stored decision for the injected verifier.
+pub trait NormalChatAdmissionVerifier: Send + Sync {
+    fn contract_version(&self) -> &'static str {
+        DEFAULT_NORMAL_CHAT_VERIFIER_CONTRACT
+    }
+
+    fn authorize(
+        &self,
+        admission: &ValidatedNormalChatAdmissionV1,
+    ) -> Result<NormalChatPolicyValidityV1, PolicyError>;
+}
+
+/// Opaque-to-callers result of current normal-chat policy evaluation.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ValidatedNormalChatAdmissionV1 {
+    request: NormalChatAdmissionRequestV1,
+    verified_at: DateTime<Utc>,
+    expires_at: DateTime<Utc>,
+    verifier_contract: String,
+}
+
+impl ValidatedNormalChatAdmissionV1 {
+    /// Upper-exclusive policy validity boundary; never a guarantee of a completed effect.
+    pub fn expires_at(&self) -> DateTime<Utc> {
+        self.expires_at
+    }
+
+    pub fn attempt(&self) -> &NormalChatAttemptV1 {
+        &self.request.attempt
+    }
+
+    pub fn tool_arguments_digest(&self) -> &ContentDigest {
+        &self.request.tool_arguments_digest
+    }
+
+    pub fn verified_at(&self) -> DateTime<Utc> {
+        self.verified_at
+    }
+
+    pub fn verifier_contract(&self) -> &str {
+        &self.verifier_contract
+    }
+}
+
+/// Validate the closed attempt before the injected policy verifier observes it.
+pub fn authorize_normal_chat(
+    verifier: &dyn NormalChatAdmissionVerifier,
+    request: &NormalChatAdmissionRequestV1,
+    now: DateTime<Utc>,
+) -> Result<ValidatedNormalChatAdmissionV1, PolicyError> {
+    request.validate_structure()?;
+    let verifier_contract = verifier.contract_version();
+    if verifier_contract.is_empty()
+        || verifier_contract.len() > 4096
+        || looks_like_credential_material(verifier_contract)
+    {
+        return Err(PolicyError::InvalidLease(
+            "invalid normal-chat verifier contract identity".into(),
+        ));
+    }
+    let mut admission = ValidatedNormalChatAdmissionV1 {
+        request: request.clone(),
+        verified_at: now,
+        // Provisional value is already expired until live policy succeeds.
+        expires_at: now,
+        verifier_contract: verifier_contract.into(),
+    };
+    let validity = verifier.authorize(&admission)?;
+    if validity.not_before > now
+        || validity.not_after <= now
+        || validity.not_after <= validity.not_before
+        || validity
+            .not_after
+            .signed_duration_since(validity.not_before)
+            > chrono::Duration::milliseconds(MAX_LIVE_LEASE_MILLISECONDS)
+    {
+        return Err(PolicyError::InvalidLease(
+            "normal-chat policy validity window rejected".into(),
+        ));
+    }
+    admission.expires_at = validity.not_after;
+    Ok(admission)
+}
+
+/// Recheck the exact admitted request against the current verifier immediately
+/// before a future native effect. Does not consume a permit, send, or renew an
+/// expired admission. Runtime composition must bind verifier identity/clock and
+/// couple this check to its permit and dispatch lifecycle.
+pub fn reauthorize_normal_chat(
+    verifier: &dyn NormalChatAdmissionVerifier,
+    previous: &ValidatedNormalChatAdmissionV1,
+    request: &NormalChatAdmissionRequestV1,
+    now: DateTime<Utc>,
+) -> Result<ValidatedNormalChatAdmissionV1, PolicyError> {
+    if now < previous.verified_at || now >= previous.expires_at {
+        return Err(PolicyError::InvalidLease(
+            "normal-chat admission expired or clock moved backward".into(),
+        ));
+    }
+    if request != &previous.request || verifier.contract_version() != previous.verifier_contract {
+        return Err(PolicyError::InvalidLease(
+            "normal-chat reauthorization binding changed".into(),
+        ));
+    }
+    let mut current = authorize_normal_chat(verifier, request, now)?;
+    current.expires_at = current.expires_at.min(previous.expires_at);
+    Ok(current)
+}
+
+/// Default posture: normal-chat access is denied unless native composition
+/// injects an explicit current-policy owner.
+#[derive(Debug, Clone, Copy, Default)]
+pub struct DenyNormalChatAdmission;
+
+impl NormalChatAdmissionVerifier for DenyNormalChatAdmission {
+    fn authorize(
+        &self,
+        _admission: &ValidatedNormalChatAdmissionV1,
+    ) -> Result<NormalChatPolicyValidityV1, PolicyError> {
+        Err(PolicyError::NetworkUnavailable)
+    }
+}
+
+fn validate_normal_chat_permit_binding(
+    binding: &PermitBindingV1,
+    current: &ValidatedNormalChatAdmissionV1,
+    call: &ToolCallSpecV1,
+) -> Result<(), PolicyError> {
+    if binding.run_id != current.attempt().run_id()? {
+        return Err(PolicyError::InvalidLease(
+            "normal-chat permit run identity differs from admitted attempt".into(),
+        ));
+    }
+    let args = call
+        .args
+        .as_object()
+        .ok_or_else(|| PolicyError::InvalidLease("normal-chat dispatch binding mismatch".into()))?;
+    if call.tool != NORMAL_CHAT_LANE
+        || call.frozen_clock.is_some()
+        || args.len() != 2
+        || args.get("attempt") != Some(&serde_json::to_value(current.attempt())?)
+        || !args
+            .get("request")
+            .is_some_and(serde_json::Value::is_object)
+        || content_digest(&call.args)? != *current.tool_arguments_digest()
+        || content_digest(&args["request"])? != current.attempt().provider_request_digest
+        || binding.action_digest != content_digest(call)?
+        || binding.step_id
+            != recursive_agent_contracts::derive_step_id(
+                &binding.run_id,
+                0,
+                NORMAL_CHAT_LANE,
+                call,
+            )?
+    {
+        return Err(PolicyError::InvalidLease(
+            "normal-chat dispatch binding mismatch".into(),
+        ));
+    }
+    if binding.parent_permit_id.is_none()
+        || !is_closed_normal_chat_effect(&binding.tool, &binding.effect)
+        || binding.args_digest != *current.tool_arguments_digest()
+        || binding.expires_at > current.expires_at()
+        || binding.budget.max_wall_time_ms > current.attempt().operation.budget.max_wall_time_ms
+    {
+        return Err(PolicyError::InvalidLease(
+            "normal-chat permit does not bind current admission".into(),
+        ));
+    }
+    Ok(())
+}
+
 fn looks_like_credential_material(value: &str) -> bool {
     let normalized = value.to_ascii_lowercase();
     value.contains('@')
@@ -2193,6 +2520,7 @@ impl DurablePermitStore {
             None,
             Vec::new(),
             trusted_now,
+            None,
         )
     }
 
@@ -2208,6 +2536,7 @@ impl DurablePermitStore {
             Some(ceiling),
             Vec::new(),
             trusted_now,
+            None,
         )
     }
 
@@ -2231,6 +2560,7 @@ impl DurablePermitStore {
             None,
             executable_authority,
             trusted_now,
+            None,
         )
     }
 
@@ -2268,6 +2598,41 @@ impl DurablePermitStore {
             None,
             Vec::new(),
             trusted_now,
+            None,
+        )
+    }
+
+    /// Issue a normal-chat network effect only under a durable control parent
+    /// and a freshly rechecked normal-chat policy decision. Generic issuance
+    /// stays network-denying; V3 admission cannot substitute for this capability.
+    pub fn issue_normal_chat(
+        &self,
+        binding: &PermitBindingV1,
+        admission: &ValidatedNormalChatAdmissionV1,
+        call: &ToolCallSpecV1,
+        verifier: &dyn NormalChatAdmissionVerifier,
+        trusted_now: DateTime<Utc>,
+    ) -> Result<ExecutionPermitV1, PolicyError> {
+        let current =
+            reauthorize_normal_chat(verifier, admission, &admission.request, trusted_now)?;
+        validate_normal_chat_permit_binding(binding, &current, call)?;
+        let parent_permit_id = binding.parent_permit_id.clone().ok_or_else(|| {
+            PolicyError::InvalidLease("normal-chat permit requires a control parent".into())
+        })?;
+        let family = NormalChatFamilyReservationV1 {
+            parent_permit_id,
+            operation_digest: content_digest(&current.attempt().operation)?,
+            max_attempts: current.attempt().operation.budget.max_attempts,
+            attempt_number: current.attempt().attempt_number,
+            attempt_id: current.attempt().attempt_id.clone(),
+        };
+        self.issue_authority(
+            binding,
+            PermitPurposeV1::Effect,
+            None,
+            Vec::new(),
+            trusted_now,
+            Some(family),
         )
     }
 
@@ -2278,6 +2643,7 @@ impl DurablePermitStore {
         delegation_ceiling: Option<DelegationCeilingV1>,
         executable_authority: Vec<ExecutableAuthorityV1>,
         trusted_now: DateTime<Utc>,
+        normal_chat_family: Option<NormalChatFamilyReservationV1>,
     ) -> Result<ExecutionPermitV1, PolicyError> {
         binding.validate()?;
         if let Some(ceiling) = &delegation_ceiling {
@@ -2357,7 +2723,12 @@ impl DurablePermitStore {
                 Err(error) => return Err(error),
             };
             if let Some(mut parent) = parent {
-                validate_parent_binding(&permit, &parent, trusted_now)?;
+                validate_parent_binding_with_normal_chat_family(
+                    &permit,
+                    &parent,
+                    trusted_now,
+                    normal_chat_family.as_ref(),
+                )?;
 
                 // Treat the parent allocation map as the durable reservation
                 // journal. Replacing the same child id is idempotent, so a
@@ -2386,6 +2757,9 @@ impl DurablePermitStore {
                         PermitRejectionReasonV1::BudgetExceeded,
                     ));
                 }
+                if let Some(family) = normal_chat_family.as_ref() {
+                    self.reserve_normal_chat_attempt(family, &permit.permit_id)?;
+                }
                 self.replace_record(&parent, None)?;
             }
             if existing_child.is_some() {
@@ -2393,6 +2767,247 @@ impl DurablePermitStore {
             }
             self.replace_record(&record, None)?;
             Ok(permit)
+        })
+    }
+
+    fn reserve_normal_chat_attempt(
+        &self,
+        reservation: &NormalChatFamilyReservationV1,
+        permit_id: &CurrentPermitId,
+    ) -> Result<(), PolicyError> {
+        self.validate_normal_chat_permit_directory()?;
+        if reservation.attempt_number == 0
+            || reservation.attempt_number > reservation.max_attempts
+            || reservation.max_attempts == 0
+        {
+            return Err(PolicyError::BudgetOverrun(
+                "normal-chat attempt exceeds its family ceiling".into(),
+            ));
+        }
+        let mut state = self.read_normal_chat_family_state()?;
+        let family_id = reservation.parent_permit_id.to_string();
+        let family = state
+            .families
+            .entry(family_id)
+            .or_insert_with(|| NormalChatFamilyRecordV1 {
+                operation_digest: reservation.operation_digest.clone(),
+                max_attempts: reservation.max_attempts,
+                attempts: BTreeMap::new(),
+            });
+        if family.operation_digest != reservation.operation_digest
+            || family.max_attempts != reservation.max_attempts
+        {
+            return Err(PolicyError::InvalidLease(
+                "normal-chat attempt family binding changed".into(),
+            ));
+        }
+        if let Some(existing) = family.attempts.get(&reservation.attempt_number) {
+            if existing.attempt_id == reservation.attempt_id && existing.permit_id == *permit_id {
+                return Ok(());
+            }
+            return Err(PolicyError::InvalidLease(
+                "normal-chat attempt already has an effect permit".into(),
+            ));
+        }
+        if family.attempts.len() >= family.max_attempts as usize {
+            return Err(PolicyError::BudgetOverrun(
+                "normal-chat attempt family ceiling exceeded".into(),
+            ));
+        }
+        family.attempts.insert(
+            reservation.attempt_number,
+            NormalChatAttemptReservationV1 {
+                attempt_id: reservation.attempt_id.clone(),
+                permit_id: permit_id.clone(),
+            },
+        );
+        state.validate()?;
+        self.write_normal_chat_family_state(&state)
+    }
+
+    fn read_normal_chat_family_state(&self) -> Result<NormalChatFamilyStateV1, PolicyError> {
+        let fd = match secure_open_at(
+            &self.root,
+            NORMAL_CHAT_FAMILY_STATE_NAME,
+            OFlags::RDONLY | OFlags::NOFOLLOW | OFlags::CLOEXEC | OFlags::NONBLOCK,
+            Mode::empty(),
+        ) {
+            Ok(fd) => fd,
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
+                return Ok(NormalChatFamilyStateV1::empty())
+            }
+            Err(error) => return Err(error.into()),
+        };
+        let file = File::from(fd);
+        let metadata = file.metadata()?;
+        if !metadata.is_file() || metadata.len() > MAX_NORMAL_CHAT_FAMILY_STATE_BYTES {
+            return Err(PolicyError::PermitStateConflict);
+        }
+        let mut bytes = Vec::new();
+        file.take(MAX_NORMAL_CHAT_FAMILY_STATE_BYTES + 1)
+            .read_to_end(&mut bytes)?;
+        if bytes.len() as u64 > MAX_NORMAL_CHAT_FAMILY_STATE_BYTES {
+            return Err(PolicyError::PermitStateConflict);
+        }
+        let state: NormalChatFamilyStateV1 = serde_json::from_slice(&bytes)?;
+        state.validate()?;
+        Ok(state)
+    }
+
+    fn write_normal_chat_family_state(
+        &self,
+        state: &NormalChatFamilyStateV1,
+    ) -> Result<(), PolicyError> {
+        let (temp_name, mut file) = create_unique_temp(&self.root, NORMAL_CHAT_FAMILY_TEMP_PREFIX)?;
+        file.write_all(&jcs_canonical(state)?)?;
+        file.sync_all()?;
+        rustix::fs::renameat(
+            self.root.as_fd(),
+            &temp_name,
+            self.root.as_fd(),
+            NORMAL_CHAT_FAMILY_STATE_NAME,
+        )
+        .map_err(std::io::Error::from)?;
+        self.root.sync_all()?;
+        Ok(())
+    }
+
+    /// Validate permit records under the existing bounded scan policy without
+    /// imposing the old one-normal-chat-per-run restriction.
+    fn validate_normal_chat_permit_directory(&self) -> Result<(), PolicyError> {
+        let entries =
+            rustix::fs::Dir::read_from(self.root.as_fd()).map_err(std::io::Error::from)?;
+        for (index, entry) in entries.enumerate() {
+            if index >= 4096 {
+                return Err(PolicyError::InvalidLease(
+                    "normal-chat permit directory scan limit exceeded".into(),
+                ));
+            }
+            let entry = entry.map_err(std::io::Error::from)?;
+            let bytes = entry.file_name().to_bytes();
+            if !bytes.starts_with(b"permit-") || !bytes.ends_with(b".json") {
+                continue;
+            }
+            let name = std::str::from_utf8(bytes).map_err(|_| PolicyError::PermitStateConflict)?;
+            let fd = secure_open_at(
+                &self.root,
+                name,
+                OFlags::RDONLY | OFlags::NOFOLLOW | OFlags::CLOEXEC | OFlags::NONBLOCK,
+                Mode::empty(),
+            )?;
+            let file = File::from(fd);
+            let metadata = file.metadata()?;
+            if !metadata.is_file() || metadata.len() > MAX_PERMIT_RECORD_BYTES {
+                return Err(PolicyError::PermitStateConflict);
+            }
+            let mut raw = Vec::new();
+            file.take(MAX_PERMIT_RECORD_BYTES + 1)
+                .read_to_end(&mut raw)?;
+            if raw.len() as u64 > MAX_PERMIT_RECORD_BYTES {
+                return Err(PolicyError::PermitStateConflict);
+            }
+            let record: PermitRecordV1 = serde_json::from_slice(&raw)?;
+            if state_name(&record.permit.permit_id)? != name
+                || derive_permit_id(&record.permit.identity_material()?)? != record.permit.permit_id
+            {
+                return Err(PolicyError::PermitStateConflict);
+            }
+        }
+        Ok(())
+    }
+
+    /// Read back the exact native preflight persisted by normal-chat consumption.
+    pub fn normal_chat_preflight(
+        &self,
+        permit_id: &CurrentPermitId,
+    ) -> Result<PermitPreflightReceiptV1, PolicyError> {
+        self.with_lock(|| {
+            let record = self.read_record_or_reject(permit_id)?;
+            if record.permit.binding.tool != NORMAL_CHAT_LANE {
+                return Err(PolicyError::InvalidLease("not a normal-chat permit".into()));
+            }
+            let receipt = record
+                .preflight_receipt
+                .ok_or(PolicyError::PermitStateConflict)?;
+            receipt.validate()?;
+            Ok(receipt)
+        })
+    }
+
+    /// Consume only after current normal-chat policy and exact call checks.
+    /// The policy callback runs under the local permit lock and must not reenter
+    /// this store. This serializes local revoke/consume; external owner changes
+    /// still require an owner lease/fence in runtime composition.
+    pub fn consume_normal_chat(
+        &self,
+        permit_id: &CurrentPermitId,
+        admission: &ValidatedNormalChatAdmissionV1,
+        call: &ToolCallSpecV1,
+        verifier: &dyn NormalChatAdmissionVerifier,
+        mut trusted_clock: impl FnMut() -> DateTime<Utc>,
+    ) -> Result<PermitEvidenceV1, PolicyError> {
+        self.with_lock(|| {
+            // Waiting for the process/thread lock may outlive admission validity.
+            // Sample inside the critical section, never reuse a pre-wait instant.
+            let trusted_now = trusted_clock();
+            let mut record = self.read_record_or_reject(permit_id)?;
+            let binding = &record.permit.binding;
+            validate_dispatch(permit_id, &record, binding, trusted_now)?;
+            let current =
+                reauthorize_normal_chat(verifier, admission, &admission.request, trusted_now)?;
+            validate_normal_chat_permit_binding(binding, &current, call)?;
+            if record.permit.purpose != PermitPurposeV1::Effect {
+                return Err(PolicyError::InvalidLease(
+                    "normal-chat requires an effect permit".into(),
+                ));
+            }
+            let parent = binding
+                .parent_permit_id
+                .as_ref()
+                .map(|parent_id| self.read_record_or_reject(parent_id))
+                .transpose()?;
+            let normal_chat_family = binding
+                .parent_permit_id
+                .as_ref()
+                .map(|parent_permit_id| {
+                    Ok::<NormalChatFamilyReservationV1, PolicyError>(
+                        NormalChatFamilyReservationV1 {
+                            parent_permit_id: parent_permit_id.clone(),
+                            operation_digest: content_digest(&current.attempt().operation)?,
+                            max_attempts: current.attempt().operation.budget.max_attempts,
+                            attempt_number: current.attempt().attempt_number,
+                            attempt_id: current.attempt().attempt_id.clone(),
+                        },
+                    )
+                })
+                .transpose()?;
+            // Recheck after potentially slow verifier and record reads. A denied
+            // transition leaves the durable record unchanged; do not renew here.
+            let final_now = trusted_clock();
+            if final_now < trusted_now || final_now >= current.expires_at() {
+                return Err(PolicyError::InvalidLease(
+                    "normal-chat validity changed during consumption checks".into(),
+                ));
+            }
+            validate_dispatch(permit_id, &record, binding, final_now)?;
+            if let Some(parent) = &parent {
+                validate_parent_binding_with_normal_chat_family(
+                    &record.permit,
+                    parent,
+                    final_now,
+                    normal_chat_family.as_ref(),
+                )?;
+            }
+            record.state = PermitStateV1::Consumed {
+                consumed_at: final_now,
+            };
+            let evidence = PermitEvidenceV1::from_record(&record)?;
+            record.preflight_receipt = Some(PermitPreflightReceiptV1::create(
+                evidence.clone(),
+                final_now,
+            )?);
+            self.replace_record(&record, None)?;
+            Ok(evidence)
         })
     }
 
@@ -2415,6 +3030,11 @@ impl DurablePermitStore {
         dispatch.validate()?;
         self.with_lock(|| {
             let mut record = self.read_record_or_reject(permit_id)?;
+            if record.permit.binding.tool == NORMAL_CHAT_LANE {
+                return Err(PolicyError::InvalidLease(
+                    "normal-chat requires current-policy consumption".into(),
+                ));
+            }
             validate_dispatch(permit_id, &record, dispatch, trusted_now)?;
             if let Some(parent_id) = &record.permit.binding.parent_permit_id {
                 let parent = self
@@ -2488,6 +3108,11 @@ impl DurablePermitStore {
         dispatch.validate()?;
         self.with_lock(|| {
             let mut record = self.read_record_or_reject(permit_id)?;
+            if record.permit.binding.tool == NORMAL_CHAT_LANE {
+                return Err(PolicyError::InvalidLease(
+                    "normal-chat requires current-policy consumption".into(),
+                ));
+            }
             validate_dispatch(permit_id, &record, dispatch, trusted_now)?;
             if let Some(parent_id) = &record.permit.binding.parent_permit_id {
                 let parent = self
@@ -2795,11 +3420,21 @@ fn validate_parent_binding(
     parent: &PermitRecordV1,
     now: DateTime<Utc>,
 ) -> Result<(), PolicyError> {
+    validate_parent_binding_with_normal_chat_family(child, parent, now, None)
+}
+
+fn validate_parent_binding_with_normal_chat_family(
+    child: &ExecutionPermitV1,
+    parent: &PermitRecordV1,
+    now: DateTime<Utc>,
+    normal_chat_family: Option<&NormalChatFamilyReservationV1>,
+) -> Result<(), PolicyError> {
     validate_parent_permits(
         child,
         &parent.permit,
         matches!(parent.state, PermitStateV1::Issued),
         now,
+        normal_chat_family,
     )
 }
 
@@ -2808,6 +3443,7 @@ fn validate_parent_permits(
     parent: &ExecutionPermitV1,
     parent_is_active: bool,
     now: DateTime<Utc>,
+    normal_chat_family: Option<&NormalChatFamilyReservationV1>,
 ) -> Result<(), PolicyError> {
     let child_id = &child.permit_id;
     let child_binding = &child.binding;
@@ -2845,11 +3481,27 @@ fn validate_parent_permits(
     }
     match child.purpose {
         PermitPurposeV1::Effect => {
-            let action = ceiling.actions.iter().find(|action| {
+            let exact_action = ceiling.actions.iter().find(|action| {
                 action.tool == child_binding.tool
                     && action.action_digest == child_binding.action_digest
                     && action.args_digest == child_binding.args_digest
             });
+            let family_retry = normal_chat_family.is_some_and(|family| {
+                family.parent_permit_id == parent.permit_id
+                    && child_binding.tool == NORMAL_CHAT_LANE
+                    && is_closed_normal_chat_effect(&child_binding.tool, &child_binding.effect)
+            });
+            let action = if let Some(action) = exact_action {
+                Some(action)
+            } else if family_retry {
+                ceiling.actions.iter().find(|action| {
+                    action.tool == NORMAL_CHAT_LANE
+                        && action.effect == child_binding.effect
+                        && action.effect_digest == child_binding.effect_digest
+                })
+            } else {
+                None
+            };
             let Some(action) = action else {
                 return Err(rejected(child_id, PermitRejectionReasonV1::WrongAction));
             };
@@ -2942,6 +3594,7 @@ pub fn validate_delegation_evidence(
         &parent_permit,
         matches!(parent.state, PermitEvidenceStateV1::Issued),
         at,
+        None,
     )
 }
 

@@ -45,7 +45,7 @@ pub struct ManagedAdmissionConfigV1 {
 impl ManagedAdmissionConfigV1 {
     /// Build the default managed configuration from the canonical global cap.
     pub fn from_global(global_max_active: usize) -> Self {
-        let leaf_count = u64::try_from(global_max_active).map_or(u64::MAX, |value| value);
+        let leaf_count = u64::try_from(global_max_active).unwrap_or(u64::MAX);
         Self {
             revision: 1,
             global_max_active,
