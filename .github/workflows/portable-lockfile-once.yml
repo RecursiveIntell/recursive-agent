@@ -6,7 +6,7 @@ on:
       - fix/portable-normal-chat-replay-20260910
 
 permissions:
-  contents: read
+  contents: write
 
 jobs:
   generate-lockfile:
@@ -56,6 +56,17 @@ jobs:
           if forbidden in Path('Cargo.toml').read_text() or forbidden in Path('Cargo.lock').read_text():
               raise SystemExit('host-local Libraries path remains in canonical Cargo inputs')
           print(f'verified {len(found)} resolved Libraries packages at {expected}')
+      - name: Commit generated lockfile if changed
+        run: |
+          if git diff --quiet -- Cargo.lock; then
+            echo "Cargo.lock already matches the pinned graph"
+            exit 0
+          fi
+          git config user.name "recursive-agent lockfile bot"
+          git config user.email "actions@users.noreply.github.com"
+          git add Cargo.lock
+          git commit -m "build: regenerate lockfile for canonical Libraries pin"
+          git push origin HEAD:fix/portable-normal-chat-replay-20260910
       - name: Upload generated Cargo.lock
         uses: actions/upload-artifact@v4
         with:
