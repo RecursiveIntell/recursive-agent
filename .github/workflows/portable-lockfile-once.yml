@@ -1,0 +1,53 @@
+name: portable-lockfile-once
+
+on:
+  push:
+    branches:
+      - fix/portable-normal-chat-replay-20260910
+
+permissions:
+  contents: read
+
+jobs:
+  generate-lockfile:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: rustfmt, clippy
+      - name: Generate lockfile from canonical pinned dependency graph
+        run: cargo generate-lockfile
+      - name: Verify metadata resolves without sibling Libraries checkout
+        run: cargo metadata --locked --format-version 1 > /tmp/metadata.json
+      - name: Reject host-local Libraries paths and mixed revisions
+        shell: python
+        run: |
+          import json
+          from pathlib import Path
+          data = json.loads(Path('/tmp/metadata.json').read_text())
+          target = {
+              'boundary-compiler', 'stack-ids', 'bitemporal-runtime',
+              'claim-ledger', 'llm-tool-runtime'
+          }
+          found = {p['name']: p for p in data['packages'] if p['name'] in target}
+          missing = target - found.keys()
+          if missing:
+              raise SystemExit(f'missing pinned Libraries packages: {sorted(missing)}')
+          sources = {p['source'] for p in found.values()}
+          if len(sources) != 1:
+              raise SystemExit(f'mixed Libraries sources: {sorted(sources)}')
+          source = next(iter(sources))
+          expected = '13d485f0ea16c8cf69033fc7622088305e7f184f'
+          if not source or not source.startswith('git+https://github.com/RecursiveIntell/Libraries.git?rev=') or expected not in source:
+              raise SystemExit(f'unexpected Libraries source: {source!r}')
+          if '/home/' in json.dumps(data):
+              raise SystemExit('host-local /home dependency material remains in Cargo metadata')
+          print(source)
+      - name: Upload generated Cargo.lock
+        uses: actions/upload-artifact@v4
+        with:
+          name: recursive-agent-portable-cargo-lock
+          path: Cargo.lock
+          if-no-files-found: error
+          retention-days: 1
