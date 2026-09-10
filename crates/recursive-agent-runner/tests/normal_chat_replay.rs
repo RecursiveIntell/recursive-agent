@@ -285,21 +285,22 @@ fn recorded_response_replays_after_restart_without_backend_reexecution(
 
     let mut tampered_descriptor = observed.observation_artifact.clone();
     tampered_descriptor.byte_length = tampered_descriptor.byte_length.saturating_add(1);
-    assert!(recursive_agent_runner::NativeNormalChatObservation::replay_recorded_response(
-        &reopened_store,
-        &reopened_artifacts,
-        &tampered_descriptor,
-        &admission.attempt().attempt_id,
-        &permit.permit_id,
-    )
-    .is_err());
+    assert!(
+        recursive_agent_runner::NativeNormalChatObservation::replay_recorded_response(
+            &reopened_store,
+            &reopened_artifacts,
+            &tampered_descriptor,
+            &admission.attempt().attempt_id,
+            &permit.permit_id,
+        )
+        .is_err()
+    );
     assert_eq!(backend.0.load(Ordering::SeqCst), 1);
 
     let original_observation = reopened_artifacts.get(&observed.observation_artifact)?;
     let mut unknown_schema: serde_json::Value = serde_json::from_slice(&original_observation)?;
-    unknown_schema["schema"] = serde_json::Value::String(
-        "recursive-agent.normal-chat-observation/v999".into(),
-    );
+    unknown_schema["schema"] =
+        serde_json::Value::String("recursive-agent.normal-chat-observation/v999".into());
     let unknown_artifact = reopened_artifacts.put(
         &serde_json::to_vec(&unknown_schema)?,
         "application/json",
