@@ -23,7 +23,8 @@ jobs:
       - name: Format and constrain changed surface
         shell: bash
         run: |
-          cargo fmt --all
+          rustfmt --edition 2021 crates/recursive-agent-runner/src/normal_chat.rs
+          rustfmt --edition 2021 crates/recursive-agent-runner/tests/normal_chat_execution.rs
           python3 - <<'PY'
           import subprocess
           allowed = {
