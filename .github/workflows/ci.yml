@@ -1,0 +1,75 @@
+name: recursive-agent-ci
+
+on:
+  push:
+    branches:
+      - main
+      - fix/portable-normal-chat-replay-20260910
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  portable-build-and-test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: rustfmt, clippy
+      - name: Verify canonical Libraries dependency pin
+        shell: python
+        run: |
+          import tomllib
+          from pathlib import Path
+
+          expected = '13d485f0ea16c8cf69033fc7622088305e7f184f'
+          expected_url = 'https://github.com/RecursiveIntell/Libraries.git'
+          names = {
+              'boundary-compiler', 'stack-ids', 'bitemporal-runtime',
+              'claim-ledger', 'llm-tool-runtime'
+          }
+          raw_manifest = Path('Cargo.toml').read_text()
+          raw_lock = Path('Cargo.lock').read_text()
+          manifest = tomllib.loads(raw_manifest)
+          declared = manifest['workspace']['dependencies']
+          for name in names:
+              item = declared.get(name)
+              if not isinstance(item, dict):
+                  raise SystemExit(f'missing canonical Libraries dependency: {name}')
+              if item.get('git') != expected_url or item.get('rev') != expected or 'path' in item:
+                  raise SystemExit(f'noncanonical Libraries dependency: {name}: {item!r}')
+          if '/home/sikmindz/Coding/Libraries/' in raw_manifest or '/home/sikmindz/Coding/Libraries/' in raw_lock:
+              raise SystemExit('host-local Libraries path remains in canonical Cargo inputs')
+      - name: Verify locked clean-clone metadata
+        run: cargo metadata --locked --format-version 1 > /tmp/metadata.json
+      - name: Verify resolved Libraries revisions
+        shell: python
+        run: |
+          import json
+          from pathlib import Path
+          expected = '13d485f0ea16c8cf69033fc7622088305e7f184f'
+          expected_url = 'https://github.com/RecursiveIntell/Libraries.git'
+          names = {
+              'boundary-compiler', 'stack-ids', 'bitemporal-runtime',
+              'claim-ledger', 'llm-tool-runtime'
+          }
+          data = json.loads(Path('/tmp/metadata.json').read_text())
+          found = [p for p in data['packages'] if p['name'] in names]
+          if not found:
+              raise SystemExit('no Libraries package participates in resolved graph')
+          for package in found:
+              source = package.get('source')
+              if not source or not source.startswith(f'git+{expected_url}?rev=') or expected not in source:
+                  raise SystemExit(f'unexpected Libraries source for {package["name"]}: {source!r}')
+      - name: Rust format
+        run: cargo fmt --all -- --check
+      - name: Locked workspace check
+        run: cargo check --locked --workspace
+      - name: Locked workspace clippy
+        run: cargo clippy --locked --workspace --all-targets -- -D warnings
+      - name: Locked workspace tests
+        run: cargo test --locked --workspace --all-targets
+      - name: Normal-chat replay witness
+        run: cargo test --locked -p recursive-agent-runner --test normal_chat_replay -- --nocapture
