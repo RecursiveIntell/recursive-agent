@@ -1,0 +1,56 @@
+name: verify-replay-candidate
+
+on:
+  push:
+    branches:
+      - fix/portable-replay-20260910
+    paths:
+      - .github/workflows/verify-replay-candidate.yml
+
+permissions:
+  contents: read
+
+jobs:
+  replay:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: rustfmt, clippy
+      - name: Install native build prerequisites
+        run: sudo apt-get update && sudo apt-get install --no-install-recommends -y pkg-config libseccomp-dev
+      - name: Materialize prospective portable dependency graph in ephemeral checkout
+        shell: bash
+        run: |
+          python3 - <<'PY'
+          from pathlib import Path
+          p = Path('Cargo.toml')
+          text = p.read_text()
+          rev = 'b888e99b750c6d0786a50ebda9f8c42286f432d1'
+          replacements = {
+            'boundary-compiler = { version = "0.1.0", path = "/home/sikmindz/Coding/Libraries/boundary-compiler" }': f'boundary-compiler = {{ version = "0.1.0", git = "https://github.com/RecursiveIntell/Libraries.git", rev = "{rev}" }}',
+            'stack-ids = { version = "0.1.1", path = "/home/sikmindz/Coding/Libraries/stack-ids" }': f'stack-ids = {{ version = "0.1.1", git = "https://github.com/RecursiveIntell/Libraries.git", rev = "{rev}" }}',
+            'bitemporal-runtime = { version = "0.1.0", path = "/home/sikmindz/Coding/Libraries/bitemporal-runtime", default-features = false }': f'bitemporal-runtime = {{ version = "0.1.0", git = "https://github.com/RecursiveIntell/Libraries.git", rev = "{rev}", default-features = false }}',
+            'claim-ledger = { version = "0.1.0", path = "/home/sikmindz/Coding/Libraries/claim-ledger" }': f'claim-ledger = {{ version = "0.1.0", git = "https://github.com/RecursiveIntell/Libraries.git", rev = "{rev}" }}',
+            'llm-tool-runtime = { version = "0.1.0", path = "/home/sikmindz/Coding/Libraries/llm-tool-runtime" }': f'llm-tool-runtime = {{ version = "0.1.0", git = "https://github.com/RecursiveIntell/Libraries.git", rev = "{rev}" }}',
+          }
+          for old, new in replacements.items():
+              if text.count(old) != 1:
+                  raise SystemExit(f'missing exact dependency anchor: {old}')
+              text = text.replace(old, new, 1)
+          p.write_text(text)
+          PY
+          rm -f Cargo.lock
+          # Repository-local systemd-run policy is for the operator workstation;
+          # CI executes inside GitHub's isolated runner and must not depend on a user bus.
+          rm -f .cargo/config.toml
+          cargo generate-lockfile
+          cargo metadata --locked --format-version 1 > /tmp/cargo-metadata.json
+          python3 scripts/check_libraries_dependency_source.py --metadata /tmp/cargo-metadata.json
+      - name: Verify replay source and behavior
+        run: |
+          cargo fmt --all -- --check
+          cargo clippy --locked -p recursive-agent-policy -p recursive-agent-runner --all-targets -- -D warnings
+          cargo test --locked -p recursive-agent-policy --test normal_chat_permit
+          cargo test --locked -p recursive-agent-runner --test normal_chat_execution
