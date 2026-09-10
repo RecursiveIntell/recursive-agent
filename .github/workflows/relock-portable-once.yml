@@ -1,0 +1,38 @@
+name: relock-portable-once
+
+on:
+  push:
+    branches:
+      - fix/portable-replay-20260910
+    paths:
+      - .github/workflows/relock-portable-once.yml
+
+permissions:
+  contents: write
+
+jobs:
+  relock:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: fix/portable-replay-20260910
+      - uses: dtolnay/rust-toolchain@stable
+      - name: Generate and verify lock from canonical manifest
+        shell: bash
+        run: |
+          rm -f .cargo/config.toml
+          cargo generate-lockfile
+          cargo metadata --locked --format-version 1 > /tmp/cargo-metadata.json
+          python3 scripts/check_libraries_dependency_source.py --metadata /tmp/cargo-metadata.json
+          git diff --check
+          changed="$(git diff --name-only)"
+          test "$changed" = "Cargo.lock"
+      - name: Commit generated lockfile
+        shell: bash
+        run: |
+          git config user.name github-actions[bot]
+          git config user.email 41898282+github-actions[bot]@users.noreply.github.com
+          git add Cargo.lock
+          git commit -m "build: regenerate lock for canonical Libraries revision"
+          git push origin HEAD:fix/portable-replay-20260910
