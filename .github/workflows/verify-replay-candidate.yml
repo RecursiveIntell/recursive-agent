@@ -1,6 +1,6 @@
 name: verify-replay-candidate
 
-# Branch-local verification only; removed before merge.
+# Branch-local candidate verification; removed before merge.
 on:
   push:
     branches:
