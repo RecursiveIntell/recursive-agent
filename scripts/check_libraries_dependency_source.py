@@ -1,11 +1,10 @@
 #!/usr/bin/env python3
-"""Fail closed unless every external Libraries crate resolves from one exact Git revision."""
+"""Fail closed unless external Libraries dependencies share one exact Git revision."""
 from __future__ import annotations
 
 import argparse
 import json
 import re
-import sys
 import tomllib
 from pathlib import Path
 
@@ -48,21 +47,31 @@ def manifest_revision(path: Path) -> str:
     return next(iter(revisions))
 
 
-def check_metadata(path: Path, revision: str) -> None:
+def check_metadata(path: Path, revision: str) -> tuple[str, ...]:
     metadata = json.loads(path.read_text(encoding="utf-8"))
     packages = metadata.get("packages")
     if not isinstance(packages, list):
         fail("Cargo metadata lacks packages")
+    resolved: list[str] = []
     for name in CRATES:
         matching = [package for package in packages if package.get("name") == name]
-        if len(matching) != 1:
-            fail(f"expected exactly one resolved {name}, found {len(matching)}")
+        if len(matching) > 1:
+            fail(f"resolved duplicate copies of {name}: {len(matching)}")
+        # Virtual-workspace dependencies are declarations, not forced roots.
+        # An unused declaration may legitimately be absent from Cargo metadata;
+        # the manifest gate above still pins it exactly if a crate later opts in.
+        if not matching:
+            continue
         source = matching[0].get("source")
         if not isinstance(source, str):
             fail(f"{name} resolved without an immutable source")
         expected_prefix = f"git+{REPOSITORY}?rev={revision}#"
         if not source.startswith(expected_prefix) or not source.endswith(f"#{revision}"):
             fail(f"{name} resolved from unexpected source: {source}")
+        resolved.append(name)
+    if not resolved:
+        fail("no Libraries dependency was resolved; metadata gate exercised nothing")
+    return tuple(resolved)
 
 
 def main() -> None:
@@ -71,9 +80,11 @@ def main() -> None:
     parser.add_argument("--metadata", type=Path)
     args = parser.parse_args()
     revision = manifest_revision(args.manifest)
+    resolved: tuple[str, ...] = ()
     if args.metadata is not None:
-        check_metadata(args.metadata, revision)
-    print(f"Libraries dependency source: PASS {revision}")
+        resolved = check_metadata(args.metadata, revision)
+    suffix = f" resolved={','.join(resolved)}" if resolved else ""
+    print(f"Libraries dependency source: PASS {revision}{suffix}")
 
 
 if __name__ == "__main__":
