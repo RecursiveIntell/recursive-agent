@@ -1,0 +1,37 @@
+name: format-replay-once
+
+on:
+  push:
+    branches:
+      - fix/portable-normal-chat-replay-20260910
+
+permissions:
+  contents: write
+
+jobs:
+  format:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: rustfmt
+      - name: Format and constrain touched files
+        run: |
+          cargo fmt --all
+          changed="$(git diff --name-only)"
+          printf '%s\n' "$changed"
+          if [ -z "$changed" ]; then
+            exit 0
+          fi
+          unexpected="$(printf '%s\n' "$changed" | grep -Ev '^(crates/recursive-agent-runner/src/normal_chat\.rs|crates/recursive-agent-runner/tests/normal_chat_replay\.rs)$' || true)"
+          if [ -n "$unexpected" ]; then
+            echo "unexpected formatter scope:" >&2
+            printf '%s\n' "$unexpected" >&2
+            exit 1
+          fi
+          git config user.name "recursive-agent format bot"
+          git config user.email "actions@users.noreply.github.com"
+          git add crates/recursive-agent-runner/src/normal_chat.rs crates/recursive-agent-runner/tests/normal_chat_replay.rs
+          git commit -m "style(runtime): apply rustfmt to replay changes"
+          git push origin HEAD:fix/portable-normal-chat-replay-20260910
