@@ -4,9 +4,13 @@ mod autonomous;
 mod deps;
 mod error;
 mod managed_admission;
+mod normal_chat;
 mod runtime;
 mod sandbox_engine;
 mod scheduler;
+pub use normal_chat::{
+    NativeNormalChatError, NativeNormalChatExecutor, NativeNormalChatObservation,
+};
 mod sealed_completion;
 
 pub use autonomous::{

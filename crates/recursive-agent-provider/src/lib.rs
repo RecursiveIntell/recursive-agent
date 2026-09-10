@@ -189,8 +189,19 @@ enum ProviderSpecWire {
         base_url: ValidatedEndpoint,
         model: String,
         credential_ref: Option<CredentialRef>,
-        api_key: Option<serde_json::Value>,
+        #[serde(
+            default,
+            rename = "api_key",
+            deserialize_with = "reject_raw_provider_key"
+        )]
+        _raw_key: (),
     },
+}
+
+fn reject_raw_provider_key<'de, D: Deserializer<'de>>(_deserializer: D) -> Result<(), D::Error> {
+    Err(serde::de::Error::custom(
+        "raw provider credentials are forbidden; migrate to credential_ref: environment:NAME",
+    ))
 }
 
 impl<'de> Deserialize<'de> for ProviderSpecV1 {
@@ -201,13 +212,8 @@ impl<'de> Deserialize<'de> for ProviderSpecV1 {
                 base_url,
                 model,
                 credential_ref,
-                api_key,
+                _raw_key: (),
             } => {
-                if api_key.is_some() {
-                    return Err(serde::de::Error::custom(
-                        "raw provider credentials are forbidden; migrate to credential_ref: environment:NAME",
-                    ));
-                }
                 let credential_ref = credential_ref.ok_or_else(|| {
                     serde::de::Error::custom(
                         "missing credential_ref; expected environment:PORTABLE_NAME",
@@ -261,8 +267,145 @@ pub struct CompletionResponseV1 {
     pub raw: serde_json::Value,
 }
 
+/// Exact schema tag for the closed provider conversation request representation.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+pub enum ConversationRequestSchemaV1 {
+    #[serde(rename = "recursive-agent.provider-conversation-request/v1")]
+    V1,
+}
+
+/// The only conversational roles admitted by the initial provider adapter boundary.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ConversationRoleV1 {
+    System,
+    User,
+    Assistant,
+}
+
+/// One ordered, text-only conversation message.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct ConversationMessageV1 {
+    pub role: ConversationRoleV1,
+    pub content: String,
+}
+
+impl ConversationMessageV1 {
+    pub fn new(role: ConversationRoleV1, content: impl Into<String>) -> Self {
+        Self {
+            role,
+            content: content.into(),
+        }
+    }
+}
+
+/// Closed, secret-free input for a future native chat-completions adapter.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[serde(deny_unknown_fields)]
+pub struct ConversationRequestV1 {
+    pub schema: ConversationRequestSchemaV1,
+    pub provider: ProviderSpecV1,
+    pub messages: Vec<ConversationMessageV1>,
+    pub max_tokens: Option<u32>,
+}
+
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct ConversationRequestWireV1 {
+    schema: ConversationRequestSchemaV1,
+    provider: ProviderSpecV1,
+    messages: Vec<ConversationMessageV1>,
+    max_tokens: Option<u32>,
+}
+
+impl<'de> Deserialize<'de> for ConversationRequestV1 {
+    fn deserialize<D: Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
+        let wire = ConversationRequestWireV1::deserialize(deserializer)?;
+        Self::from_parts(wire.schema, wire.provider, wire.messages, wire.max_tokens)
+            .map_err(serde::de::Error::custom)
+    }
+}
+
+impl ConversationRequestV1 {
+    pub fn try_new(
+        provider: ProviderSpecV1,
+        messages: Vec<ConversationMessageV1>,
+        max_tokens: Option<u32>,
+    ) -> Result<Self, ProviderError> {
+        Self::from_parts(
+            ConversationRequestSchemaV1::V1,
+            provider,
+            messages,
+            max_tokens,
+        )
+    }
+
+    pub fn validate(&self) -> Result<(), ProviderError> {
+        Self::from_parts(
+            self.schema,
+            self.provider.clone(),
+            self.messages.clone(),
+            self.max_tokens,
+        )
+        .map(|_| ())
+    }
+
+    fn from_parts(
+        schema: ConversationRequestSchemaV1,
+        provider: ProviderSpecV1,
+        messages: Vec<ConversationMessageV1>,
+        max_tokens: Option<u32>,
+    ) -> Result<Self, ProviderError> {
+        if schema != ConversationRequestSchemaV1::V1 {
+            return Err(ProviderError::UnsupportedConversationSchema);
+        }
+        if messages.is_empty() {
+            return Err(ProviderError::EmptyConversation);
+        }
+        Ok(Self {
+            schema,
+            provider,
+            messages,
+            max_tokens,
+        })
+    }
+}
+
+/// Prepared OpenAI-compatible request body, intentionally excluding endpoint and credentials.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[serde(deny_unknown_fields)]
+pub struct OpenAiCompatibleChatRequestV1 {
+    pub model: String,
+    pub messages: Vec<ConversationMessageV1>,
+    pub max_tokens: Option<u32>,
+    pub stream: bool,
+}
+
+/// Prepare a closed text-only request body without resolving credentials or performing I/O.
+pub fn prepare_openai_compatible_chat_request(
+    request: &ConversationRequestV1,
+) -> Result<OpenAiCompatibleChatRequestV1, ProviderError> {
+    request.validate()?;
+    let ProviderSpecV1::OpenAiCompatible { model, .. } = &request.provider else {
+        return Err(ProviderError::UnsupportedConversationProvider);
+    };
+    Ok(OpenAiCompatibleChatRequestV1 {
+        model: model.clone(),
+        messages: request.messages.clone(),
+        max_tokens: request.max_tokens,
+        stream: false,
+    })
+}
+
 #[derive(Debug, Error)]
 pub enum ProviderError {
+    #[error("conversation request schema is unsupported")]
+    UnsupportedConversationSchema,
+    #[error("conversation request must contain at least one message")]
+    EmptyConversation,
+    #[error("conversation request requires an OpenAI-compatible provider")]
+    UnsupportedConversationProvider,
     #[error("empty base_url for provider")]
     EmptyBaseUrl,
     #[error("empty model for provider")]
@@ -295,6 +438,15 @@ pub trait CompletionBackend {
         &self,
         request: &CompletionRequestV1,
     ) -> Result<CompletionResponseV1, ProviderError>;
+
+    /// Legacy backends must opt in explicitly before they can receive a
+    /// structured conversation. The default is fail-closed and performs no I/O.
+    fn complete_conversation(
+        &self,
+        _request: &ConversationRequestV1,
+    ) -> Result<CompletionResponseV1, ProviderError> {
+        Err(ProviderError::Unavailable)
+    }
 }
 
 /// Explicit HTTP provider backend for Ollama and OpenAI-compatible APIs.
