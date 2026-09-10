@@ -14,7 +14,7 @@ use std::collections::BTreeSet;
 #[cfg(target_os = "linux")]
 use std::ffi::CString;
 use std::fs::File;
-use std::io::{Read, Seek, Write};
+use std::io::{Read, Seek};
 use std::os::fd::{AsFd, AsRawFd};
 #[cfg(target_os = "linux")]
 use std::os::unix::fs::MetadataExt;

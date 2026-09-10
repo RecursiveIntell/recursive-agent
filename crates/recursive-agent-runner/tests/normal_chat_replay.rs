@@ -229,17 +229,18 @@ fn recorded_response_replays_after_restart_without_backend_reexecution(
     let root_fd = std::fs::File::open(root.path())?;
     let artifacts = recursive_agent_ledger::ArtifactStore::from_run_root_fd(&root_fd, true)?;
     let backend = Backend(AtomicUsize::new(0));
-    let executor = recursive_agent_runner::NativeNormalChatExecutor::new(
-        &store,
-        &artifacts,
-        &AllowCurrentEgress,
-        &TestClock,
-        &backend,
-    );
-    let observed = executor.execute(&permit.permit_id, &admission, &request)?;
+    let observed = {
+        let executor = recursive_agent_runner::NativeNormalChatExecutor::new(
+            &store,
+            &artifacts,
+            &AllowCurrentEgress,
+            &TestClock,
+            &backend,
+        );
+        executor.execute(&permit.permit_id, &admission, &request)?
+    };
     assert_eq!(backend.0.load(Ordering::SeqCst), 1);
 
-    drop(executor);
     drop(store);
     drop(artifacts);
 
