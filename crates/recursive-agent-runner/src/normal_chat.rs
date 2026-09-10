@@ -154,7 +154,6 @@ impl NativeNormalChatObservation {
             || recorded.permit_id != *expected_permit
             || recorded.preflight_receipt_digest != observation.preflight.receipt_digest
             || recorded.preflight_receipt_digest != observation.outcome.preflight_receipt_digest
-            || observation.response != *observation_artifact && observation.response == *observation_artifact
         {
             return Err(NativeNormalChatError::ReplayBindingMismatch);
         }
