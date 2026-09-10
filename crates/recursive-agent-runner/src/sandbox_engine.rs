@@ -1169,13 +1169,24 @@ fn build_network_seccomp() -> Result<SeccompPolicy, SandboxError> {
             )));
         }
     }
-    let bytes = filter
-        .export_bpf_mem()
-        .map_err(|error| SandboxError::Io(format!("seccomp export: {error}")))?;
-    let digest = recursive_agent_contracts::ContentDigest::compute(&bytes).to_string();
+    // libseccomp-rs 0.4 exposes BPF export through an AsFd. Export the
+    // compiled filter directly into the same anonymous file that will be
+    // handed to the child, then read those exact bytes only to bind its digest.
     let mut file = tempfile::tempfile().map_err(|error| SandboxError::Io(error.to_string()))?;
-    file.write_all(&bytes)
+    filter
+        .export_bpf(&file)
+        .map_err(|error| SandboxError::Io(format!("seccomp export: {error}")))?;
+    file.seek(std::io::SeekFrom::Start(0))
         .map_err(|error| SandboxError::Io(error.to_string()))?;
+    let mut bytes = Vec::new();
+    file.read_to_end(&mut bytes)
+        .map_err(|error| SandboxError::Io(error.to_string()))?;
+    if bytes.is_empty() {
+        return Err(SandboxError::Io(
+            "seccomp export produced an empty BPF program".into(),
+        ));
+    }
+    let digest = recursive_agent_contracts::ContentDigest::compute(&bytes).to_string();
     file.seek(std::io::SeekFrom::Start(0))
         .map_err(|error| SandboxError::Io(error.to_string()))?;
     Ok(SeccompPolicy {
