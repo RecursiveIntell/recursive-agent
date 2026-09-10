@@ -181,8 +181,7 @@ impl<'a, B: CompletionBackend> NativeNormalChatExecutor<'a, B> {
         observation.preflight.validate()?;
         observation.outcome.validate()?;
         if observation.preflight.permit_id != observation.outcome.permit_id
-            || observation.outcome.preflight_receipt_digest
-                != observation.preflight.receipt_digest
+            || observation.outcome.preflight_receipt_digest != observation.preflight.receipt_digest
         {
             return Err(NativeNormalChatError::ReplayBindingMismatch);
         }
@@ -200,9 +199,8 @@ impl<'a, B: CompletionBackend> NativeNormalChatExecutor<'a, B> {
             return Err(NativeNormalChatError::ReplayOutcomeNotSucceeded);
         }
         let response_bytes = self.artifacts.get(&observation.response)?;
-        let recorded: RecordedNormalChatResponseReplayV1 =
-            serde_json::from_slice(&response_bytes)
-                .map_err(|_| NativeNormalChatError::ReplayMalformed)?;
+        let recorded: RecordedNormalChatResponseReplayV1 = serde_json::from_slice(&response_bytes)
+            .map_err(|_| NativeNormalChatError::ReplayMalformed)?;
         let canonical_response = recursive_agent_contracts::jcs_canonical(&recorded)
             .map_err(|_| NativeNormalChatError::ReplayMalformed)?;
         if canonical_response != response_bytes {

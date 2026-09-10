@@ -664,12 +664,11 @@ fn run_fixture(mode: u8) -> Result<(), Box<dyn std::error::Error>> {
         let mut tampered_outcome: serde_json::Value = serde_json::from_slice(&observation_bytes)?;
         tampered_outcome["outcome"]["reported"]["state"] = serde_json::json!("failed");
         let tampered_outcome_bytes = recursive_agent_contracts::jcs_canonical(&tampered_outcome)?;
-        let tampered_outcome_artifact = reopened_artifacts.put(
-            &tampered_outcome_bytes,
-            "application/json",
-            None,
-        )?;
-        assert!(restarted.replay_recorded(&tampered_outcome_artifact).is_err());
+        let tampered_outcome_artifact =
+            reopened_artifacts.put(&tampered_outcome_bytes, "application/json", None)?;
+        assert!(restarted
+            .replay_recorded(&tampered_outcome_artifact)
+            .is_err());
         assert_eq!(backend.0.load(std::sync::atomic::Ordering::SeqCst), 1);
 
         let mut tampered_response: serde_json::Value = serde_json::from_slice(&observation_bytes)?;
@@ -679,12 +678,11 @@ fn run_fixture(mode: u8) -> Result<(), Box<dyn std::error::Error>> {
         tampered_response["response"]["byte_length"] =
             serde_json::json!(original_length.saturating_add(1));
         let tampered_response_bytes = recursive_agent_contracts::jcs_canonical(&tampered_response)?;
-        let tampered_response_artifact = reopened_artifacts.put(
-            &tampered_response_bytes,
-            "application/json",
-            None,
-        )?;
-        assert!(restarted.replay_recorded(&tampered_response_artifact).is_err());
+        let tampered_response_artifact =
+            reopened_artifacts.put(&tampered_response_bytes, "application/json", None)?;
+        assert!(restarted
+            .replay_recorded(&tampered_response_artifact)
+            .is_err());
         assert_eq!(backend.0.load(std::sync::atomic::Ordering::SeqCst), 1);
     }
     Ok(())
