@@ -25,6 +25,7 @@ jobs:
           cargo generate-lockfile
           cargo metadata --locked --format-version 1 > /tmp/cargo-metadata.json
           python3 scripts/check_libraries_dependency_source.py --metadata /tmp/cargo-metadata.json
+          git checkout -- .cargo/config.toml
           git diff --check
           changed="$(git diff --name-only)"
           test "$changed" = "Cargo.lock"
