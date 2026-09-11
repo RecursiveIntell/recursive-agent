@@ -15,6 +15,8 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
+      - name: Install native sandbox dependencies
+        run: sudo apt-get update && sudo apt-get install --no-install-recommends -y libseccomp-dev
       - uses: dtolnay/rust-toolchain@stable
         with:
           components: rustfmt, clippy
