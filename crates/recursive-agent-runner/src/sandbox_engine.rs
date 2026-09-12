@@ -1308,11 +1308,19 @@ fn spawn_bash_trampoline(
         .map(|value| CString::new(value.as_str()))
         .collect::<Result<Vec<_>, _>>()
         .map_err(|_| SandboxError::Io("launcher argument contains NUL".into()))?;
-    let env = ["PATH=/usr/bin:/bin", "LANG=C", "LC_ALL=C"]
-        .into_iter()
-        .map(CString::new)
-        .collect::<Result<Vec<_>, _>>()
-        .map_err(|_| SandboxError::Io("fixed launcher environment contains NUL".into()))?;
+    let env = [
+        "PATH=/usr/bin:/bin",
+        "LANG=C",
+        "LC_ALL=C",
+        // Bash consults BASH_ENV for non-interactive shells. Pin it to a
+        // harmless path before the trampoline starts so hostile caller
+        // environment cannot execute outside the Bubblewrap boundary.
+        "BASH_ENV=/dev/null",
+    ]
+    .into_iter()
+    .map(CString::new)
+    .collect::<Result<Vec<_>, _>>()
+    .map_err(|_| SandboxError::Io("fixed launcher environment contains NUL".into()))?;
     let path = CString::new(format!("/proc/self/fd/{}", bash.file.as_raw_fd()))
         .map_err(|_| SandboxError::Io("launcher path contains NUL".into()))?;
     let mut attributes =
