@@ -24,13 +24,14 @@ authors = ["RecursiveIntell"]
 publish = false
 
 [workspace.dependencies]
-# Path deps are absolute; Cargo resolves them in any crate that lists
-# these workspace entries.
-boundary-compiler = { version = "0.1.0", path = "/home/sikmindz/Coding/Libraries/boundary-compiler" }
-stack-ids = { version = "0.1.1", path = "/home/sikmindz/Coding/Libraries/stack-ids" }
-bitemporal-runtime = { version = "0.1.0", path = "/home/sikmindz/Coding/Libraries/bitemporal-runtime", default-features = false }
-claim-ledger = { version = "0.1.0", path = "/home/sikmindz/Coding/Libraries/claim-ledger" }
-llm-tool-runtime = { version = "0.1.0", path = "/home/sikmindz/Coding/Libraries/llm-tool-runtime" }
+# Libraries dependencies are pinned to one canonical immutable revision. Local
+# development overrides, when intentionally needed, belong in operator-local
+# Cargo configuration and are never part of the canonical build contract.
+boundary-compiler = { version = "0.1.0", git = "https://github.com/RecursiveIntell/Libraries.git", rev = "13d485f0ea16c8cf69033fc7622088305e7f184f" }
+stack-ids = { version = "0.1.1", git = "https://github.com/RecursiveIntell/Libraries.git", rev = "13d485f0ea16c8cf69033fc7622088305e7f184f" }
+bitemporal-runtime = { version = "0.1.0", git = "https://github.com/RecursiveIntell/Libraries.git", rev = "13d485f0ea16c8cf69033fc7622088305e7f184f", default-features = false }
+claim-ledger = { version = "0.1.0", git = "https://github.com/RecursiveIntell/Libraries.git", rev = "13d485f0ea16c8cf69033fc7622088305e7f184f" }
+llm-tool-runtime = { version = "0.1.0", git = "https://github.com/RecursiveIntell/Libraries.git", rev = "13d485f0ea16c8cf69033fc7622088305e7f184f" }
 
 serde = { version = "1.0.228", features = ["derive"] }
 serde_json = "1.0.149"
