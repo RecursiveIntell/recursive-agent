@@ -779,6 +779,15 @@ pub trait CompletionBackend {
     ) -> Result<CompletionResponseV1, ProviderError> {
         Err(ProviderError::Unavailable)
     }
+
+    /// V2 callers must opt in explicitly. The default performs no I/O so a
+    /// legacy backend cannot accidentally accept structured tool history.
+    fn complete_conversation_v2(
+        &self,
+        _request: &ConversationRequestV2,
+    ) -> Result<CompletionResponseV1, ProviderError> {
+        Err(ProviderError::Unavailable)
+    }
 }
 
 /// Explicit HTTP provider backend for Ollama and OpenAI-compatible APIs.
@@ -798,6 +807,113 @@ impl HttpCompletionBackend {
         }
         Ok(Self { timeout })
     }
+
+    fn build_client(&self) -> Result<reqwest::blocking::Client, ProviderError> {
+        reqwest::blocking::Client::builder()
+            .timeout(self.timeout)
+            .redirect(reqwest::redirect::Policy::none())
+            .no_proxy()
+            .build()
+            .map_err(|_| ProviderError::Http {
+                operation: "client_build",
+            })
+    }
+
+    fn complete_openai_conversation_with_resolver<R: CredentialResolver>(
+        &self,
+        provider: &ProviderSpecV1,
+        body: serde_json::Value,
+        resolver: &R,
+    ) -> Result<CompletionResponseV1, ProviderError> {
+        let ProviderSpecV1::OpenAiCompatible {
+            base_url,
+            model,
+            credential_ref,
+        } = provider
+        else {
+            return Err(ProviderError::UnsupportedConversationProvider);
+        };
+        let credential = resolver
+            .resolve(credential_ref)
+            .map_err(map_credential_error)?;
+        let token = std::str::from_utf8(credential.as_bytes())
+            .map_err(|_| ProviderError::InvalidCredential)?;
+        let response = self
+            .build_client()?
+            .post(base_url.route_url(ProviderRoute::OpenAiChatCompletions))
+            .bearer_auth(token)
+            .json(&body)
+            .send()
+            .map_err(|_| ProviderError::Http {
+                operation: "openai_conversation",
+            })?;
+        decode_openai_response(model, response)
+    }
+
+    /// Execute one validated V1 conversation through a caller-provided secret
+    /// resolver. The resolver exists for owner-controlled composition and
+    /// loopback fixtures; callers still own admission and effect authority.
+    pub fn complete_conversation_with_resolver<R: CredentialResolver>(
+        &self,
+        request: &ConversationRequestV1,
+        resolver: &R,
+    ) -> Result<CompletionResponseV1, ProviderError> {
+        request.validate()?;
+        let body = serde_json::to_value(prepare_openai_compatible_chat_request(request)?).map_err(
+            |_| ProviderError::Malformed("conversation request serialization failed".into()),
+        )?;
+        self.complete_openai_conversation_with_resolver(&request.provider, body, resolver)
+    }
+
+    /// Execute one validated V2 conversation through a caller-provided secret
+    /// resolver. This preserves the provider-owned rendered tool association.
+    pub fn complete_conversation_v2_with_resolver<R: CredentialResolver>(
+        &self,
+        request: &ConversationRequestV2,
+        resolver: &R,
+    ) -> Result<CompletionResponseV1, ProviderError> {
+        request.validate()?;
+        let body = prepare_openai_compatible_chat_request_v2(request)?;
+        self.complete_openai_conversation_with_resolver(&request.provider, body, resolver)
+    }
+}
+
+fn map_credential_error(error: CredentialResolveError) -> ProviderError {
+    match error {
+        CredentialResolveError::Missing => ProviderError::MissingCredential,
+        CredentialResolveError::UnsupportedReference => {
+            ProviderError::UnsupportedCredentialReference
+        }
+        CredentialResolveError::InvalidValue => ProviderError::InvalidCredential,
+    }
+}
+
+fn decode_openai_response(
+    model: &str,
+    response: reqwest::blocking::Response,
+) -> Result<CompletionResponseV1, ProviderError> {
+    let status = response.status();
+    if !status.is_success() {
+        return Err(ProviderError::HttpStatus {
+            status: status.as_u16(),
+        });
+    }
+    let raw = response
+        .json::<serde_json::Value>()
+        .map_err(|error| ProviderError::Malformed(error.to_string()))?;
+    let text = raw
+        .get("choices")
+        .and_then(|choices| choices.get(0))
+        .and_then(|choice| choice.get("message"))
+        .and_then(|message| message.get("content"))
+        .and_then(serde_json::Value::as_str)
+        .filter(|text| !text.is_empty())
+        .ok_or_else(|| ProviderError::Malformed("missing non-empty content".into()))?;
+    Ok(CompletionResponseV1 {
+        model: model.to_owned(),
+        text: text.to_owned(),
+        raw,
+    })
 }
 
 impl Default for HttpCompletionBackend {
@@ -813,12 +929,7 @@ impl CompletionBackend for HttpCompletionBackend {
         &self,
         request: &CompletionRequestV1,
     ) -> Result<CompletionResponseV1, ProviderError> {
-        let client = reqwest::blocking::Client::builder()
-            .timeout(self.timeout)
-            .build()
-            .map_err(|_| ProviderError::Http {
-                operation: "client_build",
-            })?;
+        let client = self.build_client()?;
         match &request.provider {
             ProviderSpecV1::Ollama { base_url, model } => {
                 let mut body = serde_json::json!({
@@ -912,6 +1023,20 @@ impl CompletionBackend for HttpCompletionBackend {
                 })
             }
         }
+    }
+
+    fn complete_conversation(
+        &self,
+        request: &ConversationRequestV1,
+    ) -> Result<CompletionResponseV1, ProviderError> {
+        self.complete_conversation_with_resolver(request, &EnvironmentCredentialResolver)
+    }
+
+    fn complete_conversation_v2(
+        &self,
+        request: &ConversationRequestV2,
+    ) -> Result<CompletionResponseV1, ProviderError> {
+        self.complete_conversation_v2_with_resolver(request, &EnvironmentCredentialResolver)
     }
 }
 
