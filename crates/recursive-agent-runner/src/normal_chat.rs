@@ -9,7 +9,9 @@ use recursive_agent_policy::{
     DurablePermitStore, NormalChatAdmissionVerifier, PermitOutcomeReceiptV1, PolicyError,
     ReportedEffectOutcomeV1, ReportedEffectStateV1, ValidatedNormalChatAdmissionV1,
 };
-use recursive_agent_provider::{CompletionBackend, ConversationRequestV1};
+use recursive_agent_provider::{
+    CompletionBackend, ConversationRequestV1, ConversationRequestV2, ProviderError, ProviderSpecV1,
+};
 use thiserror::Error;
 
 #[derive(Debug, Error)]
@@ -73,6 +75,44 @@ pub struct NativeNormalChatObservation {
     pub observation_artifact: ArtifactDescriptorV1,
 }
 
+/// Versioned provider requests that may enter the already-admitted native
+/// normal-chat lifecycle. Request validation and provider/model binding stay
+/// in the provider owner; this adapter only binds exact serialized arguments to
+/// the existing policy and artifact owners.
+trait BoundConversationRequest: serde::Serialize {
+    fn validate(&self) -> Result<(), ProviderError>;
+    fn provider(&self) -> &ProviderSpecV1;
+    fn max_tokens(&self) -> Option<u32>;
+}
+
+impl BoundConversationRequest for ConversationRequestV1 {
+    fn validate(&self) -> Result<(), ProviderError> {
+        Self::validate(self)
+    }
+
+    fn provider(&self) -> &ProviderSpecV1 {
+        &self.provider
+    }
+
+    fn max_tokens(&self) -> Option<u32> {
+        self.max_tokens
+    }
+}
+
+impl BoundConversationRequest for ConversationRequestV2 {
+    fn validate(&self) -> Result<(), ProviderError> {
+        Self::validate(self)
+    }
+
+    fn provider(&self) -> &ProviderSpecV1 {
+        &self.provider
+    }
+
+    fn max_tokens(&self) -> Option<u32> {
+        self.max_tokens
+    }
+}
+
 /// Explicit composition only: no default provider, current-policy owner or store.
 /// The backend must opt into structured conversations; default backends deny.
 pub struct NativeNormalChatExecutor<'a, B> {
@@ -124,6 +164,40 @@ impl<'a, B: CompletionBackend> NativeNormalChatExecutor<'a, B> {
         admission: &ValidatedNormalChatAdmissionV1,
         request: &ConversationRequestV1,
     ) -> Result<NativeNormalChatObservation, NativeNormalChatError> {
+        self.execute_bound(permit_id, admission, request, |backend, request| {
+            backend.complete_conversation(request)
+        })
+    }
+
+    /// Execute the closed V2 structured conversation only through the same
+    /// already-admitted normal-chat lifecycle. V2 is an explicit entry point:
+    /// it never falls back to V1, and legacy backends remain fail-closed unless
+    /// they opt into `CompletionBackend::complete_conversation_v2`.
+    pub fn execute_v2(
+        &self,
+        permit_id: &CurrentPermitId,
+        admission: &ValidatedNormalChatAdmissionV1,
+        request: &ConversationRequestV2,
+    ) -> Result<NativeNormalChatObservation, NativeNormalChatError> {
+        self.execute_bound(permit_id, admission, request, |backend, request| {
+            backend.complete_conversation_v2(request)
+        })
+    }
+
+    fn execute_bound<R>(
+        &self,
+        permit_id: &CurrentPermitId,
+        admission: &ValidatedNormalChatAdmissionV1,
+        request: &R,
+        dispatch: impl FnOnce(
+            &B,
+            &R,
+        )
+            -> Result<recursive_agent_provider::CompletionResponseV1, ProviderError>,
+    ) -> Result<NativeNormalChatObservation, NativeNormalChatError>
+    where
+        R: BoundConversationRequest,
+    {
         let artifact_root = self.artifacts.run_root_identity();
         if self.permits.run_root_identity() != (artifact_root.device, artifact_root.inode) {
             return Err(NativeNormalChatError::StoreMismatch);
@@ -134,11 +208,11 @@ impl<'a, B: CompletionBackend> NativeNormalChatExecutor<'a, B> {
         let attempt = admission.attempt();
         if content_digest(request).map_err(|_| NativeNormalChatError::Encoding)?
             != attempt.provider_request_digest
-            || !request.provider.matches_egress_binding(
+            || !request.provider().matches_egress_binding(
                 &attempt.operation.provider_identity,
                 &attempt.operation.model_ref,
             )
-            || request.max_tokens != Some(attempt.operation.budget.output_reserve)
+            || request.max_tokens() != Some(attempt.operation.budget.output_reserve)
         {
             return Err(NativeNormalChatError::RequestMismatch);
         }
@@ -154,7 +228,7 @@ impl<'a, B: CompletionBackend> NativeNormalChatExecutor<'a, B> {
                 })?;
         let preflight = self.permits.normal_chat_preflight(permit_id)?;
         let start = std::time::Instant::now();
-        let response = self.backend.complete_conversation(request);
+        let response = dispatch(self.backend, request);
         let duration_ms = u64::try_from(start.elapsed().as_millis()).unwrap_or(u64::MAX);
         let response = match response {
             Ok(value) => value,
