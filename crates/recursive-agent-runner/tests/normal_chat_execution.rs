@@ -131,6 +131,53 @@ impl recursive_agent_provider::CompletionBackend for Backend {
     }
 }
 
+struct V2Backend {
+    calls: std::sync::atomic::AtomicUsize,
+    fail: bool,
+}
+
+impl recursive_agent_provider::CompletionBackend for V2Backend {
+    fn complete(
+        &self,
+        _: &recursive_agent_provider::CompletionRequestV1,
+    ) -> Result<
+        recursive_agent_provider::CompletionResponseV1,
+        recursive_agent_provider::ProviderError,
+    > {
+        Err(recursive_agent_provider::ProviderError::Unavailable)
+    }
+
+    fn complete_conversation(
+        &self,
+        _: &recursive_agent_provider::ConversationRequestV1,
+    ) -> Result<
+        recursive_agent_provider::CompletionResponseV1,
+        recursive_agent_provider::ProviderError,
+    > {
+        Err(recursive_agent_provider::ProviderError::Unavailable)
+    }
+
+    fn complete_conversation_v2(
+        &self,
+        _: &recursive_agent_provider::ConversationRequestV2,
+    ) -> Result<
+        recursive_agent_provider::CompletionResponseV1,
+        recursive_agent_provider::ProviderError,
+    > {
+        self.calls.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+        if self.fail {
+            return Err(recursive_agent_provider::ProviderError::Malformed(
+                "PRIVATE_V2_BACKEND_DIAGNOSTIC".into(),
+            ));
+        }
+        Ok(recursive_agent_provider::CompletionResponseV1 {
+            model: "fixture-model".into(),
+            text: "fixture v2 response".into(),
+            raw: serde_json::json!({"fixture": "v2"}),
+        })
+    }
+}
+
 #[test]
 fn native_chat_consumes_records_and_rejects_repeat_backend_execution(
 ) -> Result<(), Box<dyn std::error::Error>> {
@@ -171,6 +218,18 @@ fn native_chat_backend_error_with_unrecordable_outcome_is_explicitly_degraded(
 fn native_chat_combined_artifact_budget_blocks_observation_without_retry(
 ) -> Result<(), Box<dyn std::error::Error>> {
     run_fixture(6)
+}
+
+#[test]
+fn native_chat_v2_consumes_exact_structured_request_and_rejects_reuse(
+) -> Result<(), Box<dyn std::error::Error>> {
+    run_v2_fixture(false)
+}
+
+#[test]
+fn native_chat_v2_backend_error_is_ambiguous_and_not_retried(
+) -> Result<(), Box<dyn std::error::Error>> {
+    run_v2_fixture(true)
 }
 
 #[test]
@@ -642,5 +701,269 @@ fn run_fixture(mode: u8) -> Result<(), Box<dyn std::error::Error>> {
         .execute(&permit.permit_id, &admission, &request)
         .is_err());
     assert_eq!(backend.0.load(std::sync::atomic::Ordering::SeqCst), 1);
+    Ok(())
+}
+
+fn run_v2_fixture(backend_fails: bool) -> Result<(), Box<dyn std::error::Error>> {
+    let root = tempfile::tempdir()?;
+    let store = open_store(root.path())?;
+    let request = recursive_agent_provider::ConversationRequestV2::try_new(
+        recursive_agent_provider::ProviderSpecV1::OpenAiCompatible {
+            base_url: recursive_agent_provider::ValidatedEndpoint::try_new(
+                "https://provider.test/",
+            )?,
+            model: "fixture-model".into(),
+            credential_ref: recursive_agent_provider::CredentialRef::try_new(
+                "environment:UNUSED_TEST_KEY",
+            )?,
+        },
+        vec![
+            recursive_agent_provider::ConversationMessageV2::user("inspect current state"),
+            recursive_agent_provider::ConversationMessageV2::assistant_tool_calls(vec![
+                recursive_agent_provider::ToolCallV2::try_new(
+                    "call-1",
+                    "lookup",
+                    serde_json::json!({"query": "status"}),
+                )?,
+            ])?,
+            recursive_agent_provider::ConversationMessageV2::tool_result(
+                "call-1",
+                "state is clean",
+            )?,
+            recursive_agent_provider::ConversationMessageV2::assistant_text("ready")?,
+        ],
+        Some(8),
+    )?;
+    let operation = NormalChatOperationV1 {
+        schema: NormalChatOperationSchemaV1::V1,
+        conversation_ref: "conversation:permit-v2-test".into(),
+        parent_run_id: None,
+        materialization_ref: "materialization:v2-test".into(),
+        materialization_digest: format!("sha256:{}", "a".repeat(64)),
+        policy_basis_ref: "policy:v2-test".into(),
+        policy_basis_digest: format!("blake3:{}", "b".repeat(64)),
+        source_revision: "source:v2-test".into(),
+        route_class: "candidate".into(),
+        provider_identity: request.provider.egress_provider_identity(),
+        model_ref: "model:fixture-model".into(),
+        request_digest: format!("sha256:{}", "c".repeat(64)),
+        budget: NormalChatBudgetV1 {
+            max_attempts: 1,
+            input_tokens: 8,
+            output_reserve: 8,
+            max_wall_time_ms: 1_000,
+        },
+        replay: NormalChatReplayV1::RecordedResponseOnly,
+        provenance: vec![ProvenanceRefV1 {
+            source: "urn:test:normal-chat-v2-permit".into(),
+            digest: ContentDigest::compute(b"v2-fixture"),
+        }],
+    };
+    let attempt = NormalChatAttemptV1::new(operation, 1, content_digest(&request)?)?;
+    let tool_args = serde_json::json!({"attempt": attempt, "request": request});
+    let args_digest = content_digest(&tool_args)?;
+    let admission_request =
+        NormalChatAdmissionRequestV1::new("normal_chat", attempt, args_digest.clone())?;
+    let admission = authorize_normal_chat(&AllowCurrentEgress, &admission_request, now())?;
+    let call = ToolCallSpecV1 {
+        tool: "normal_chat".into(),
+        args: tool_args,
+        frozen_clock: None,
+    };
+    let run_id = admission.attempt().run_id()?;
+    let step_id = derive_step_id(&run_id, 0, "normal_chat", &call)?;
+    let effect = EffectScopeV1 {
+        scope_name: "normal_chat".into(),
+        read_roots: Vec::new(),
+        write_roots: Vec::new(),
+        network_allowed: true,
+    };
+    let lifecycle_call = ToolCallSpecV1 {
+        tool: "runner.lifecycle".into(),
+        args: serde_json::json!({"operation": "provider-egress-v2"}),
+        frozen_clock: None,
+    };
+    let lifecycle_step_id = derive_step_id(&run_id, 1, "run-lifecycle", &lifecycle_call)?;
+    let lifecycle_effect = EffectScopeV1 {
+        scope_name: "runner.lifecycle".into(),
+        read_roots: Vec::new(),
+        write_roots: Vec::new(),
+        network_allowed: false,
+    };
+    let actor = ActorPrincipalV1::try_new("recursive-agent")?;
+    let control_binding = PermitBindingV1 {
+        actor: actor.clone(),
+        action_digest: content_digest(&lifecycle_call)?,
+        effect_digest: content_digest(&lifecycle_effect)?,
+        effect: lifecycle_effect,
+        budget: PermitBudgetV1 {
+            max_wall_time_ms: 2_000,
+            max_output_bytes: 8_192,
+            max_artifact_bytes: 8_192,
+        },
+        policy_version: "candidate-egress-v2".into(),
+        parent_permit_id: None,
+        parent_operation_id: Some(run_id.clone()),
+        issued_at: now(),
+        not_before: now(),
+        expires_at: now() + TimeDelta::seconds(60),
+        run_id: run_id.clone(),
+        step_id: lifecycle_step_id,
+        tool: "runner.lifecycle".into(),
+        args_digest: content_digest(&lifecycle_call.args)?,
+    };
+    let ceiling = DelegationCeilingV1 {
+        actor: actor.clone(),
+        policy_version: "candidate-egress-v2".into(),
+        run_id: run_id.clone(),
+        transition: DelegationTransitionV1::ControlToEffect,
+        audiences: vec!["normal_chat".into()],
+        actions: vec![DelegatedActionV1 {
+            tool: "normal_chat".into(),
+            action_digest: content_digest(&call)?,
+            args_digest: args_digest.clone(),
+            effect: effect.clone(),
+            effect_digest: content_digest(&effect)?,
+            executable_authority: Vec::new(),
+        }],
+        budget: PermitBudgetV1 {
+            max_wall_time_ms: 2_000,
+            max_output_bytes: 8_192,
+            max_artifact_bytes: 8_192,
+        },
+        not_before: now(),
+        expires_at: now() + TimeDelta::seconds(60),
+    };
+    let control = store.issue_control(&control_binding, ceiling, now())?;
+    let dispatch_time = now() + TimeDelta::milliseconds(1);
+    let effect_binding = PermitBindingV1 {
+        actor,
+        action_digest: content_digest(&call)?,
+        effect_digest: content_digest(&effect)?,
+        effect,
+        budget: PermitBudgetV1 {
+            max_wall_time_ms: 1_000,
+            max_output_bytes: 4_096,
+            max_artifact_bytes: 4_096,
+        },
+        policy_version: "candidate-egress-v2".into(),
+        parent_permit_id: Some(control.permit_id),
+        parent_operation_id: Some(run_id),
+        issued_at: dispatch_time,
+        not_before: dispatch_time,
+        expires_at: now() + TimeDelta::seconds(30),
+        run_id: admission.attempt().run_id()?,
+        step_id,
+        tool: "normal_chat".into(),
+        args_digest,
+    };
+    let permit = store.issue_normal_chat(
+        &effect_binding,
+        &admission,
+        &call,
+        &AllowCurrentEgress,
+        dispatch_time,
+    )?;
+    let root_fd = std::fs::File::open(root.path())?;
+    let artifacts = recursive_agent_ledger::ArtifactStore::from_run_root_fd(&root_fd, true)?;
+    let backend = V2Backend {
+        calls: std::sync::atomic::AtomicUsize::new(0),
+        fail: backend_fails,
+    };
+    let executor = recursive_agent_runner::NativeNormalChatExecutor::new(
+        &store,
+        &artifacts,
+        &AllowCurrentEgress,
+        &TestClock,
+        &backend,
+    );
+    let mut changed_request = request.clone();
+    let recursive_agent_provider::ConversationMessageV2::Assistant { tool_calls, .. } =
+        &mut changed_request.messages[1]
+    else {
+        return Err("missing v2 tool-call fixture message".into());
+    };
+    tool_calls[0].arguments = serde_json::json!({"query": "changed-after-admission"});
+    assert!(executor
+        .execute_v2(&permit.permit_id, &admission, &changed_request)
+        .is_err());
+    assert_eq!(backend.calls.load(std::sync::atomic::Ordering::SeqCst), 0);
+
+    let observed = executor.execute_v2(&permit.permit_id, &admission, &request);
+    assert_eq!(backend.calls.load(std::sync::atomic::Ordering::SeqCst), 1);
+    let preflight = store.normal_chat_preflight(&permit.permit_id)?;
+    let record = std::fs::read_dir(root.path())?
+        .filter_map(Result::ok)
+        .find_map(|entry| {
+            let name = entry.file_name().to_string_lossy().into_owned();
+            if !name.starts_with("permit-") || !name.ends_with(".json") {
+                return None;
+            }
+            let bytes = std::fs::read(entry.path()).ok()?;
+            let record =
+                serde_json::from_slice::<recursive_agent_policy::PermitRecordV1>(&bytes).ok()?;
+            (record.permit.permit_id == permit.permit_id).then_some(record)
+        })
+        .ok_or("missing v2 normal-chat permit record")?;
+    assert_eq!(
+        record
+            .preflight_receipt
+            .as_ref()
+            .ok_or("missing v2 preflight receipt")?
+            .receipt_digest,
+        preflight.receipt_digest
+    );
+    if backend_fails {
+        assert!(matches!(
+            observed,
+            Err(recursive_agent_runner::NativeNormalChatError::BackendAmbiguous)
+        ));
+        let outcome = record
+            .outcome_receipt
+            .ok_or("missing v2 ambiguous outcome")?;
+        outcome.validate()?;
+        assert_eq!(
+            outcome.reported.state,
+            recursive_agent_policy::ReportedEffectStateV1::OutcomeAmbiguous
+        );
+        assert_eq!(
+            outcome.reported.error_type.as_deref(),
+            Some("conversation_backend_error")
+        );
+    } else {
+        let result = observed?;
+        let retained: serde_json::Value =
+            serde_json::from_slice(&artifacts.get(&result.response_artifact)?)?;
+        assert_eq!(
+            retained["schema"],
+            "recursive-agent.normal-chat-recorded-response/v1"
+        );
+        assert_eq!(retained["response"]["text"], "fixture v2 response");
+        assert_eq!(
+            result.outcome.reported.state,
+            recursive_agent_policy::ReportedEffectStateV1::Succeeded
+        );
+        assert_eq!(
+            serde_json::from_slice::<serde_json::Value>(
+                &artifacts.get(&result.observation_artifact)?
+            )?["response"],
+            serde_json::to_value(&result.response_artifact)?
+        );
+    }
+    assert!(executor
+        .execute_v2(&permit.permit_id, &admission, &request)
+        .is_err());
+    let reopened = open_store(root.path())?;
+    let restarted = recursive_agent_runner::NativeNormalChatExecutor::new(
+        &reopened,
+        &artifacts,
+        &AllowCurrentEgress,
+        &TestClock,
+        &backend,
+    );
+    assert!(restarted
+        .execute_v2(&permit.permit_id, &admission, &request)
+        .is_err());
+    assert_eq!(backend.calls.load(std::sync::atomic::Ordering::SeqCst), 1);
     Ok(())
 }
