@@ -398,12 +398,344 @@ pub fn prepare_openai_compatible_chat_request(
     })
 }
 
+/// Exact schema tag for a structured conversation that preserves read-only tool
+/// request/result association. V1 remains text-only and is never widened.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+pub enum ConversationRequestSchemaV2 {
+    #[serde(rename = "recursive-agent.provider-conversation-request/v2")]
+    V2,
+}
+
+/// One closed provider tool invocation. Arguments remain structured until the
+/// provider renderer produces its exact JSON string representation.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct ToolCallV2 {
+    pub id: String,
+    pub name: String,
+    pub arguments: serde_json::Value,
+}
+
+impl ToolCallV2 {
+    pub fn try_new(
+        id: impl Into<String>,
+        name: impl Into<String>,
+        arguments: serde_json::Value,
+    ) -> Result<Self, ProviderError> {
+        let value = Self {
+            id: id.into(),
+            name: name.into(),
+            arguments,
+        };
+        value.validate()?;
+        Ok(value)
+    }
+
+    fn validate(&self) -> Result<(), ProviderError> {
+        validate_conversation_identifier(&self.id, "tool call id")?;
+        validate_conversation_identifier(&self.name, "tool call name")?;
+        if !self.arguments.is_object() {
+            return Err(ProviderError::InvalidConversationToolCall);
+        }
+        Ok(())
+    }
+}
+
+/// Ordered text-only provider messages with typed tool request/result linkage.
+/// Non-text/multimodal parts are intentionally not represented by this profile.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(tag = "role", rename_all = "snake_case", deny_unknown_fields)]
+pub enum ConversationMessageV2 {
+    System {
+        content: String,
+    },
+    User {
+        content: String,
+    },
+    Assistant {
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        content: Option<String>,
+        #[serde(default, skip_serializing_if = "Vec::is_empty")]
+        tool_calls: Vec<ToolCallV2>,
+    },
+    Tool {
+        tool_call_id: String,
+        content: String,
+    },
+}
+
+impl ConversationMessageV2 {
+    pub fn system(content: impl Into<String>) -> Self {
+        Self::System {
+            content: content.into(),
+        }
+    }
+
+    pub fn user(content: impl Into<String>) -> Self {
+        Self::User {
+            content: content.into(),
+        }
+    }
+
+    pub fn assistant_text(content: impl Into<String>) -> Result<Self, ProviderError> {
+        let value = Self::Assistant {
+            content: Some(content.into()),
+            tool_calls: Vec::new(),
+        };
+        value.validate()?;
+        Ok(value)
+    }
+
+    pub fn assistant_tool_calls(tool_calls: Vec<ToolCallV2>) -> Result<Self, ProviderError> {
+        let value = Self::Assistant {
+            content: None,
+            tool_calls,
+        };
+        value.validate()?;
+        Ok(value)
+    }
+
+    pub fn tool_result(
+        tool_call_id: impl Into<String>,
+        content: impl Into<String>,
+    ) -> Result<Self, ProviderError> {
+        let value = Self::Tool {
+            tool_call_id: tool_call_id.into(),
+            content: content.into(),
+        };
+        value.validate()?;
+        Ok(value)
+    }
+
+    fn validate(&self) -> Result<(), ProviderError> {
+        match self {
+            Self::System { content } | Self::User { content } => {
+                validate_conversation_content(content)
+            }
+            Self::Assistant {
+                content,
+                tool_calls,
+            } => {
+                if content.as_ref().is_some_and(|value| value.is_empty())
+                    || content.is_none() && tool_calls.is_empty()
+                {
+                    return Err(ProviderError::InvalidConversationMessage);
+                }
+                if let Some(value) = content {
+                    validate_conversation_content(value)?;
+                }
+                for call in tool_calls {
+                    call.validate()?;
+                }
+                Ok(())
+            }
+            Self::Tool {
+                tool_call_id,
+                content,
+            } => {
+                validate_conversation_identifier(tool_call_id, "tool result id")?;
+                validate_conversation_content(content)
+            }
+        }
+    }
+}
+
+/// Closed V2 request. V2 admits ordered text messages and complete tool
+/// request/result pairs; it cannot be silently decoded as V1.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[serde(deny_unknown_fields)]
+pub struct ConversationRequestV2 {
+    pub schema: ConversationRequestSchemaV2,
+    pub provider: ProviderSpecV1,
+    pub messages: Vec<ConversationMessageV2>,
+    pub max_tokens: Option<u32>,
+}
+
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct ConversationRequestWireV2 {
+    schema: ConversationRequestSchemaV2,
+    provider: ProviderSpecV1,
+    messages: Vec<ConversationMessageV2>,
+    max_tokens: Option<u32>,
+}
+
+impl<'de> Deserialize<'de> for ConversationRequestV2 {
+    fn deserialize<D: Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
+        let wire = ConversationRequestWireV2::deserialize(deserializer)?;
+        Self::from_parts(wire.schema, wire.provider, wire.messages, wire.max_tokens)
+            .map_err(serde::de::Error::custom)
+    }
+}
+
+impl ConversationRequestV2 {
+    pub fn try_new(
+        provider: ProviderSpecV1,
+        messages: Vec<ConversationMessageV2>,
+        max_tokens: Option<u32>,
+    ) -> Result<Self, ProviderError> {
+        Self::from_parts(
+            ConversationRequestSchemaV2::V2,
+            provider,
+            messages,
+            max_tokens,
+        )
+    }
+
+    pub fn validate(&self) -> Result<(), ProviderError> {
+        Self::from_parts(
+            self.schema,
+            self.provider.clone(),
+            self.messages.clone(),
+            self.max_tokens,
+        )
+        .map(|_| ())
+    }
+
+    fn from_parts(
+        schema: ConversationRequestSchemaV2,
+        provider: ProviderSpecV1,
+        messages: Vec<ConversationMessageV2>,
+        max_tokens: Option<u32>,
+    ) -> Result<Self, ProviderError> {
+        if schema != ConversationRequestSchemaV2::V2 {
+            return Err(ProviderError::UnsupportedConversationSchema);
+        }
+        if messages.is_empty() {
+            return Err(ProviderError::EmptyConversation);
+        }
+        let mut declared = std::collections::BTreeSet::new();
+        let mut unresolved = std::collections::BTreeSet::new();
+        for message in &messages {
+            message.validate()?;
+            match message {
+                ConversationMessageV2::Assistant { tool_calls, .. } => {
+                    for call in tool_calls {
+                        if !declared.insert(call.id.clone()) || !unresolved.insert(call.id.clone())
+                        {
+                            return Err(ProviderError::InvalidConversationToolCall);
+                        }
+                    }
+                }
+                ConversationMessageV2::Tool { tool_call_id, .. } => {
+                    if !unresolved.remove(tool_call_id) {
+                        return Err(ProviderError::InvalidConversationToolResult);
+                    }
+                }
+                ConversationMessageV2::System { .. } | ConversationMessageV2::User { .. } => {}
+            }
+        }
+        if !unresolved.is_empty() {
+            return Err(ProviderError::InvalidConversationToolResult);
+        }
+        Ok(Self {
+            schema,
+            provider,
+            messages,
+            max_tokens,
+        })
+    }
+}
+
+/// Render one V2 request as the exact non-streaming OpenAI-compatible payload.
+/// This is preparation only: it resolves no credential and performs no I/O.
+pub fn prepare_openai_compatible_chat_request_v2(
+    request: &ConversationRequestV2,
+) -> Result<serde_json::Value, ProviderError> {
+    request.validate()?;
+    let ProviderSpecV1::OpenAiCompatible { model, .. } = &request.provider else {
+        return Err(ProviderError::UnsupportedConversationProvider);
+    };
+    let messages = request
+        .messages
+        .iter()
+        .map(render_openai_message_v2)
+        .collect::<Result<Vec<_>, _>>()?;
+    Ok(serde_json::json!({
+        "model": model,
+        "messages": messages,
+        "max_tokens": request.max_tokens,
+        "stream": false,
+    }))
+}
+
+fn render_openai_message_v2(
+    message: &ConversationMessageV2,
+) -> Result<serde_json::Value, ProviderError> {
+    match message {
+        ConversationMessageV2::System { content } => {
+            Ok(serde_json::json!({"role": "system", "content": content}))
+        }
+        ConversationMessageV2::User { content } => {
+            Ok(serde_json::json!({"role": "user", "content": content}))
+        }
+        ConversationMessageV2::Assistant {
+            content,
+            tool_calls,
+        } => {
+            let calls = tool_calls
+                .iter()
+                .map(|call| {
+                    Ok(serde_json::json!({
+                        "id": call.id,
+                        "type": "function",
+                        "function": {
+                            "name": call.name,
+                            "arguments": serde_json::to_string(&call.arguments)
+                                .map_err(|_| ProviderError::InvalidConversationToolCall)?,
+                        },
+                    }))
+                })
+                .collect::<Result<Vec<_>, ProviderError>>()?;
+            let mut value = serde_json::json!({"role": "assistant", "content": content});
+            if !calls.is_empty() {
+                value["tool_calls"] = serde_json::Value::Array(calls);
+            }
+            Ok(value)
+        }
+        ConversationMessageV2::Tool {
+            tool_call_id,
+            content,
+        } => Ok(serde_json::json!({
+            "role": "tool",
+            "tool_call_id": tool_call_id,
+            "content": content,
+        })),
+    }
+}
+
+fn validate_conversation_identifier(value: &str, _name: &str) -> Result<(), ProviderError> {
+    if value.is_empty()
+        || value.len() > 256
+        || value.chars().any(char::is_control)
+        || !value
+            .bytes()
+            .all(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b'_' | b'-' | b'.' | b':'))
+    {
+        return Err(ProviderError::InvalidConversationToolCall);
+    }
+    Ok(())
+}
+
+fn validate_conversation_content(value: &str) -> Result<(), ProviderError> {
+    if value.is_empty() || value.len() > 1024 * 1024 {
+        return Err(ProviderError::InvalidConversationMessage);
+    }
+    Ok(())
+}
+
 #[derive(Debug, Error)]
 pub enum ProviderError {
     #[error("conversation request schema is unsupported")]
     UnsupportedConversationSchema,
     #[error("conversation request must contain at least one message")]
     EmptyConversation,
+    #[error("conversation message is malformed or unsupported")]
+    InvalidConversationMessage,
+    #[error("conversation tool call is malformed or duplicated")]
+    InvalidConversationToolCall,
+    #[error("conversation tool result is unbound, duplicated, or missing")]
+    InvalidConversationToolResult,
     #[error("conversation request requires an OpenAI-compatible provider")]
     UnsupportedConversationProvider,
     #[error("empty base_url for provider")]
