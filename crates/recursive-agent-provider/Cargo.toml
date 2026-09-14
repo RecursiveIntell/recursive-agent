@@ -13,6 +13,7 @@ serde_json = { workspace = true }
 thiserror = { workspace = true }
 url = { workspace = true }
 reqwest = { version = "0.12", default-features = false, features = ["json", "blocking", "rustls-tls"] }
+boundary-compiler = { workspace = true }
 
 [lints]
 workspace = true

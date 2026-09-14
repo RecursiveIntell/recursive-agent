@@ -1378,6 +1378,7 @@ dependencies = [
 name = "recursive-agent-provider"
 version = "0.1.0"
 dependencies = [
+ "boundary-compiler",
  "reqwest",
  "serde",
  "serde_json",

@@ -1,3 +1,4 @@
+use boundary_compiler::canonicalize_v2;
 use recursive_agent_provider::{
     prepare_openai_compatible_chat_request_v2, ConversationMessageV2, ConversationRequestSchemaV2,
     ConversationRequestV2, CredentialRef, ProviderError, ProviderSpecV1, ToolCallV2,
@@ -118,5 +119,196 @@ fn structured_conversation_v2_rejects_unknown_raw_credential_and_multimodal_wide
         }
         assert!(serde_json::from_value::<ConversationRequestV2>(encoded).is_err());
     }
+    Ok(())
+}
+
+#[test]
+fn v2_tool_arguments_use_libraries_utf16_canonical_order() -> TestResult {
+    let arguments = json!({"\u{e000}": 1, "\u{10000}": 2});
+    let request = ConversationRequestV2::try_new(
+        provider()?,
+        vec![
+            ConversationMessageV2::user("inspect"),
+            ConversationMessageV2::assistant_tool_calls(vec![ToolCallV2::try_new(
+                "call-order",
+                "lookup",
+                arguments.clone(),
+            )?])?,
+            ConversationMessageV2::tool_result("call-order", "done")?,
+        ],
+        Some(64),
+    )?;
+    let prepared = prepare_openai_compatible_chat_request_v2(&request)?;
+    let rendered = prepared["messages"][1]["tool_calls"][0]["function"]["arguments"]
+        .as_str()
+        .ok_or("arguments were not rendered as a string")?;
+    assert_eq!(rendered, canonicalize_v2(&arguments)?);
+    assert_eq!(rendered, "{\"𐀀\":2,\"\":1}");
+    assert_ne!(rendered, serde_json::to_string(&arguments)?);
+    Ok(())
+}
+
+#[test]
+fn v2_rejects_interrupted_unresolved_tool_groups() -> TestResult {
+    let call_one = ToolCallV2::try_new("call-one", "lookup", json!({"query": "one"}))?;
+    let call_two = ToolCallV2::try_new("call-two", "lookup", json!({"query": "two"}))?;
+    let interrupted = ConversationRequestV2::try_new(
+        provider()?,
+        vec![
+            ConversationMessageV2::user("inspect"),
+            ConversationMessageV2::assistant_tool_calls(vec![call_one.clone()])?,
+            ConversationMessageV2::user("unrelated interruption"),
+            ConversationMessageV2::tool_result("call-one", "done")?,
+        ],
+        Some(64),
+    );
+    assert!(matches!(
+        interrupted,
+        Err(ProviderError::InvalidConversationToolResult)
+    ));
+
+    let second_group = ConversationRequestV2::try_new(
+        provider()?,
+        vec![
+            ConversationMessageV2::user("inspect"),
+            ConversationMessageV2::assistant_tool_calls(vec![call_one, call_two])?,
+            ConversationMessageV2::assistant_text("interrupted")?,
+        ],
+        Some(64),
+    );
+    assert!(matches!(
+        second_group,
+        Err(ProviderError::InvalidConversationToolResult)
+    ));
+    Ok(())
+}
+
+#[test]
+fn v2_accepts_a_contiguous_parallel_tool_result_group() -> TestResult {
+    let request = ConversationRequestV2::try_new(
+        provider()?,
+        vec![
+            ConversationMessageV2::user("inspect"),
+            ConversationMessageV2::assistant_tool_calls(vec![
+                ToolCallV2::try_new("call-one", "lookup", json!({"query": "one"}))?,
+                ToolCallV2::try_new("call-two", "lookup", json!({"query": "two"}))?,
+            ])?,
+            ConversationMessageV2::tool_result("call-two", "two")?,
+            ConversationMessageV2::tool_result("call-one", "one")?,
+        ],
+        Some(64),
+    )?;
+    assert_eq!(request.messages.len(), 4);
+    Ok(())
+}
+
+#[test]
+fn v2_rejects_nonrepresentable_numeric_arguments_at_admission() -> TestResult {
+    let result = ConversationRequestV2::try_new(
+        provider()?,
+        vec![
+            ConversationMessageV2::user("inspect"),
+            ConversationMessageV2::assistant_tool_calls(vec![ToolCallV2::try_new(
+                "call-number",
+                "lookup",
+                json!({"large": 9_007_199_254_740_993_u64}),
+            )?])?,
+            ConversationMessageV2::tool_result("call-number", "done")?,
+        ],
+        Some(64),
+    );
+    assert!(matches!(
+        result,
+        Err(ProviderError::InvalidConversationToolCall)
+    ));
+    Ok(())
+}
+
+#[test]
+fn v2_enforces_exact_message_group_and_cumulative_tool_limits() -> TestResult {
+    let exact_messages = ConversationRequestV2::try_new(
+        provider()?,
+        (0..256)
+            .map(|index| ConversationMessageV2::user(format!("message-{index}")))
+            .collect(),
+        Some(64),
+    );
+    assert!(exact_messages.is_ok());
+
+    let too_many_messages = ConversationRequestV2::try_new(
+        provider()?,
+        (0..257)
+            .map(|index| ConversationMessageV2::user(format!("message-{index}")))
+            .collect(),
+        Some(64),
+    );
+    assert!(too_many_messages.is_err());
+
+    let group_calls = (0..65)
+        .map(|index| ToolCallV2::try_new(format!("group-{index}"), "lookup", json!({})))
+        .collect::<Result<Vec<_>, _>>()?;
+    let too_many_in_group = ConversationRequestV2::try_new(
+        provider()?,
+        vec![
+            ConversationMessageV2::user("inspect"),
+            ConversationMessageV2::assistant_tool_calls(group_calls)?,
+        ],
+        Some(64),
+    );
+    assert!(too_many_in_group.is_err());
+
+    let mut cumulative = vec![ConversationMessageV2::user("inspect")];
+    for group in [64_usize, 64, 1] {
+        let calls = (0..group)
+            .map(|index| {
+                ToolCallV2::try_new(
+                    format!("total-{}-{index}", cumulative.len()),
+                    "lookup",
+                    json!({}),
+                )
+            })
+            .collect::<Result<Vec<_>, _>>()?;
+        let ids = calls.iter().map(|call| call.id.clone()).collect::<Vec<_>>();
+        cumulative.push(ConversationMessageV2::assistant_tool_calls(calls)?);
+        for id in ids {
+            cumulative.push(ConversationMessageV2::tool_result(id, "done")?);
+        }
+    }
+    assert!(ConversationRequestV2::try_new(provider()?, cumulative, Some(64)).is_err());
+
+    let mut nested = json!({"leaf": true});
+    for _ in 0..70 {
+        nested = json!({"next": nested});
+    }
+    let too_deep = ConversationRequestV2::try_new(
+        provider()?,
+        vec![
+            ConversationMessageV2::user("inspect"),
+            ConversationMessageV2::assistant_tool_calls(vec![ToolCallV2::try_new(
+                "call-deep",
+                "lookup",
+                nested,
+            )?])?,
+            ConversationMessageV2::tool_result("call-deep", "done")?,
+        ],
+        Some(64),
+    );
+    assert!(too_deep.is_err());
+
+    let oversized = json!({"payload": "x".repeat(1_100_000)});
+    let too_large = ConversationRequestV2::try_new(
+        provider()?,
+        vec![
+            ConversationMessageV2::user("inspect"),
+            ConversationMessageV2::assistant_tool_calls(vec![ToolCallV2::try_new(
+                "call-large",
+                "lookup",
+                oversized,
+            )?])?,
+            ConversationMessageV2::tool_result("call-large", "done")?,
+        ],
+        Some(64),
+    );
+    assert!(too_large.is_err());
     Ok(())
 }
