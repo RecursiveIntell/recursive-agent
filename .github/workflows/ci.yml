@@ -1,0 +1,127 @@
+name: Recursive Agent paired-root CI
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: recursive-agent-paired-root-${{ github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+env:
+  LIBRARIES_SHA: 650263d29394ab064f00eab68434c112782876f3
+  CARGO_TERM_COLOR: always
+  CARGO_NET_OFFLINE: "false"
+
+jobs:
+  paired-root:
+    name: Paired root
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    steps:
+      - name: Checkout recursive-agent source
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          ref: ${{ github.sha }}
+          fetch-depth: 1
+          path: recursive-agent
+
+      - name: Checkout the exact Libraries source owner
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          repository: RecursiveIntell/Libraries
+          ref: 650263d29394ab064f00eab68434c112782876f3
+          fetch-depth: 1
+          path: Libraries
+
+      - name: Verify paired source identity and dependency topology
+        env:
+          EXPECTED_RECURSIVE_AGENT_SHA: ${{ github.sha }}
+        run: |
+          set -euo pipefail
+          actual_recursive_agent="$(git -C recursive-agent rev-parse HEAD)"
+          if [ "$actual_recursive_agent" != "$EXPECTED_RECURSIVE_AGENT_SHA" ]; then
+            printf 'recursive-agent SHA mismatch: expected %s, got %s\n' "$EXPECTED_RECURSIVE_AGENT_SHA" "$actual_recursive_agent" >&2
+            exit 1
+          fi
+          actual="$(git -C Libraries rev-parse HEAD)"
+          if [ "$actual" != "$LIBRARIES_SHA" ]; then
+            printf 'Libraries SHA mismatch: expected %s, got %s\n' "$LIBRARIES_SHA" "$actual" >&2
+            exit 1
+          fi
+          python3 - <<'PY'
+          import json
+          import pathlib
+          import subprocess
+          import sys
+
+          root = pathlib.Path("recursive-agent")
+          manifests = sorted(root.rglob("Cargo.toml"))
+          if not manifests:
+              raise SystemExit("no recursive-agent Cargo manifests found")
+          forbidden = ("/home/", "~/", "file://")
+          for manifest in manifests:
+              text = manifest.read_text(encoding="utf-8")
+              if any(token in text for token in forbidden):
+                  raise SystemExit(f"absolute dependency path in {manifest}")
+          root_manifest = (root / "Cargo.toml").read_text(encoding="utf-8")
+          if 'path = "../Libraries/' not in root_manifest:
+              raise SystemExit("recursive-agent must retain sibling path dependencies")
+          result = subprocess.run(
+              ["cargo", "metadata", "--locked", "--format-version", "1", "--no-deps"],
+              cwd=root,
+              check=True,
+              capture_output=True,
+              text=True,
+          )
+          metadata = json.loads(result.stdout)
+          packages = metadata.get("packages") or []
+          if not packages:
+              raise SystemExit("cargo metadata returned no packages")
+          print(f"paired metadata packages={len(packages)}")
+          print("paired dependency topology verified")
+          PY
+
+      - name: Paired root required
+        working-directory: recursive-agent
+        run: |
+          set -euo pipefail
+          cargo metadata --locked --format-version 1 --no-deps
+          cargo fmt --all -- --check
+          cargo check --locked --workspace
+          cargo clippy --locked --workspace --all-targets -- -D warnings
+          cargo test --locked --workspace --all-targets --no-fail-fast
+
+      - name: Verify the same pair from a relocated root
+        run: |
+          set -euo pipefail
+          mkdir -p relocated
+          cp -a recursive-agent relocated/recursive-agent
+          cp -a Libraries relocated/Libraries
+          relocated_sha="$(git -C relocated/Libraries rev-parse HEAD)"
+          if [ "$relocated_sha" != "$LIBRARIES_SHA" ]; then
+            printf 'relocated Libraries SHA mismatch: expected %s, got %s\n' "$LIBRARIES_SHA" "$relocated_sha" >&2
+            exit 1
+          fi
+          python3 - <<'PY'
+          import json
+          import pathlib
+          import subprocess
+
+          root = pathlib.Path("relocated/recursive-agent")
+          result = subprocess.run(
+              ["cargo", "metadata", "--locked", "--format-version", "1", "--no-deps"],
+              cwd=root,
+              check=True,
+              capture_output=True,
+              text=True,
+          )
+          metadata = json.loads(result.stdout)
+          print(f"relocated paired metadata packages={len(metadata.get('packages') or [])}")
+          print("relocated paired root verified")
+          PY
