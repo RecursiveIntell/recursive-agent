@@ -930,6 +930,29 @@ fn run_v2_fixture(backend_fails: bool) -> Result<(), Box<dyn std::error::Error>>
             outcome.reported.error_type.as_deref(),
             Some("conversation_backend_error")
         );
+        let inspected = executor.inspect_recorded(&permit.permit_id)?;
+        assert_eq!(inspected, outcome);
+        assert!(matches!(
+            executor.replay_recorded(
+                &permit.permit_id,
+                &admission,
+                &recursive_agent_contracts::ArtifactDescriptorV1 {
+                    owner_id: recursive_agent_contracts::derive_artifact_id(b"missing")?,
+                    digest: ContentDigest::compute(b"missing"),
+                    byte_length: 7,
+                    media_type: "application/json".into(),
+                    encoding: None,
+                },
+                &recursive_agent_contracts::ArtifactDescriptorV1 {
+                    owner_id: recursive_agent_contracts::derive_artifact_id(b"missing")?,
+                    digest: ContentDigest::compute(b"missing"),
+                    byte_length: 7,
+                    media_type: "application/json".into(),
+                    encoding: None,
+                },
+            ),
+            Err(recursive_agent_runner::NativeNormalChatError::ReplayNotSettled)
+        ));
     } else {
         let result = observed?;
         let retained: serde_json::Value =
@@ -949,6 +972,31 @@ fn run_v2_fixture(backend_fails: bool) -> Result<(), Box<dyn std::error::Error>>
             )?["response"],
             serde_json::to_value(&result.response_artifact)?
         );
+        let inspected = executor.inspect_recorded(&permit.permit_id)?;
+        assert_eq!(inspected, result.outcome);
+        let replayed = executor.replay_recorded(
+            &permit.permit_id,
+            &admission,
+            &result.response_artifact,
+            &result.observation_artifact,
+        )?;
+        assert_eq!(replayed.response, result.response);
+        assert_eq!(replayed.outcome, result.outcome);
+        assert_eq!(
+            backend.calls.load(std::sync::atomic::Ordering::SeqCst),
+            1,
+            "recorded replay invoked the V2 backend"
+        );
+        let mut tampered_response = result.response_artifact.clone();
+        tampered_response.digest = ContentDigest::compute(b"tampered-response");
+        assert!(executor
+            .replay_recorded(
+                &permit.permit_id,
+                &admission,
+                &tampered_response,
+                &result.observation_artifact,
+            )
+            .is_err());
     }
     assert!(executor
         .execute_v2(&permit.permit_id, &admission, &request)

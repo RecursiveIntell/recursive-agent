@@ -4,6 +4,9 @@
 //! secret bytes exist only while constructing the sensitive authorization
 //! header and are never formatted, serialized, or included in provider errors.
 
+use std::io::Read;
+
+use boundary_compiler::{canonicalize_json_v2, canonicalize_v2, CanonicalV2Error};
 use serde::{Deserialize, Deserializer, Serialize};
 use thiserror::Error;
 use url::Url;
@@ -398,6 +401,27 @@ pub fn prepare_openai_compatible_chat_request(
     })
 }
 
+/// Maximum number of ordered messages admitted in one V2 request.
+pub const MAX_CONVERSATION_MESSAGES: usize = 256;
+/// Maximum number of tool calls across one V2 request.
+pub const MAX_CONVERSATION_TOOL_CALLS: usize = 128;
+/// Maximum number of tool calls in one contiguous assistant group.
+pub const MAX_CONVERSATION_TOOL_CALLS_PER_GROUP: usize = 64;
+/// Maximum encoded bytes in one conversation content string.
+pub const MAX_CONVERSATION_CONTENT_BYTES: usize = 1 << 20;
+/// Maximum encoded bytes of the complete rendered provider request.
+pub const MAX_CONVERSATION_RENDERED_BYTES: usize = 1 << 20;
+/// Maximum provider success-response body read before semantic decoding.
+pub const MAX_PROVIDER_RESPONSE_BYTES: usize = 1 << 20;
+/// Maximum provider non-success diagnostic body read before returning status.
+pub const MAX_PROVIDER_ERROR_BYTES: usize = 64 << 10;
+/// Maximum model reference bytes admitted by the conversation boundary.
+pub const MAX_CONVERSATION_MODEL_BYTES: usize = 256;
+/// Maximum identifier bytes admitted for tool-call and tool-result IDs.
+pub const MAX_CONVERSATION_IDENTIFIER_BYTES: usize = 256;
+/// Maximum tool name bytes admitted by the conversation boundary.
+pub const MAX_CONVERSATION_TOOL_NAME_BYTES: usize = 64;
+
 /// Exact schema tag for a structured conversation that preserves read-only tool
 /// request/result association. V1 remains text-only and is never widened.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -432,8 +456,8 @@ impl ToolCallV2 {
     }
 
     fn validate(&self) -> Result<(), ProviderError> {
-        validate_conversation_identifier(&self.id, "tool call id")?;
-        validate_conversation_identifier(&self.name, "tool call name")?;
+        validate_conversation_identifier(&self.id, MAX_CONVERSATION_IDENTIFIER_BYTES)?;
+        validate_conversation_identifier(&self.name, MAX_CONVERSATION_TOOL_NAME_BYTES)?;
         if !self.arguments.is_object() {
             return Err(ProviderError::InvalidConversationToolCall);
         }
@@ -533,7 +557,7 @@ impl ConversationMessageV2 {
                 tool_call_id,
                 content,
             } => {
-                validate_conversation_identifier(tool_call_id, "tool result id")?;
+                validate_conversation_identifier(tool_call_id, MAX_CONVERSATION_IDENTIFIER_BYTES)?;
                 validate_conversation_content(content)
             }
         }
@@ -583,13 +607,7 @@ impl ConversationRequestV2 {
     }
 
     pub fn validate(&self) -> Result<(), ProviderError> {
-        Self::from_parts(
-            self.schema,
-            self.provider.clone(),
-            self.messages.clone(),
-            self.max_tokens,
-        )
-        .map(|_| ())
+        Self::validate_parts(self.schema, &self.provider, &self.messages, self.max_tokens)
     }
 
     fn from_parts(
@@ -598,36 +616,7 @@ impl ConversationRequestV2 {
         messages: Vec<ConversationMessageV2>,
         max_tokens: Option<u32>,
     ) -> Result<Self, ProviderError> {
-        if schema != ConversationRequestSchemaV2::V2 {
-            return Err(ProviderError::UnsupportedConversationSchema);
-        }
-        if messages.is_empty() {
-            return Err(ProviderError::EmptyConversation);
-        }
-        let mut declared = std::collections::BTreeSet::new();
-        let mut unresolved = std::collections::BTreeSet::new();
-        for message in &messages {
-            message.validate()?;
-            match message {
-                ConversationMessageV2::Assistant { tool_calls, .. } => {
-                    for call in tool_calls {
-                        if !declared.insert(call.id.clone()) || !unresolved.insert(call.id.clone())
-                        {
-                            return Err(ProviderError::InvalidConversationToolCall);
-                        }
-                    }
-                }
-                ConversationMessageV2::Tool { tool_call_id, .. } => {
-                    if !unresolved.remove(tool_call_id) {
-                        return Err(ProviderError::InvalidConversationToolResult);
-                    }
-                }
-                ConversationMessageV2::System { .. } | ConversationMessageV2::User { .. } => {}
-            }
-        }
-        if !unresolved.is_empty() {
-            return Err(ProviderError::InvalidConversationToolResult);
-        }
+        Self::validate_parts(schema, &provider, &messages, max_tokens)?;
         Ok(Self {
             schema,
             provider,
@@ -635,6 +624,136 @@ impl ConversationRequestV2 {
             max_tokens,
         })
     }
+
+    fn validate_parts(
+        schema: ConversationRequestSchemaV2,
+        provider: &ProviderSpecV1,
+        messages: &[ConversationMessageV2],
+        max_tokens: Option<u32>,
+    ) -> Result<(), ProviderError> {
+        if schema != ConversationRequestSchemaV2::V2 {
+            return Err(ProviderError::UnsupportedConversationSchema);
+        }
+        if messages.is_empty() {
+            return Err(ProviderError::EmptyConversation);
+        }
+        if messages.len() > MAX_CONVERSATION_MESSAGES {
+            return Err(ProviderError::ConversationLimitExceeded {
+                resource: "messages",
+                maximum: MAX_CONVERSATION_MESSAGES,
+            });
+        }
+        let model = match provider {
+            ProviderSpecV1::Ollama { model, .. }
+            | ProviderSpecV1::OpenAiCompatible { model, .. } => model,
+        };
+        if model.is_empty() {
+            return Err(ProviderError::EmptyModel);
+        }
+        if model.len() > MAX_CONVERSATION_MODEL_BYTES {
+            return Err(ProviderError::ConversationLimitExceeded {
+                resource: "model bytes",
+                maximum: MAX_CONVERSATION_MODEL_BYTES,
+            });
+        }
+
+        let mut declared = std::collections::BTreeSet::new();
+        let mut pending_group = std::collections::BTreeSet::new();
+        let mut tool_calls = 0_usize;
+        for message in messages {
+            message.validate()?;
+            if !pending_group.is_empty() {
+                let ConversationMessageV2::Tool { tool_call_id, .. } = message else {
+                    return Err(ProviderError::InvalidConversationToolResult);
+                };
+                if !pending_group.remove(tool_call_id) {
+                    return Err(ProviderError::InvalidConversationToolResult);
+                }
+                continue;
+            }
+            match message {
+                ConversationMessageV2::Assistant {
+                    tool_calls: calls, ..
+                } if !calls.is_empty() => {
+                    if calls.len() > MAX_CONVERSATION_TOOL_CALLS_PER_GROUP {
+                        return Err(ProviderError::ConversationLimitExceeded {
+                            resource: "tool calls per group",
+                            maximum: MAX_CONVERSATION_TOOL_CALLS_PER_GROUP,
+                        });
+                    }
+                    tool_calls = tool_calls.checked_add(calls.len()).ok_or(
+                        ProviderError::ConversationLimitExceeded {
+                            resource: "tool calls",
+                            maximum: MAX_CONVERSATION_TOOL_CALLS,
+                        },
+                    )?;
+                    if tool_calls > MAX_CONVERSATION_TOOL_CALLS {
+                        return Err(ProviderError::ConversationLimitExceeded {
+                            resource: "tool calls",
+                            maximum: MAX_CONVERSATION_TOOL_CALLS,
+                        });
+                    }
+                    for call in calls {
+                        if !declared.insert(call.id.clone())
+                            || !pending_group.insert(call.id.clone())
+                        {
+                            return Err(ProviderError::InvalidConversationToolCall);
+                        }
+                    }
+                }
+                ConversationMessageV2::Tool { .. } => {
+                    return Err(ProviderError::InvalidConversationToolResult);
+                }
+                ConversationMessageV2::System { .. }
+                | ConversationMessageV2::User { .. }
+                | ConversationMessageV2::Assistant { .. } => {}
+            }
+        }
+        if !pending_group.is_empty() {
+            return Err(ProviderError::InvalidConversationToolResult);
+        }
+        validate_rendered_budget(provider, messages, max_tokens)
+    }
+}
+
+fn validate_rendered_budget(
+    provider: &ProviderSpecV1,
+    messages: &[ConversationMessageV2],
+    max_tokens: Option<u32>,
+) -> Result<(), ProviderError> {
+    let model = match provider {
+        ProviderSpecV1::Ollama { model, .. } | ProviderSpecV1::OpenAiCompatible { model, .. } => {
+            model
+        }
+    };
+    let skeleton = serde_json::json!({
+        "model": model,
+        "messages": [],
+        "max_tokens": max_tokens,
+        "stream": false,
+    });
+    let mut rendered_bytes = serde_json::to_vec(&skeleton)
+        .map_err(|_| ProviderError::Malformed("conversation rendering failed".into()))?
+        .len();
+    for (index, message) in messages.iter().enumerate() {
+        let rendered = render_openai_message_v2(message)?;
+        let bytes = serde_json::to_vec(&rendered)
+            .map_err(|_| ProviderError::Malformed("conversation rendering failed".into()))?;
+        rendered_bytes = rendered_bytes
+            .checked_add(bytes.len())
+            .and_then(|value| value.checked_add(usize::from(index != 0)))
+            .ok_or(ProviderError::ConversationLimitExceeded {
+                resource: "rendered request bytes",
+                maximum: MAX_CONVERSATION_RENDERED_BYTES,
+            })?;
+        if rendered_bytes > MAX_CONVERSATION_RENDERED_BYTES {
+            return Err(ProviderError::ConversationLimitExceeded {
+                resource: "rendered request bytes",
+                maximum: MAX_CONVERSATION_RENDERED_BYTES,
+            });
+        }
+    }
+    Ok(())
 }
 
 /// Render one V2 request as the exact non-streaming OpenAI-compatible payload.
@@ -681,7 +800,7 @@ fn render_openai_message_v2(
                         "type": "function",
                         "function": {
                             "name": call.name,
-                            "arguments": serde_json::to_string(&call.arguments)
+                            "arguments": canonicalize_v2(&call.arguments)
                                 .map_err(|_| ProviderError::InvalidConversationToolCall)?,
                         },
                     }))
@@ -704,9 +823,12 @@ fn render_openai_message_v2(
     }
 }
 
-fn validate_conversation_identifier(value: &str, _name: &str) -> Result<(), ProviderError> {
+fn validate_conversation_identifier(
+    value: &str,
+    maximum_bytes: usize,
+) -> Result<(), ProviderError> {
     if value.is_empty()
-        || value.len() > 256
+        || value.len() > maximum_bytes
         || value.chars().any(char::is_control)
         || !value
             .bytes()
@@ -718,7 +840,7 @@ fn validate_conversation_identifier(value: &str, _name: &str) -> Result<(), Prov
 }
 
 fn validate_conversation_content(value: &str) -> Result<(), ProviderError> {
-    if value.is_empty() || value.len() > 1024 * 1024 {
+    if value.is_empty() || value.len() > MAX_CONVERSATION_CONTENT_BYTES {
         return Err(ProviderError::InvalidConversationMessage);
     }
     Ok(())
@@ -736,6 +858,13 @@ pub enum ProviderError {
     InvalidConversationToolCall,
     #[error("conversation tool result is unbound, duplicated, or missing")]
     InvalidConversationToolResult,
+    #[error("conversation request exceeds {resource} limit of {maximum}")]
+    ConversationLimitExceeded {
+        resource: &'static str,
+        maximum: usize,
+    },
+    #[error("provider response body exceeds {maximum_bytes} bytes")]
+    ResponseBodyTooLarge { maximum_bytes: usize },
     #[error("conversation request requires an OpenAI-compatible provider")]
     UnsupportedConversationProvider,
     #[error("empty base_url for provider")]
@@ -888,19 +1017,64 @@ fn map_credential_error(error: CredentialResolveError) -> ProviderError {
     }
 }
 
+fn read_bounded_response_body(
+    response: reqwest::blocking::Response,
+    maximum_bytes: usize,
+) -> Result<Vec<u8>, ProviderError> {
+    let maximum_u64 = u64::try_from(maximum_bytes).map_err(|_| ProviderError::Http {
+        operation: "response_limit",
+    })?;
+    if response
+        .content_length()
+        .is_some_and(|length| length > maximum_u64)
+    {
+        return Err(ProviderError::ResponseBodyTooLarge { maximum_bytes });
+    }
+    let read_limit = maximum_u64.saturating_add(1);
+    let capacity = response
+        .content_length()
+        .and_then(|length| usize::try_from(length).ok())
+        .map_or(0, |length| length.min(maximum_bytes.saturating_add(1)));
+    let mut body = Vec::with_capacity(capacity);
+    response
+        .take(read_limit)
+        .read_to_end(&mut body)
+        .map_err(|_| ProviderError::Http {
+            operation: "response_read",
+        })?;
+    if body.len() > maximum_bytes {
+        return Err(ProviderError::ResponseBodyTooLarge { maximum_bytes });
+    }
+    Ok(body)
+}
+
+fn decode_bounded_json(
+    response: reqwest::blocking::Response,
+    maximum_bytes: usize,
+) -> Result<serde_json::Value, ProviderError> {
+    let body = read_bounded_response_body(response, maximum_bytes)?;
+    canonicalize_json_v2(&body).map_err(|error| match error {
+        CanonicalV2Error::ResourceLimit => {
+            ProviderError::Malformed("provider response exceeds JSON resource limits".into())
+        }
+        _ => ProviderError::Malformed("provider response JSON is invalid".into()),
+    })?;
+    serde_json::from_slice(&body)
+        .map_err(|_| ProviderError::Malformed("provider response JSON is invalid".into()))
+}
+
 fn decode_openai_response(
     model: &str,
     response: reqwest::blocking::Response,
 ) -> Result<CompletionResponseV1, ProviderError> {
     let status = response.status();
     if !status.is_success() {
+        let _ = read_bounded_response_body(response, MAX_PROVIDER_ERROR_BYTES)?;
         return Err(ProviderError::HttpStatus {
             status: status.as_u16(),
         });
     }
-    let raw = response
-        .json::<serde_json::Value>()
-        .map_err(|error| ProviderError::Malformed(error.to_string()))?;
+    let raw = decode_bounded_json(response, MAX_PROVIDER_RESPONSE_BYTES)?;
     let text = raw
         .get("choices")
         .and_then(|choices| choices.get(0))
@@ -949,13 +1123,12 @@ impl CompletionBackend for HttpCompletionBackend {
                     })?;
                 let status = response.status();
                 if !status.is_success() {
+                    let _ = read_bounded_response_body(response, MAX_PROVIDER_ERROR_BYTES)?;
                     return Err(ProviderError::HttpStatus {
                         status: status.as_u16(),
                     });
                 }
-                let raw = response
-                    .json::<serde_json::Value>()
-                    .map_err(|error| ProviderError::Malformed(error.to_string()))?;
+                let raw = decode_bounded_json(response, MAX_PROVIDER_RESPONSE_BYTES)?;
                 let text = raw
                     .get("response")
                     .and_then(serde_json::Value::as_str)
@@ -1001,13 +1174,12 @@ impl CompletionBackend for HttpCompletionBackend {
                     })?;
                 let status = response.status();
                 if !status.is_success() {
+                    let _ = read_bounded_response_body(response, MAX_PROVIDER_ERROR_BYTES)?;
                     return Err(ProviderError::HttpStatus {
                         status: status.as_u16(),
                     });
                 }
-                let raw = response
-                    .json::<serde_json::Value>()
-                    .map_err(|error| ProviderError::Malformed(error.to_string()))?;
+                let raw = decode_bounded_json(response, MAX_PROVIDER_RESPONSE_BYTES)?;
                 let text = raw
                     .get("choices")
                     .and_then(|choices| choices.get(0))

@@ -1,0 +1,184 @@
+name: Recursive Agent paired-root CI
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: recursive-agent-paired-root-${{ github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+env:
+  LIBRARIES_SHA: 650263d29394ab064f00eab68434c112782876f3
+  CARGO_TERM_COLOR: always
+  CARGO_NET_OFFLINE: "false"
+
+jobs:
+  paired-root:
+    name: Paired root
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    steps:
+      - name: Checkout recursive-agent source
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          ref: ${{ github.sha }}
+          fetch-depth: 1
+          path: recursive-agent
+
+      - name: Checkout the exact Libraries source owner
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          repository: RecursiveIntell/Libraries
+          ref: 650263d29394ab064f00eab68434c112782876f3
+          fetch-depth: 1
+          path: Libraries
+
+      - name: Verify paired source identity and dependency topology
+        env:
+          EXPECTED_RECURSIVE_AGENT_SHA: ${{ github.sha }}
+        run: |
+          set -euo pipefail
+          actual_recursive_agent="$(git -C recursive-agent rev-parse HEAD)"
+          if [ "$actual_recursive_agent" != "$EXPECTED_RECURSIVE_AGENT_SHA" ]; then
+            printf 'recursive-agent SHA mismatch: expected %s, got %s\n' "$EXPECTED_RECURSIVE_AGENT_SHA" "$actual_recursive_agent" >&2
+            exit 1
+          fi
+          actual="$(git -C Libraries rev-parse HEAD)"
+          if [ "$actual" != "$LIBRARIES_SHA" ]; then
+            printf 'Libraries SHA mismatch: expected %s, got %s\n' "$LIBRARIES_SHA" "$actual" >&2
+            exit 1
+          fi
+          python3 - <<'PY'
+          import json
+          import pathlib
+          import subprocess
+          import sys
+
+          root = pathlib.Path("recursive-agent")
+          manifests = sorted(root.rglob("Cargo.toml"))
+          if not manifests:
+              raise SystemExit("no recursive-agent Cargo manifests found")
+          forbidden = ("/home/", "~/", "file://")
+          for manifest in manifests:
+              text = manifest.read_text(encoding="utf-8")
+              if any(token in text for token in forbidden):
+                  raise SystemExit(f"absolute dependency path in {manifest}")
+          root_manifest = (root / "Cargo.toml").read_text(encoding="utf-8")
+          if 'path = "../Libraries/' not in root_manifest:
+              raise SystemExit("recursive-agent must retain sibling path dependencies")
+          result = subprocess.run(
+              ["cargo", "metadata", "--locked", "--format-version", "1", "--no-deps"],
+              cwd=root,
+              check=True,
+              capture_output=True,
+              text=True,
+          )
+          metadata = json.loads(result.stdout)
+          packages = metadata.get("packages") or []
+          if not packages:
+              raise SystemExit("cargo metadata returned no packages")
+          print(f"paired metadata packages={len(packages)}")
+          print("paired dependency topology verified")
+          PY
+
+      - name: Install libseccomp development headers
+        run: |
+          set -euo pipefail
+          sudo apt-get update
+          sudo apt-get install --no-install-recommends -y dbus-user-session libseccomp-dev
+
+      - name: Paired root required
+        working-directory: recursive-agent
+        run: |
+          set -euo pipefail
+          uid="$(id -u)"
+          runtime="/run/user/${uid}"
+          user_name="$(id -un)"
+          prior_linger_state=0
+          if sudo test -e "/var/lib/systemd/linger/${user_name}"; then
+            prior_linger_state=1
+          fi
+          prior_runtime_state="$(sudo systemctl is-active "user-runtime-dir@${uid}.service" 2>/dev/null || true)"
+          prior_user_state="$(sudo systemctl is-active "user@${uid}.service" 2>/dev/null || true)"
+          linger_started=0
+          runtime_started=0
+          user_started=0
+          cleanup() {
+            if [[ "$user_started" -eq 1 && "$prior_user_state" != "active" ]]; then
+              sudo systemctl stop "user@${uid}.service" 2>/dev/null || true
+            fi
+            if [[ "$runtime_started" -eq 1 && "$prior_runtime_state" != "active" ]]; then
+              sudo systemctl stop "user-runtime-dir@${uid}.service" 2>/dev/null || true
+            fi
+            if [[ "$linger_started" -eq 1 && "$prior_linger_state" -eq 0 ]]; then
+              sudo loginctl disable-linger "$user_name" 2>/dev/null || true
+            fi
+          }
+          trap cleanup EXIT
+          sudo loginctl enable-linger "$(id -un)"
+          linger_started=1
+          sudo systemctl start "user-runtime-dir@${uid}.service"
+          runtime_started=1
+          sudo systemctl start "user@${uid}.service"
+          user_started=1
+          export XDG_RUNTIME_DIR="$runtime"
+          export DBUS_SESSION_BUS_ADDRESS="unix:path=${runtime}/bus"
+          sudo systemctl show "user-runtime-dir@${uid}.service" --no-pager -p ActiveState -p SubState -p MainPID
+          sudo systemctl show "user@${uid}.service" --no-pager -p ActiveState -p SubState -p MainPID
+          if [[ -S "$runtime/bus" ]]; then
+            printf 'user runtime bus socket=present\n'
+          else
+            printf 'user runtime bus socket=absent\n' >&2
+          fi
+          ready=0
+          for attempt in $(seq 1 50); do
+            if [[ -S "$runtime/bus" ]] && /usr/bin/systemd-run --user --scope --quiet --collect -- true; then
+              ready=1
+              break
+            fi
+            sleep 0.1
+          done
+          if [[ "$ready" -ne 1 ]]; then
+            printf 'user systemd scope probe did not become ready\n' >&2
+            exit 1
+          fi
+          cargo metadata --locked --format-version 1 --no-deps
+          cargo fmt --all -- --check
+          cargo check --locked --workspace
+          cargo clippy --locked --workspace --all-targets -- -D warnings
+          cargo test --locked --workspace --all-targets --no-fail-fast
+
+      - name: Verify the same pair from a relocated root
+        run: |
+          set -euo pipefail
+          mkdir -p relocated
+          cp -a recursive-agent relocated/recursive-agent
+          cp -a Libraries relocated/Libraries
+          relocated_sha="$(git -C relocated/Libraries rev-parse HEAD)"
+          if [ "$relocated_sha" != "$LIBRARIES_SHA" ]; then
+            printf 'relocated Libraries SHA mismatch: expected %s, got %s\n' "$LIBRARIES_SHA" "$relocated_sha" >&2
+            exit 1
+          fi
+          python3 - <<'PY'
+          import json
+          import pathlib
+          import subprocess
+
+          root = pathlib.Path("relocated/recursive-agent")
+          result = subprocess.run(
+              ["cargo", "metadata", "--locked", "--format-version", "1", "--no-deps"],
+              cwd=root,
+              check=True,
+              capture_output=True,
+              text=True,
+          )
+          metadata = json.loads(result.stdout)
+          print(f"relocated paired metadata packages={len(metadata.get('packages') or [])}")
+          print("relocated paired root verified")
+          PY

@@ -14,7 +14,7 @@ use std::collections::BTreeSet;
 #[cfg(target_os = "linux")]
 use std::ffi::CString;
 use std::fs::File;
-use std::io::{Read, Seek, Write};
+use std::io::{Read, Seek};
 use std::os::fd::{AsFd, AsRawFd};
 #[cfg(target_os = "linux")]
 use std::os::unix::fs::MetadataExt;
@@ -1169,13 +1169,16 @@ fn build_network_seccomp() -> Result<SeccompPolicy, SandboxError> {
             )));
         }
     }
-    let bytes = filter
-        .export_bpf_mem()
-        .map_err(|error| SandboxError::Io(format!("seccomp export: {error}")))?;
-    let digest = recursive_agent_contracts::ContentDigest::compute(&bytes).to_string();
     let mut file = tempfile::tempfile().map_err(|error| SandboxError::Io(error.to_string()))?;
-    file.write_all(&bytes)
+    filter
+        .export_bpf(&file)
+        .map_err(|error| SandboxError::Io(format!("seccomp export: {error}")))?;
+    file.seek(std::io::SeekFrom::Start(0))
         .map_err(|error| SandboxError::Io(error.to_string()))?;
+    let mut bytes = Vec::new();
+    file.read_to_end(&mut bytes)
+        .map_err(|error| SandboxError::Io(error.to_string()))?;
+    let digest = recursive_agent_contracts::ContentDigest::compute(&bytes).to_string();
     file.seek(std::io::SeekFrom::Start(0))
         .map_err(|error| SandboxError::Io(error.to_string()))?;
     Ok(SeccompPolicy {
@@ -1651,9 +1654,19 @@ mod tests {
         let output = tempfile::tempdir()?;
         let writable = tempfile::tempdir()?;
         let marker = writable.path().join("revoked-parent-effect");
+        let ready = writable.path().join("revoked-parent-ready");
+        let release = writable.path().join("revoked-parent-release");
         let revoked = Arc::new(AtomicBool::new(false));
+        let ready_seen = Arc::new(AtomicBool::new(false));
         let hook_revoked = Arc::clone(&revoked);
+        let hook_ready_seen = Arc::clone(&ready_seen);
+        let hook_ready = ready.clone();
         install_post_spawn_test_hook(move |context| {
+            let deadline = Instant::now() + Duration::from_secs(5);
+            while !hook_ready.exists() && Instant::now() < deadline {
+                std::thread::sleep(Duration::from_millis(2));
+            }
+            hook_ready_seen.store(hook_ready.exists(), Ordering::SeqCst);
             let parent = context.binding().parent_permit_id.as_ref();
             let did_revoke = parent.is_some_and(|permit_id| {
                 context
@@ -1675,7 +1688,12 @@ mod tests {
                     tool: "shell".into(),
                     args: serde_json::json!({
                         "command": "/usr/bin/bash",
-                        "args": ["-c", format!("sleep 0.2; printf escaped > {}", marker.display())],
+                        "args": ["-c", format!(
+                            "printf started > {}; while [ ! -e {} ]; do sleep 0.01; done; printf escaped > {}",
+                            ready.display(),
+                            release.display(),
+                            marker.display(),
+                        )],
                         "allowed_read_paths": [],
                         "allowed_write_paths": [writable.path()],
                         "allow_network": false,
@@ -1695,7 +1713,12 @@ mod tests {
             &crate::SystemClock,
             &crate::NoopRunnerHook,
         );
+        std::fs::write(&release, b"release")?;
         std::thread::sleep(Duration::from_millis(300));
+        assert!(
+            ready_seen.load(Ordering::SeqCst),
+            "post-spawn child never reached the revocation barrier"
+        );
         assert!(
             revoked.load(Ordering::SeqCst),
             "post-spawn hook did not revoke parent"
