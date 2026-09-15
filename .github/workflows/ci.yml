@@ -99,8 +99,14 @@ jobs:
           set -euo pipefail
           uid="$(id -u)"
           runtime="/run/user/${uid}"
+          user_name="$(id -un)"
+          prior_linger_state=0
+          if sudo test -e "/var/lib/systemd/linger/${user_name}"; then
+            prior_linger_state=1
+          fi
           prior_runtime_state="$(sudo systemctl is-active "user-runtime-dir@${uid}.service" 2>/dev/null || true)"
           prior_user_state="$(sudo systemctl is-active "user@${uid}.service" 2>/dev/null || true)"
+          linger_started=0
           runtime_started=0
           user_started=0
           cleanup() {
@@ -110,14 +116,26 @@ jobs:
             if [[ "$runtime_started" -eq 1 && "$prior_runtime_state" != "active" ]]; then
               sudo systemctl stop "user-runtime-dir@${uid}.service" 2>/dev/null || true
             fi
+            if [[ "$linger_started" -eq 1 && "$prior_linger_state" -eq 0 ]]; then
+              sudo loginctl disable-linger "$user_name" 2>/dev/null || true
+            fi
           }
           trap cleanup EXIT
+          sudo loginctl enable-linger "$(id -un)"
+          linger_started=1
           sudo systemctl start "user-runtime-dir@${uid}.service"
           runtime_started=1
           sudo systemctl start "user@${uid}.service"
           user_started=1
           export XDG_RUNTIME_DIR="$runtime"
           export DBUS_SESSION_BUS_ADDRESS="unix:path=${runtime}/bus"
+          sudo systemctl show "user-runtime-dir@${uid}.service" --no-pager -p ActiveState -p SubState -p MainPID
+          sudo systemctl show "user@${uid}.service" --no-pager -p ActiveState -p SubState -p MainPID
+          if [[ -S "$runtime/bus" ]]; then
+            printf 'user runtime bus socket=present\n'
+          else
+            printf 'user runtime bus socket=absent\n' >&2
+          fi
           ready=0
           for attempt in $(seq 1 50); do
             if [[ -S "$runtime/bus" ]] && /usr/bin/systemd-run --user --scope --quiet --collect -- true; then

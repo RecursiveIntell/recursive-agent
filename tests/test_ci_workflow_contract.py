@@ -22,6 +22,7 @@ def test_paired_root_workflow_declares_pinned_checkouts_and_stable_gate():
     assert "name: Paired root" in text
     assert "name: Paired root required" in text
     assert 'sudo apt-get install --no-install-recommends -y dbus-user-session libseccomp-dev' in text
+    assert 'sudo loginctl enable-linger "$(id -un)"' in text
     assert 'sudo systemctl start "user-runtime-dir@${uid}.service"' in text
     assert 'sudo systemctl start "user@${uid}.service"' in text
     assert 'runtime_started=0' in text
