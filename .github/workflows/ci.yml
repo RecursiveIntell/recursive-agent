@@ -99,13 +99,18 @@ jobs:
           set -euo pipefail
           uid="$(id -u)"
           runtime="/run/user/${uid}"
-          prior_state="$(sudo systemctl is-active "user@${uid}.service" 2>/dev/null || true)"
+          prior_runtime_state="$(sudo systemctl is-active "user-runtime-dir@${uid}.service" 2>/dev/null || true)"
+          prior_user_state="$(sudo systemctl is-active "user@${uid}.service" 2>/dev/null || true)"
+          sudo systemctl start "user-runtime-dir@${uid}.service"
           sudo systemctl start "user@${uid}.service"
           export XDG_RUNTIME_DIR="$runtime"
           export DBUS_SESSION_BUS_ADDRESS="unix:path=${runtime}/bus"
           cleanup() {
-            if [[ "$prior_state" != "active" ]]; then
+            if [[ "$prior_user_state" != "active" ]]; then
               sudo systemctl stop "user@${uid}.service" 2>/dev/null || true
+            fi
+            if [[ "$prior_runtime_state" != "active" ]]; then
+              sudo systemctl stop "user-runtime-dir@${uid}.service" 2>/dev/null || true
             fi
           }
           trap cleanup EXIT

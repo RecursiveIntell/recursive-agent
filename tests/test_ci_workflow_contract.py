@@ -21,6 +21,7 @@ def test_paired_root_workflow_declares_pinned_checkouts_and_stable_gate():
     assert "path: Libraries" in text
     assert "name: Paired root" in text
     assert "name: Paired root required" in text
+    assert 'sudo systemctl start "user-runtime-dir@${uid}.service"' in text
     assert 'sudo systemctl start "user@${uid}.service"' in text
     assert 'export XDG_RUNTIME_DIR="$runtime"' in text
     assert 'export DBUS_SESSION_BUS_ADDRESS="unix:path=${runtime}/bus"' in text
