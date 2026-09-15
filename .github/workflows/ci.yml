@@ -87,6 +87,12 @@ jobs:
           print("paired dependency topology verified")
           PY
 
+      - name: Install libseccomp development headers
+        run: |
+          set -euo pipefail
+          sudo apt-get update
+          sudo apt-get install --no-install-recommends -y libseccomp-dev
+
       - name: Paired root required
         working-directory: recursive-agent
         run: |
