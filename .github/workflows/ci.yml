@@ -97,27 +97,21 @@ jobs:
         working-directory: recursive-agent
         run: |
           set -euo pipefail
-          runtime="${RUNNER_TEMP}/recursive-agent-user-runtime"
-          mkdir -p "$runtime"
-          chmod 700 "$runtime"
+          uid="$(id -u)"
+          runtime="/run/user/${uid}"
+          prior_state="$(sudo systemctl is-active "user@${uid}.service" 2>/dev/null || true)"
+          sudo systemctl start "user@${uid}.service"
           export XDG_RUNTIME_DIR="$runtime"
-          trap 'rm -rf "$runtime"' EXIT
-          /usr/bin/dbus-run-session -- /usr/bin/bash -s <<'CI_SCRIPT'
-          set -euo pipefail
-          manager=""
+          export DBUS_SESSION_BUS_ADDRESS="unix:path=${runtime}/bus"
           cleanup() {
-            /usr/bin/systemctl --user exit >/dev/null 2>&1 || true
-            if [[ -n "$manager" ]]; then
-              kill "$manager" 2>/dev/null || true
-              wait "$manager" 2>/dev/null || true
+            if [[ "$prior_state" != "active" ]]; then
+              sudo systemctl stop "user@${uid}.service" 2>/dev/null || true
             fi
           }
           trap cleanup EXIT
-          /usr/lib/systemd/systemd --user --unit=default.target &
-          manager=$!
           ready=0
           for attempt in $(seq 1 50); do
-            if /usr/bin/systemd-run --user --scope --quiet --collect -- true; then
+            if [[ -S "$runtime/bus" ]] && /usr/bin/systemd-run --user --scope --quiet --collect -- true; then
               ready=1
               break
             fi
@@ -132,7 +126,6 @@ jobs:
           cargo check --locked --workspace
           cargo clippy --locked --workspace --all-targets -- -D warnings
           cargo test --locked --workspace --all-targets --no-fail-fast
-          CI_SCRIPT
 
       - name: Verify the same pair from a relocated root
         run: |

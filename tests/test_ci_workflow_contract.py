@@ -21,9 +21,10 @@ def test_paired_root_workflow_declares_pinned_checkouts_and_stable_gate():
     assert "path: Libraries" in text
     assert "name: Paired root" in text
     assert "name: Paired root required" in text
-    assert "/usr/bin/dbus-run-session" in text
-    assert "/usr/lib/systemd/systemd --user --unit=default.target" in text
-    assert "/usr/bin/systemd-run --user --scope --quiet --collect -- true" in text
+    assert 'sudo systemctl start "user@${uid}.service"' in text
+    assert 'export XDG_RUNTIME_DIR="$runtime"' in text
+    assert 'export DBUS_SESSION_BUS_ADDRESS="unix:path=${runtime}/bus"' in text
+    assert '[[ -S "$runtime/bus" ]]' in text
 
 
 def test_paired_root_workflow_refuses_wrong_library_sha_and_absolute_dependency_paths():
