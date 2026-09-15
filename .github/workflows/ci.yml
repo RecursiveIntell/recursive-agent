@@ -97,11 +97,42 @@ jobs:
         working-directory: recursive-agent
         run: |
           set -euo pipefail
+          runtime="${RUNNER_TEMP}/recursive-agent-user-runtime"
+          mkdir -p "$runtime"
+          chmod 700 "$runtime"
+          export XDG_RUNTIME_DIR="$runtime"
+          trap 'rm -rf "$runtime"' EXIT
+          /usr/bin/dbus-run-session -- /usr/bin/bash -s <<'CI_SCRIPT'
+          set -euo pipefail
+          manager=""
+          cleanup() {
+            /usr/bin/systemctl --user exit >/dev/null 2>&1 || true
+            if [[ -n "$manager" ]]; then
+              kill "$manager" 2>/dev/null || true
+              wait "$manager" 2>/dev/null || true
+            fi
+          }
+          trap cleanup EXIT
+          /usr/lib/systemd/systemd --user --unit=default.target &
+          manager=$!
+          ready=0
+          for attempt in $(seq 1 50); do
+            if /usr/bin/systemd-run --user --scope --quiet --collect -- true; then
+              ready=1
+              break
+            fi
+            sleep 0.1
+          done
+          if [[ "$ready" -ne 1 ]]; then
+            printf 'user systemd scope probe did not become ready\\n' >&2
+            exit 1
+          fi
           cargo metadata --locked --format-version 1 --no-deps
           cargo fmt --all -- --check
           cargo check --locked --workspace
           cargo clippy --locked --workspace --all-targets -- -D warnings
           cargo test --locked --workspace --all-targets --no-fail-fast
+          CI_SCRIPT
 
       - name: Verify the same pair from a relocated root
         run: |

@@ -21,6 +21,9 @@ def test_paired_root_workflow_declares_pinned_checkouts_and_stable_gate():
     assert "path: Libraries" in text
     assert "name: Paired root" in text
     assert "name: Paired root required" in text
+    assert "/usr/bin/dbus-run-session" in text
+    assert "/usr/lib/systemd/systemd --user --unit=default.target" in text
+    assert "/usr/bin/systemd-run --user --scope --quiet --collect -- true" in text
 
 
 def test_paired_root_workflow_refuses_wrong_library_sha_and_absolute_dependency_paths():
