@@ -91,7 +91,7 @@ jobs:
         run: |
           set -euo pipefail
           sudo apt-get update
-          sudo apt-get install --no-install-recommends -y libseccomp-dev
+          sudo apt-get install --no-install-recommends -y dbus-user-session libseccomp-dev
 
       - name: Paired root required
         working-directory: recursive-agent
