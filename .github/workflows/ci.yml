@@ -124,7 +124,7 @@ jobs:
             sleep 0.1
           done
           if [[ "$ready" -ne 1 ]]; then
-            printf 'user systemd scope probe did not become ready\\n' >&2
+            printf 'user systemd scope probe did not become ready\n' >&2
             exit 1
           fi
           cargo metadata --locked --format-version 1 --no-deps
