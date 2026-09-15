@@ -14,7 +14,7 @@ use std::collections::BTreeSet;
 #[cfg(target_os = "linux")]
 use std::ffi::CString;
 use std::fs::File;
-use std::io::{Read, Seek, Write};
+use std::io::{Read, Seek};
 use std::os::fd::{AsFd, AsRawFd};
 #[cfg(target_os = "linux")]
 use std::os::unix::fs::MetadataExt;
@@ -1169,13 +1169,16 @@ fn build_network_seccomp() -> Result<SeccompPolicy, SandboxError> {
             )));
         }
     }
-    let bytes = filter
-        .export_bpf_mem()
-        .map_err(|error| SandboxError::Io(format!("seccomp export: {error}")))?;
-    let digest = recursive_agent_contracts::ContentDigest::compute(&bytes).to_string();
     let mut file = tempfile::tempfile().map_err(|error| SandboxError::Io(error.to_string()))?;
-    file.write_all(&bytes)
+    filter
+        .export_bpf(&file)
+        .map_err(|error| SandboxError::Io(format!("seccomp export: {error}")))?;
+    file.seek(std::io::SeekFrom::Start(0))
         .map_err(|error| SandboxError::Io(error.to_string()))?;
+    let mut bytes = Vec::new();
+    file.read_to_end(&mut bytes)
+        .map_err(|error| SandboxError::Io(error.to_string()))?;
+    let digest = recursive_agent_contracts::ContentDigest::compute(&bytes).to_string();
     file.seek(std::io::SeekFrom::Start(0))
         .map_err(|error| SandboxError::Io(error.to_string()))?;
     Ok(SeccompPolicy {
