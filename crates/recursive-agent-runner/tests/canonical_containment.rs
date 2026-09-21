@@ -202,7 +202,7 @@ fn filesystem_and_network_attempts_are_denied_or_host_fails_closed() -> TestResu
     }
 
     let network = SandboxSpec {
-        command: "/usr/bin/python3.14".into(),
+        command: "/usr/bin/python3".into(),
         args: vec![
             "-c".into(),
             "import socket; s=socket.socket(); s.settimeout(.2); s.connect(('127.0.0.1',9))".into(),
@@ -251,7 +251,7 @@ fn fixed_printf_is_mandatorily_enforced_on_this_host() -> TestResult {
 #[test]
 fn network_socket_creation_receives_eperm_under_enforcement() -> TestResult {
     let spec = SandboxSpec {
-        command: "/usr/bin/python3.14".into(),
+        command: "/usr/bin/python3".into(),
         args: vec![
             "-c".into(),
             "import errno,socket,sys\ntry:\n socket.socket()\nexcept OSError as e:\n print(e.errno)\n sys.exit(0 if e.errno == errno.EPERM else 3)\nsys.exit(4)".into(),

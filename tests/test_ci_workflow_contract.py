@@ -33,6 +33,9 @@ def test_workflow_runs_canonical_locked_workspace_gates() -> None:
     assert "cargo clippy --locked --workspace --all-targets -- -D warnings" in text
     assert "cargo test --locked --workspace --all-targets --no-fail-fast" in text
     assert "bubblewrap libseccomp-dev strace" in text
+    assert "kernel.apparmor_restrict_unprivileged_userns=0" in text
+    assert "kernel.unprivileged_userns_clone=1" in text
+    assert "bwrap --ro-bind / / -- /usr/bin/true" in text
 
 
 def test_workflow_proves_relocated_sibling_resolution() -> None:
