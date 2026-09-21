@@ -1016,6 +1016,47 @@ pub struct PermitRecordV1 {
     pub outcome_receipt: Option<PermitOutcomeReceiptV1>,
 }
 
+impl PermitRecordV1 {
+    /// Check persisted receipt consistency against this record, not merely each
+    /// receipt's self-digest. This is not authentication against a store writer.
+    fn validate_receipt_bindings(&self) -> Result<(), PolicyError> {
+        let corrupt = || {
+            rejected(
+                &self.permit.permit_id,
+                PermitRejectionReasonV1::StateCorrupted,
+            )
+        };
+        let Some(preflight) = &self.preflight_receipt else {
+            // Legacy consumption has no receipts; never synthesize one on read.
+            return if self.outcome_receipt.is_none() {
+                Ok(())
+            } else {
+                Err(corrupt())
+            };
+        };
+        let PermitStateV1::Consumed { consumed_at } = self.state else {
+            return Err(corrupt());
+        };
+        preflight.validate().map_err(|_| corrupt())?;
+        if preflight.permit_id != self.permit.permit_id
+            || preflight.recorded_at != consumed_at
+            || preflight.evidence != PermitEvidenceV1::from_record(self).map_err(|_| corrupt())?
+        {
+            return Err(corrupt());
+        }
+        if let Some(outcome) = &self.outcome_receipt {
+            outcome.validate().map_err(|_| corrupt())?;
+            if outcome.permit_id != self.permit.permit_id
+                || outcome.preflight_receipt_digest != preflight.receipt_digest
+                || outcome.recorded_at < preflight.recorded_at
+            {
+                return Err(corrupt());
+            }
+        }
+        Ok(())
+    }
+}
+
 /// An Ares-reported effect state. These states record what the executor reports;
 /// they do not assert independently confirmed external reality.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
@@ -2907,6 +2948,7 @@ impl DurablePermitStore {
                 return Err(PolicyError::PermitStateConflict);
             }
             let record: PermitRecordV1 = serde_json::from_slice(&raw)?;
+            record.validate_receipt_bindings()?;
             if state_name(&record.permit.permit_id)? != name
                 || derive_permit_id(&record.permit.identity_material()?)? != record.permit.permit_id
             {
@@ -3072,6 +3114,11 @@ impl DurablePermitStore {
             preflight.validate()?;
             if preflight.receipt_digest != *preflight_receipt_digest {
                 return Err(rejected(permit_id, PermitRejectionReasonV1::WrongAction));
+            }
+            if trusted_now < preflight.recorded_at {
+                return Err(PolicyError::InvalidLease(
+                    "reported outcome precedes permit consumption".into(),
+                ));
             }
             if let Some(existing) = &record.outcome_receipt {
                 existing.validate()?;
@@ -3251,6 +3298,7 @@ impl DurablePermitStore {
         {
             return Err(rejected(permit_id, PermitRejectionReasonV1::StateCorrupted));
         }
+        record.validate_receipt_bindings()?;
         Ok(record)
     }
 
@@ -3259,6 +3307,7 @@ impl DurablePermitStore {
         record: &PermitRecordV1,
         interrupt_after: Option<PermitTransitionStage>,
     ) -> Result<(), PolicyError> {
+        record.validate_receipt_bindings()?;
         let (temp_name, mut file) = create_unique_temp(&self.root, ".permit.tmp")?;
         file.write_all(&jcs_canonical(record)?)?;
         if interrupt_after == Some(PermitTransitionStage::TempWrite) {
