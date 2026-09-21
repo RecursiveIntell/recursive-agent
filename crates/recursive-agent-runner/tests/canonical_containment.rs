@@ -8,6 +8,17 @@ use support::run_spec;
 
 type TestResult = Result<(), Box<dyn std::error::Error>>;
 
+fn canonical_system_python() -> Result<String, Box<dyn std::error::Error>> {
+    let path = std::fs::canonicalize("/usr/bin/python3")?;
+    let text = path.to_str().ok_or_else(|| {
+        std::io::Error::new(
+            std::io::ErrorKind::InvalidData,
+            "canonical system Python path is not UTF-8",
+        )
+    })?;
+    Ok(text.to_owned())
+}
+
 fn shell_spec(script: String) -> SandboxSpec {
     SandboxSpec {
         command: "/usr/bin/bash".into(),
@@ -202,7 +213,7 @@ fn filesystem_and_network_attempts_are_denied_or_host_fails_closed() -> TestResu
     }
 
     let network = SandboxSpec {
-        command: "/usr/bin/python3".into(),
+        command: canonical_system_python()?,
         args: vec![
             "-c".into(),
             "import socket; s=socket.socket(); s.settimeout(.2); s.connect(('127.0.0.1',9))".into(),
@@ -251,7 +262,7 @@ fn fixed_printf_is_mandatorily_enforced_on_this_host() -> TestResult {
 #[test]
 fn network_socket_creation_receives_eperm_under_enforcement() -> TestResult {
     let spec = SandboxSpec {
-        command: "/usr/bin/python3".into(),
+        command: canonical_system_python()?,
         args: vec![
             "-c".into(),
             "import errno,socket,sys\ntry:\n socket.socket()\nexcept OSError as e:\n print(e.errno)\n sys.exit(0 if e.errno == errno.EPERM else 3)\nsys.exit(4)".into(),
