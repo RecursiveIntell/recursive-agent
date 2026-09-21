@@ -223,6 +223,7 @@ fn append_prefix(chain: &mut recursive_agent_ledger::ChainHandle, fixture: &Fixt
         preflight_receipt: None,
         outcome_receipt: None,
         retained_normal_chat_admission: None,
+        normal_chat_settlement: None,
     })?;
     let issued = PermitEvidenceV1::from_record(&PermitRecordV1 {
         permit: fixture.permit.clone(),
@@ -231,6 +232,7 @@ fn append_prefix(chain: &mut recursive_agent_ledger::ChainHandle, fixture: &Fixt
         preflight_receipt: None,
         outcome_receipt: None,
         retained_normal_chat_admission: None,
+        normal_chat_settlement: None,
     })?;
     let consumed = PermitEvidenceV1::from_record(&PermitRecordV1 {
         permit: fixture.permit.clone(),
@@ -241,6 +243,7 @@ fn append_prefix(chain: &mut recursive_agent_ledger::ChainHandle, fixture: &Fixt
         preflight_receipt: None,
         outcome_receipt: None,
         retained_normal_chat_admission: None,
+        normal_chat_settlement: None,
     })?;
     let issued_ref = store.put(
         &serde_json::to_vec(&issued)?,
@@ -317,6 +320,7 @@ fn append_control_revoked(
         preflight_receipt: None,
         outcome_receipt: None,
         retained_normal_chat_admission: None,
+        normal_chat_settlement: None,
     })?;
     let descriptor = chain.artifact_store()?.put(
         &serde_json::to_vec(&evidence)?,
@@ -738,6 +742,7 @@ fn evidence_bytes(permit: &ExecutionPermitV1, state: PermitStateV1) -> TestResul
             preflight_receipt: None,
             outcome_receipt: None,
             retained_normal_chat_admission: None,
+            normal_chat_settlement: None,
         },
     )?)?)
 }

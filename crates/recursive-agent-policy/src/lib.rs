@@ -1019,6 +1019,39 @@ pub struct PermitRecordV1 {
     /// Older closed readers reject records containing this additive field.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub retained_normal_chat_admission: Option<NormalChatAdmissionRequestV1>,
+    /// Immutable native association, not historical access or fresh execution authority.
+    /// Older closed readers reject this field; never downgrade by stripping it.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub normal_chat_settlement: Option<NormalChatSettlementV1>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+pub enum NormalChatSettlementSchemaV1 {
+    #[serde(rename = "recursive-agent.normal-chat-settlement/v1")]
+    V1,
+}
+
+/// Policy-owned association. Runner validates provider bodies; ledger validates
+/// artifact bytes. This is not external confirmation or public replay permission.
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct NormalChatSettlementV1 {
+    pub schema: NormalChatSettlementSchemaV1,
+    pub outcome: PermitOutcomeReceiptV1,
+    pub response: recursive_agent_contracts::ArtifactDescriptorV1,
+    pub observation: recursive_agent_contracts::ArtifactDescriptorV1,
+}
+
+/// Native continuation minted only by successful current-policy consumption.
+/// Non-serializable and not reconstructible from a receipt. This confines typed
+/// native composition; it is NOT isolation from malicious code or store writers.
+/// Loss before settlement leaves consumption unresolved, never retry-authorized.
+pub struct NormalChatConsumption {
+    permit_id: CurrentPermitId,
+    preflight_digest: ContentDigest,
+    run_identity: (u64, u64),
+    // Keeps the consumed directory inode alive, preventing identity reuse.
+    permit_root: Arc<File>,
 }
 
 impl PermitRecordV1 {
@@ -2753,6 +2786,7 @@ impl DurablePermitStore {
                 preflight_receipt: None,
                 outcome_receipt: None,
                 retained_normal_chat_admission: None,
+                normal_chat_settlement: None,
             })?;
             let record = PermitRecordV1 {
                 permit: permit.clone(),
@@ -2761,6 +2795,7 @@ impl DurablePermitStore {
                 preflight_receipt: None,
                 outcome_receipt: None,
                 retained_normal_chat_admission: None,
+                normal_chat_settlement: None,
             };
             let existing_child = match self.read_record(&permit.permit_id) {
                 Ok(existing) if existing == record => Some(existing),
@@ -2993,8 +3028,23 @@ impl DurablePermitStore {
         admission: &ValidatedNormalChatAdmissionV1,
         call: &ToolCallSpecV1,
         verifier: &dyn NormalChatAdmissionVerifier,
-        mut trusted_clock: impl FnMut() -> DateTime<Utc>,
+        trusted_clock: impl FnMut() -> DateTime<Utc>,
     ) -> Result<PermitEvidenceV1, PolicyError> {
+        self.consume_normal_chat_for_execution(permit_id, admission, call, verifier, trusted_clock)
+            .map(|(evidence, _continuation)| evidence)
+    }
+
+    /// Continue the successful consumption into native outcome association.
+    /// The trusted native executor must validate published bodies before settling;
+    /// callers cannot recover this handle from legacy consumption or disk.
+    pub fn consume_normal_chat_for_execution(
+        &self,
+        permit_id: &CurrentPermitId,
+        admission: &ValidatedNormalChatAdmissionV1,
+        call: &ToolCallSpecV1,
+        verifier: &dyn NormalChatAdmissionVerifier,
+        mut trusted_clock: impl FnMut() -> DateTime<Utc>,
+    ) -> Result<(PermitEvidenceV1, NormalChatConsumption), PolicyError> {
         self.with_lock(|| {
             // Waiting for the process/thread lock may outlive admission validity.
             // Sample inside the critical section, never reuse a pre-wait instant.
@@ -3056,8 +3106,19 @@ impl DurablePermitStore {
                 final_now,
             )?);
             record.retained_normal_chat_admission = Some(current.request.clone());
+            let continuation = NormalChatConsumption {
+                permit_id: permit_id.clone(),
+                preflight_digest: record
+                    .preflight_receipt
+                    .as_ref()
+                    .ok_or(PolicyError::PermitStateConflict)?
+                    .receipt_digest
+                    .clone(),
+                run_identity: self.run_root_identity(),
+                permit_root: Arc::clone(&self.root),
+            };
             self.replace_record(&record, None)?;
-            Ok(evidence)
+            Ok((evidence, continuation))
         })
     }
 
@@ -3102,6 +3163,52 @@ impl DurablePermitStore {
             record.preflight_receipt = Some(receipt.clone());
             self.replace_record(&record, None)?;
             Ok(receipt)
+        })
+    }
+
+    /// Associate the trusted native executor's validated publication exactly once.
+    /// This does not inspect artifact bytes or authorize historical disclosure.
+    /// Idempotence returns the persisted record (not bytes) with no new timestamp.
+    pub fn settle_normal_chat(
+        &self,
+        continuation: &NormalChatConsumption,
+        response: &recursive_agent_contracts::ArtifactDescriptorV1,
+        observation: &recursive_agent_contracts::ArtifactDescriptorV1,
+    ) -> Result<NormalChatSettlementV1, PolicyError> {
+        let held = directory_identity(&continuation.permit_root)?;
+        if continuation.run_identity != self.run_root_identity()
+            || (held.0, held.1) != (self.permit_root_device, self.permit_root_inode)
+        {
+            return Err(PolicyError::PermitStateConflict);
+        }
+        self.with_lock(|| {
+            let mut record = self.read_record_or_reject(&continuation.permit_id)?;
+            let preflight = record
+                .preflight_receipt
+                .as_ref()
+                .ok_or(PolicyError::PermitStateConflict)?;
+            if preflight.receipt_digest != continuation.preflight_digest {
+                return Err(PolicyError::PermitStateConflict);
+            }
+            let proposed = NormalChatSettlementV1 {
+                schema: NormalChatSettlementSchemaV1::V1,
+                outcome: record
+                    .outcome_receipt
+                    .clone()
+                    .ok_or(PolicyError::PermitStateConflict)?,
+                response: response.clone(),
+                observation: observation.clone(),
+            };
+            if let Some(existing) = &record.normal_chat_settlement {
+                return if *existing == proposed {
+                    Ok(existing.clone())
+                } else {
+                    Err(PolicyError::PermitStateConflict)
+                };
+            }
+            record.normal_chat_settlement = Some(proposed.clone());
+            self.replace_record(&record, None)?;
+            Ok(proposed)
         })
     }
 
@@ -3315,8 +3422,15 @@ impl DurablePermitStore {
     fn validate_record_bindings(&self, record: &PermitRecordV1) -> Result<(), PolicyError> {
         record.validate_receipt_bindings()?;
         let Some(admission) = &record.retained_normal_chat_admission else {
-            // Legacy records remain readable, without synthesizing replay evidence.
-            return Ok(());
+            // Legacy records remain readable, never settlement/replay eligible.
+            return if record.normal_chat_settlement.is_none() {
+                Ok(())
+            } else {
+                Err(rejected(
+                    &record.permit.permit_id,
+                    PermitRejectionReasonV1::StateCorrupted,
+                ))
+            };
         };
         let corrupt = || {
             rejected(
@@ -3354,6 +3468,32 @@ impl DurablePermitStore {
             .attempts
             .get(&attempt.attempt_number)
             .ok_or_else(corrupt)?;
+        if let Some(settlement) = &record.normal_chat_settlement {
+            let outcome = record.outcome_receipt.as_ref().ok_or_else(corrupt)?;
+            if settlement.outcome != *outcome
+                || outcome.reported.state != ReportedEffectStateV1::Succeeded
+                || outcome.reported.duration_ms > binding.budget.max_wall_time_ms
+            {
+                return Err(corrupt());
+            }
+            for descriptor in [&settlement.response, &settlement.observation] {
+                descriptor.validate().map_err(|_| corrupt())?;
+                if descriptor.media_type != "application/json"
+                    || descriptor.encoding.is_some()
+                    || descriptor.byte_length == 0
+                {
+                    return Err(corrupt());
+                }
+            }
+            if settlement
+                .response
+                .byte_length
+                .checked_add(settlement.observation.byte_length)
+                .map_or(true, |bytes| bytes > binding.budget.max_artifact_bytes)
+            {
+                return Err(corrupt());
+            }
+        }
         if family.operation_digest != content_digest(&attempt.operation).map_err(|_| corrupt())?
             || family.max_attempts != attempt.operation.budget.max_attempts
             || reservation.attempt_id != attempt.attempt_id

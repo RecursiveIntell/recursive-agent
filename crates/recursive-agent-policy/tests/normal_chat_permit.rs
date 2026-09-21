@@ -110,6 +110,9 @@ enum RetentionProbe {
     WrongLane,
     MissingFamily,
     WrongFamily,
+    Settlement,
+    SettlementAmbiguous,
+    SettlementFailed,
 }
 
 macro_rules! retention_test {
@@ -121,6 +124,15 @@ macro_rules! retention_test {
     };
 }
 
+retention_test!(
+    native_settlement_is_consumption_bound_immutable_and_checked,
+    Settlement
+);
+retention_test!(
+    native_settlement_refuses_ambiguous_outcome,
+    SettlementAmbiguous
+);
+retention_test!(native_settlement_refuses_failed_outcome, SettlementFailed);
 retention_test!(retained_admission_survives_owner_restart, Restart);
 retention_test!(legacy_record_does_not_synthesize_retained_admission, Legacy);
 retention_test!(retained_admission_rejects_argument_substitution, Arguments);
@@ -586,7 +598,7 @@ fn run_fixture_with_retention(
         assert_eq!(clock_reads, 2);
     }
     // Denied recheck leaves the record issued, so current policy can still consume it.
-    let consumed = store.consume_normal_chat(
+    let (consumed, continuation) = store.consume_normal_chat_for_execution(
         &permit.permit_id,
         &admission,
         &call,
@@ -598,6 +610,169 @@ fn run_fixture_with_retention(
         PermitEvidenceStateV1::Consumed { .. }
     ));
     assert!(consumed.binding.effect.network_allowed);
+    if matches!(
+        retention,
+        Some(
+            RetentionProbe::Settlement
+                | RetentionProbe::SettlementAmbiguous
+                | RetentionProbe::SettlementFailed
+        )
+    ) {
+        let descriptor = |bytes: &[u8]| -> Result<
+            recursive_agent_contracts::ArtifactDescriptorV1,
+            Box<dyn std::error::Error>,
+        > {
+            Ok(recursive_agent_contracts::ArtifactDescriptorV1 {
+                owner_id: recursive_agent_contracts::derive_artifact_id(bytes)?,
+                digest: ContentDigest::compute(bytes),
+                byte_length: bytes.len() as u64,
+                media_type: "application/json".into(),
+                encoding: None,
+            })
+        };
+        // Policy checks association, not artifact bodies (runner/ledger own those).
+        let mut response = descriptor(b"response")?;
+        let observation = descriptor(b"observation")?;
+        assert!(store
+            .settle_normal_chat(&continuation, &response, &observation)
+            .is_err());
+        let preflight = store.normal_chat_preflight(&permit.permit_id)?;
+        store.record_reported_outcome(
+            &permit.permit_id,
+            &preflight.receipt_digest,
+            recursive_agent_policy::ReportedEffectOutcomeV1 {
+                state: match retention {
+                    Some(RetentionProbe::SettlementAmbiguous) => {
+                        recursive_agent_policy::ReportedEffectStateV1::OutcomeAmbiguous
+                    }
+                    Some(RetentionProbe::SettlementFailed) => {
+                        recursive_agent_policy::ReportedEffectStateV1::Failed
+                    }
+                    _ => recursive_agent_policy::ReportedEffectStateV1::Succeeded,
+                },
+                duration_ms: 1,
+                error_type: None,
+            },
+            dispatch_time,
+        )?;
+        if matches!(
+            retention,
+            Some(RetentionProbe::SettlementAmbiguous | RetentionProbe::SettlementFailed)
+        ) {
+            assert!(store
+                .settle_normal_chat(&continuation, &response, &observation)
+                .is_err());
+            assert!(store
+                .state(&permit.permit_id)?
+                .normal_chat_settlement
+                .is_none());
+            return Ok(());
+        }
+        let other = tempfile::tempdir()?;
+        assert!(open_store(other.path())?
+            .settle_normal_chat(&continuation, &response, &observation)
+            .is_err());
+        let mut oversize = response.clone();
+        oversize.byte_length = u64::MAX;
+        assert!(store
+            .settle_normal_chat(&continuation, &oversize, &observation)
+            .is_err());
+        let mut encoded = response.clone();
+        encoded.encoding = Some("gzip".into());
+        assert!(store
+            .settle_normal_chat(&continuation, &encoded, &observation)
+            .is_err());
+        // Competing first settlements: exactly one durable association wins.
+        let contender = descriptor(b"second response")?;
+        let independent = open_store(root.path())?;
+        let (first, second) =
+            std::thread::scope(|scope| -> Result<_, Box<dyn std::error::Error>> {
+                let a = scope
+                    .spawn(|| store.settle_normal_chat(&continuation, &response, &observation));
+                let b = scope.spawn(|| {
+                    independent.settle_normal_chat(&continuation, &contender, &observation)
+                });
+                Ok((
+                    a.join().map_err(|_| "first settlement panicked")?,
+                    b.join().map_err(|_| "second settlement panicked")?,
+                ))
+            })?;
+        match (first, second) {
+            (Ok(_), Err(PolicyError::PermitStateConflict)) => {}
+            (Err(PolicyError::PermitStateConflict), Ok(_)) => response = contender,
+            _ => return Err("competing settlements did not have exactly one winner".into()),
+        }
+        let accepted = store.settle_normal_chat(&continuation, &response, &observation)?;
+        let reopened = open_store(root.path())?;
+        assert_eq!(
+            accepted,
+            reopened.settle_normal_chat(&continuation, &response, &observation)?
+        );
+        assert_eq!(
+            reopened.state(&permit.permit_id)?.normal_chat_settlement,
+            Some(accepted.clone())
+        );
+        let other_response = descriptor(b"different valid response")?;
+        assert!(matches!(
+            store.settle_normal_chat(&continuation, &other_response, &observation),
+            Err(PolicyError::PermitStateConflict)
+        ));
+        std::thread::scope(|scope| -> Result<(), Box<dyn std::error::Error>> {
+            let a =
+                scope.spawn(|| store.settle_normal_chat(&continuation, &response, &observation));
+            let b = scope.spawn(|| {
+                reopened.settle_normal_chat(&continuation, &other_response, &observation)
+            });
+            assert_eq!(a.join().map_err(|_| "settlement thread failed")??, accepted);
+            assert!(matches!(
+                b.join().map_err(|_| "settlement thread failed")?,
+                Err(PolicyError::PermitStateConflict)
+            ));
+            Ok(())
+        })?;
+        let mut target = None;
+        for entry in std::fs::read_dir(root.path())? {
+            let entry = entry?;
+            let name = entry.file_name().to_string_lossy().into_owned();
+            if name.starts_with("permit-") && name.ends_with(".json") {
+                let value: serde_json::Value =
+                    serde_json::from_slice(&std::fs::read(entry.path())?)?;
+                if value["permit"]["permit_id"] == serde_json::to_value(&permit.permit_id)? {
+                    target = Some(entry.path());
+                }
+            }
+        }
+        let target = target.ok_or("missing permit record")?;
+        let original = std::fs::read(&target)?;
+        for mode in 0..6 {
+            let mut changed: serde_json::Value = serde_json::from_slice(&original)?;
+            match mode {
+                0 => {
+                    changed["normal_chat_settlement"]["schema"] =
+                        "recursive-agent.normal-chat-settlement/v0".into()
+                }
+                1 => changed["retained_normal_chat_admission"] = serde_json::Value::Null,
+                2 => changed["outcome_receipt"] = serde_json::Value::Null,
+                3 => changed["normal_chat_settlement"]["extra"] = true.into(),
+                4 => {
+                    changed["normal_chat_settlement"]["outcome"]["preflight_receipt_digest"] =
+                        serde_json::to_value(content_digest(&"wrong")?)?
+                }
+                _ => changed["normal_chat_settlement"]["response"]["byte_length"] = u64::MAX.into(),
+            }
+            std::fs::write(&target, serde_json::to_vec(&changed)?)?;
+            assert!(
+                reopened.state(&permit.permit_id).is_err(),
+                "tamper mode {mode}"
+            );
+        }
+        std::fs::write(&target, original)?;
+        assert_eq!(
+            reopened.state(&permit.permit_id)?.normal_chat_settlement,
+            Some(accepted)
+        );
+        return Ok(());
+    }
     if let Some(probe) = retention {
         drop(store);
         let reopened = open_store(root.path())?;
@@ -682,7 +857,10 @@ fn run_fixture_with_retention(
                 std::fs::write(&path, serde_json::to_vec(&family)?)?;
             }
             RetentionProbe::WrongLane => {}
-            RetentionProbe::Restart => unreachable!(),
+            RetentionProbe::Restart
+            | RetentionProbe::Settlement
+            | RetentionProbe::SettlementAmbiguous
+            | RetentionProbe::SettlementFailed => unreachable!(),
         }
         if !matches!(probe, RetentionProbe::Legacy) {
             changed["retained_normal_chat_admission"] = serde_json::to_value(changed_admission)?;
