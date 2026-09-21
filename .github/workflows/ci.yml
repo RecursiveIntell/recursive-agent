@@ -1,0 +1,145 @@
+name: Recursive Agent paired-root CI
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: recursive-agent-paired-root-${{ github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+env:
+  LIBRARIES_SHA: 6b55d85fb9ebf4ed5b5228f4d33f2cf7bc393f6a
+  CARGO_BUILD_JOBS: "2"
+  CARGO_TERM_COLOR: always
+  CARGO_NET_OFFLINE: "false"
+  CARGO_TARGET_X86_64_UNKNOWN_LINUX_GNU_RUNNER: /usr/bin/env
+
+jobs:
+  paired-root:
+    name: Paired root
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    steps:
+      - name: Checkout recursive-agent source
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          ref: ${{ github.sha }}
+          fetch-depth: 1
+          path: recursive-agent
+
+      - name: Checkout the exact Libraries source owner
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          repository: RecursiveIntell/Libraries
+          ref: 6b55d85fb9ebf4ed5b5228f4d33f2cf7bc393f6a
+          fetch-depth: 1
+          path: Libraries
+
+      - name: Verify paired source identity and dependency topology
+        env:
+          EXPECTED_RECURSIVE_AGENT_SHA: ${{ github.sha }}
+        run: |
+          set -euo pipefail
+          actual_recursive_agent="$(git -C recursive-agent rev-parse HEAD)"
+          if [ "$actual_recursive_agent" != "$EXPECTED_RECURSIVE_AGENT_SHA" ]; then
+            printf 'recursive-agent SHA mismatch: expected %s, got %s\n' "$EXPECTED_RECURSIVE_AGENT_SHA" "$actual_recursive_agent" >&2
+            exit 1
+          fi
+          actual_libraries="$(git -C Libraries rev-parse HEAD)"
+          if [ "$actual_libraries" != "$LIBRARIES_SHA" ]; then
+            printf 'Libraries SHA mismatch: expected %s, got %s\n' "$LIBRARIES_SHA" "$actual_libraries" >&2
+            exit 1
+          fi
+          python3 - <<'PY'
+          import json
+          import pathlib
+          import subprocess
+
+          root = pathlib.Path("recursive-agent")
+          manifests = sorted(root.rglob("Cargo.toml"))
+          if not manifests:
+              raise SystemExit("no recursive-agent Cargo manifests found")
+          forbidden = ("/home/", "~/", "file://")
+          for manifest in manifests:
+              text = manifest.read_text(encoding="utf-8")
+              if any(token in text for token in forbidden):
+                  raise SystemExit(f"absolute dependency path in {manifest}")
+          root_manifest = (root / "Cargo.toml").read_text(encoding="utf-8")
+          if 'path = "../Libraries/' not in root_manifest:
+              raise SystemExit("recursive-agent must retain sibling path dependencies")
+          result = subprocess.run(
+              ["cargo", "metadata", "--locked", "--format-version", "1", "--no-deps"],
+              cwd=root,
+              check=True,
+              capture_output=True,
+              text=True,
+          )
+          metadata = json.loads(result.stdout)
+          if not metadata.get("packages"):
+              raise SystemExit("cargo metadata returned no packages")
+          print(f"paired metadata packages={len(metadata['packages'])}")
+          PY
+
+      - name: Install native test dependencies
+        run: |
+          set -euo pipefail
+          sudo apt-get update
+          sudo apt-get install --no-install-recommends -y bubblewrap libseccomp-dev strace
+
+      - name: Admit Bubblewrap on the ephemeral hosted runner
+        run: |
+          set -euo pipefail
+          if sysctl -n kernel.apparmor_restrict_unprivileged_userns >/dev/null 2>&1; then
+            sudo sysctl -w kernel.apparmor_restrict_unprivileged_userns=0
+          fi
+          if sysctl -n kernel.unprivileged_userns_clone >/dev/null 2>&1; then
+            sudo sysctl -w kernel.unprivileged_userns_clone=1
+          fi
+          bwrap --ro-bind / / -- /usr/bin/true
+
+      - name: Run canonical paired-root gates
+        working-directory: recursive-agent
+        run: |
+          set -euo pipefail
+          cargo metadata --locked --format-version 1 --no-deps >/dev/null
+          cargo fmt --all -- --check
+          cargo check --locked --workspace
+          cargo clippy --locked --workspace --all-targets -- -D warnings
+          cargo test --locked --workspace --all-targets --no-fail-fast
+
+      - name: Verify the same pair from a relocated root
+        run: |
+          set -euo pipefail
+          mkdir -p relocated
+          cp -a recursive-agent relocated/recursive-agent
+          cp -a Libraries relocated/Libraries
+          relocated_sha="$(git -C relocated/Libraries rev-parse HEAD)"
+          if [ "$relocated_sha" != "$LIBRARIES_SHA" ]; then
+            printf 'relocated Libraries SHA mismatch: expected %s, got %s\n' "$LIBRARIES_SHA" "$relocated_sha" >&2
+            exit 1
+          fi
+          cargo metadata --locked --format-version 1 \
+            --manifest-path relocated/recursive-agent/Cargo.toml >/dev/null
+
+  all-required:
+    name: All required checks pass
+    needs: paired-root
+    if: always()
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - name: Require the paired-root gate
+        env:
+          PAIRED_ROOT_RESULT: ${{ needs.paired-root.result }}
+        run: |
+          set -euo pipefail
+          if [ "$PAIRED_ROOT_RESULT" != success ]; then
+            printf 'paired-root gate did not succeed: %s\n' "$PAIRED_ROOT_RESULT" >&2
+            exit 1
+          fi
