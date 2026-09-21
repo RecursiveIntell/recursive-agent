@@ -25,13 +25,14 @@ def test_workflow_uses_immutable_paired_sources_and_sibling_topology() -> None:
 def test_workflow_runs_canonical_locked_workspace_gates() -> None:
     text = workflow_text()
     assert 'CARGO_BUILD_JOBS: "2"' in text
+    assert "CARGO_TARGET_X86_64_UNKNOWN_LINUX_GNU_RUNNER: /usr/bin/env" in text
     assert "timeout-minutes: 45" in text
     assert "cargo metadata --locked --format-version 1 --no-deps" in text
     assert "cargo fmt --all -- --check" in text
     assert "cargo check --locked --workspace" in text
     assert "cargo clippy --locked --workspace --all-targets -- -D warnings" in text
     assert "cargo test --locked --workspace --all-targets --no-fail-fast" in text
-    assert "bubblewrap libseccomp-dev" in text
+    assert "bubblewrap libseccomp-dev strace" in text
 
 
 def test_workflow_proves_relocated_sibling_resolution() -> None:
@@ -39,6 +40,8 @@ def test_workflow_proves_relocated_sibling_resolution() -> None:
     assert "cp -a recursive-agent relocated/recursive-agent" in text
     assert "cp -a Libraries relocated/Libraries" in text
     assert "--manifest-path relocated/recursive-agent/Cargo.toml" in text
+    relocated = text.split("Verify the same pair from a relocated root", 1)[1]
+    assert "--no-deps" not in relocated
 
 
 def test_workflow_does_not_depend_on_host_user_systemd_mutation() -> None:

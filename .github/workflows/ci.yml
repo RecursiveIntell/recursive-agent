@@ -18,6 +18,7 @@ env:
   CARGO_BUILD_JOBS: "2"
   CARGO_TERM_COLOR: always
   CARGO_NET_OFFLINE: "false"
+  CARGO_TARGET_X86_64_UNKNOWN_LINUX_GNU_RUNNER: /usr/bin/env
 
 jobs:
   paired-root:
@@ -89,7 +90,7 @@ jobs:
         run: |
           set -euo pipefail
           sudo apt-get update
-          sudo apt-get install --no-install-recommends -y bubblewrap libseccomp-dev
+          sudo apt-get install --no-install-recommends -y bubblewrap libseccomp-dev strace
 
       - name: Run canonical paired-root gates
         working-directory: recursive-agent
@@ -112,7 +113,7 @@ jobs:
             printf 'relocated Libraries SHA mismatch: expected %s, got %s\n' "$LIBRARIES_SHA" "$relocated_sha" >&2
             exit 1
           fi
-          cargo metadata --locked --format-version 1 --no-deps \
+          cargo metadata --locked --format-version 1 \
             --manifest-path relocated/recursive-agent/Cargo.toml >/dev/null
 
   all-required:
