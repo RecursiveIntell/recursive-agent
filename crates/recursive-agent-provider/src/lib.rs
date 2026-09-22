@@ -4,6 +4,8 @@
 //! secret bytes exist only while constructing the sensitive authorization
 //! header and are never formatted, serialized, or included in provider errors.
 
+use std::io::Read;
+
 use serde::{Deserialize, Deserializer, Serialize};
 use thiserror::Error;
 use url::Url;
@@ -756,6 +758,8 @@ pub enum ProviderError {
     Http { operation: &'static str },
     #[error("provider returned non-success status {status}")]
     HttpStatus { status: u16 },
+    #[error("provider response body exceeds {maximum_bytes} bytes")]
+    ResponseBodyTooLarge { maximum_bytes: usize },
     #[error("provider execution is unavailable in Phase 1")]
     Unavailable,
     #[error("malformed provider response: {0}")]
@@ -888,6 +892,41 @@ fn map_credential_error(error: CredentialResolveError) -> ProviderError {
     }
 }
 
+/// Maximum successful HTTP response input admitted before JSON parsing.
+/// This is a transport bound, not a schema or tool-argument authorization.
+pub const MAX_PROVIDER_RESPONSE_BYTES: usize = 1 << 20;
+
+fn decode_bounded_response_json(
+    response: reqwest::blocking::Response,
+) -> Result<serde_json::Value, ProviderError> {
+    let oversized = || ProviderError::ResponseBodyTooLarge {
+        maximum_bytes: MAX_PROVIDER_RESPONSE_BYTES,
+    };
+    if response
+        .content_length()
+        .is_some_and(|n| n > MAX_PROVIDER_RESPONSE_BYTES as u64)
+    {
+        return Err(oversized());
+    }
+    // Do not trust Content-Length: chunked/close-delimited bodies use the same
+    // cap, with exactly one extra byte to distinguish the limit from overflow.
+    let mut body = Vec::new();
+    response
+        .take(MAX_PROVIDER_RESPONSE_BYTES as u64 + 1)
+        .read_to_end(&mut body)
+        .map_err(|_| ProviderError::Http {
+            operation: "response_read",
+        })?;
+    if body.len() > MAX_PROVIDER_RESPONSE_BYTES {
+        return Err(oversized());
+    }
+    let malformed = || ProviderError::Malformed("provider response JSON is invalid".into());
+    let input = std::str::from_utf8(&body).map_err(|_| malformed())?;
+    // The canonical owner detects recursive decoded-key duplicates before map
+    // insertion. No lossy parse/re-serialization or canonical-version switch.
+    boundary_compiler::parse_and_validate(input).map_err(|_| malformed())
+}
+
 fn decode_openai_response(
     model: &str,
     response: reqwest::blocking::Response,
@@ -898,9 +937,7 @@ fn decode_openai_response(
             status: status.as_u16(),
         });
     }
-    let raw = response
-        .json::<serde_json::Value>()
-        .map_err(|error| ProviderError::Malformed(error.to_string()))?;
+    let raw = decode_bounded_response_json(response)?;
     let text = raw
         .get("choices")
         .and_then(|choices| choices.get(0))
@@ -953,9 +990,7 @@ impl CompletionBackend for HttpCompletionBackend {
                         status: status.as_u16(),
                     });
                 }
-                let raw = response
-                    .json::<serde_json::Value>()
-                    .map_err(|error| ProviderError::Malformed(error.to_string()))?;
+                let raw = decode_bounded_response_json(response)?;
                 let text = raw
                     .get("response")
                     .and_then(serde_json::Value::as_str)
@@ -1005,9 +1040,7 @@ impl CompletionBackend for HttpCompletionBackend {
                         status: status.as_u16(),
                     });
                 }
-                let raw = response
-                    .json::<serde_json::Value>()
-                    .map_err(|error| ProviderError::Malformed(error.to_string()))?;
+                let raw = decode_bounded_response_json(response)?;
                 let text = raw
                     .get("choices")
                     .and_then(|choices| choices.get(0))

@@ -403,3 +403,293 @@ fn unissued_parent_lease_is_rejected() -> TestResult {
     assert!(store.issue(&child, now()).is_err());
     Ok(())
 }
+
+fn reported_success() -> recursive_agent_policy::ReportedEffectOutcomeV1 {
+    recursive_agent_policy::ReportedEffectOutcomeV1 {
+        state: recursive_agent_policy::ReportedEffectStateV1::Succeeded,
+        duration_ms: 1,
+        error_type: None,
+    }
+}
+
+fn receipt_record(
+    store: &DurablePermitStore,
+    actor: &str,
+    with_outcome: bool,
+) -> Result<recursive_agent_policy::PermitRecordV1, Box<dyn std::error::Error>> {
+    let mut binding = binding()?;
+    binding.actor = ActorPrincipalV1::try_new(actor)?;
+    let permit = store.issue(&binding, now())?;
+    let preflight = store.consume_with_preflight(&permit.permit_id, &binding, now())?;
+    if with_outcome {
+        store.record_reported_outcome(
+            &permit.permit_id,
+            &preflight.receipt_digest,
+            reported_success(),
+            now() + TimeDelta::seconds(1),
+        )?;
+    }
+    Ok(store.state(&permit.permit_id)?)
+}
+
+// Corruption fixtures only: locate a real owner-issued record in the TempDir.
+fn record_path(
+    root: &std::path::Path,
+    record: &recursive_agent_policy::PermitRecordV1,
+) -> Result<std::path::PathBuf, Box<dyn std::error::Error>> {
+    for entry in std::fs::read_dir(root)? {
+        let path = entry?.path();
+        if path
+            .extension()
+            .is_some_and(|extension| extension == "json")
+        {
+            let stored: recursive_agent_policy::PermitRecordV1 =
+                serde_json::from_slice(&std::fs::read(&path)?)?;
+            if stored.permit.permit_id == record.permit.permit_id {
+                return Ok(path);
+            }
+        }
+    }
+    Err("test-owned permit record not found".into())
+}
+
+fn assert_corrupt_record_rejected(
+    root: &std::path::Path,
+    record: recursive_agent_policy::PermitRecordV1,
+) -> TestResult {
+    let path = record_path(root, &record)?;
+    let bytes = serde_json::to_vec(&record)?;
+    std::fs::write(&path, &bytes)?;
+    let reopened = open_store(root)?;
+    let permit_id = &record.permit.permit_id;
+    let digest = record.preflight_receipt.as_ref().map_or_else(
+        || content_digest(&"missing preflight"),
+        |preflight| Ok(preflight.receipt_digest.clone()),
+    )?;
+    for error in [
+        reopened.state(permit_id).err(),
+        reopened.normal_chat_preflight(permit_id).err(),
+        reopened
+            .record_reported_outcome(permit_id, &digest, reported_success(), now())
+            .err(),
+    ] {
+        assert_eq!(
+            rejection(error.ok_or("corrupt record was accepted")?)?,
+            PermitRejectionReasonV1::StateCorrupted
+        );
+    }
+    assert_eq!(
+        std::fs::read(&path)?,
+        bytes,
+        "readback must not repair history"
+    );
+    Ok(())
+}
+
+#[test]
+fn receipt_readback_rejects_same_root_preflight_substitution() -> TestResult {
+    let root = tempfile::tempdir()?;
+    let store = open_store(root.path())?;
+    let mut selected = receipt_record(&store, "actor:selected", false)?;
+    let other = receipt_record(&store, "actor:other", false)?;
+    other
+        .preflight_receipt
+        .as_ref()
+        .ok_or("missing preflight")?
+        .validate()?;
+    selected.preflight_receipt = other.preflight_receipt;
+    assert_corrupt_record_rejected(root.path(), selected)
+}
+
+#[test]
+fn receipt_readback_rejects_same_root_outcome_substitution() -> TestResult {
+    let root = tempfile::tempdir()?;
+    let store = open_store(root.path())?;
+    let mut selected = receipt_record(&store, "actor:selected", true)?;
+    let other = receipt_record(&store, "actor:other", true)?;
+    other
+        .outcome_receipt
+        .as_ref()
+        .ok_or("missing outcome")?
+        .validate()?;
+    selected.outcome_receipt = other.outcome_receipt;
+    assert_corrupt_record_rejected(root.path(), selected)
+}
+
+#[test]
+fn receipt_readback_rejects_outcome_without_preflight() -> TestResult {
+    let root = tempfile::tempdir()?;
+    let store = open_store(root.path())?;
+    let mut selected = receipt_record(&store, "actor:selected", true)?;
+    selected.preflight_receipt = None;
+    assert_corrupt_record_rejected(root.path(), selected)
+}
+
+#[test]
+fn receipt_readback_rejects_bad_receipt_digests() -> TestResult {
+    for preflight in [true, false] {
+        let root = tempfile::tempdir()?;
+        let store = open_store(root.path())?;
+        let mut selected = receipt_record(&store, "actor:selected", true)?;
+        if preflight {
+            selected
+                .preflight_receipt
+                .as_mut()
+                .ok_or("missing preflight")?
+                .receipt_digest = content_digest(&"bad preflight")?;
+        } else {
+            selected
+                .outcome_receipt
+                .as_mut()
+                .ok_or("missing outcome")?
+                .receipt_digest = content_digest(&"bad outcome")?;
+        }
+        assert_corrupt_record_rejected(root.path(), selected)?;
+    }
+    Ok(())
+}
+
+#[test]
+fn receipt_readback_rejects_preflight_in_nonconsumed_states() -> TestResult {
+    for state in [
+        PermitStateV1::Issued,
+        PermitStateV1::Revoked {
+            revoked_at: now(),
+            reason: PermitRevocationReasonV1::Operator,
+        },
+    ] {
+        let root = tempfile::tempdir()?;
+        let store = open_store(root.path())?;
+        let mut selected = receipt_record(&store, "actor:selected", false)?;
+        selected.state = state;
+        assert_corrupt_record_rejected(root.path(), selected)?;
+    }
+    Ok(())
+}
+
+#[test]
+fn receipt_readback_rejects_rehashed_preflight_timestamp_or_evidence() -> TestResult {
+    for change_recorded_at in [true, false] {
+        let root = tempfile::tempdir()?;
+        let store = open_store(root.path())?;
+        let mut selected = receipt_record(&store, "actor:selected", false)?;
+        let preflight = selected
+            .preflight_receipt
+            .as_mut()
+            .ok_or("missing preflight")?;
+        if change_recorded_at {
+            preflight.recorded_at += TimeDelta::seconds(1);
+        } else {
+            preflight.evidence.state = recursive_agent_policy::PermitEvidenceStateV1::Consumed {
+                at: now() + TimeDelta::seconds(1),
+            };
+        }
+        preflight.receipt_digest = content_digest(&(
+            &preflight.permit_id,
+            &preflight.evidence,
+            preflight.recorded_at,
+        ))?;
+        preflight.validate()?;
+        assert_corrupt_record_rejected(root.path(), selected)?;
+    }
+    Ok(())
+}
+
+#[test]
+fn receipt_readback_rejects_rehashed_outcome_link_or_time() -> TestResult {
+    for change_link in [true, false] {
+        let root = tempfile::tempdir()?;
+        let store = open_store(root.path())?;
+        let mut selected = receipt_record(&store, "actor:selected", true)?;
+        let outcome = selected.outcome_receipt.as_mut().ok_or("missing outcome")?;
+        if change_link {
+            outcome.preflight_receipt_digest = content_digest(&"other preflight")?;
+        } else {
+            outcome.recorded_at = now() - TimeDelta::seconds(1);
+        }
+        outcome.receipt_digest = content_digest(&(
+            &outcome.permit_id,
+            &outcome.preflight_receipt_digest,
+            &outcome.reported,
+            outcome.recorded_at,
+        ))?;
+        outcome.validate()?;
+        assert_corrupt_record_rejected(root.path(), selected)?;
+    }
+    Ok(())
+}
+
+#[test]
+fn receipt_outcome_refuses_clock_regression_without_writing() -> TestResult {
+    let root = tempfile::tempdir()?;
+    let store = open_store(root.path())?;
+    let selected = receipt_record(&store, "actor:selected", false)?;
+    let preflight = selected
+        .preflight_receipt
+        .as_ref()
+        .ok_or("missing preflight")?;
+    let path = record_path(root.path(), &selected)?;
+    let before = std::fs::read(&path)?;
+    assert!(store
+        .record_reported_outcome(
+            &selected.permit.permit_id,
+            &preflight.receipt_digest,
+            reported_success(),
+            now() - TimeDelta::seconds(1),
+        )
+        .is_err());
+    assert_eq!(std::fs::read(&path)?, before);
+    Ok(())
+}
+
+#[test]
+fn receipt_roundtrip_preserves_idempotency_and_legacy_consumption() -> TestResult {
+    let root = tempfile::tempdir()?;
+    let store = open_store(root.path())?;
+    let selected = receipt_record(&store, "actor:selected", true)?;
+    let reopened = open_store(root.path())?;
+    assert_eq!(reopened.state(&selected.permit.permit_id)?, selected);
+    let preflight = selected
+        .preflight_receipt
+        .as_ref()
+        .ok_or("missing preflight")?;
+    let outcome = selected.outcome_receipt.as_ref().ok_or("missing outcome")?;
+    assert_eq!(
+        reopened.record_reported_outcome(
+            &selected.permit.permit_id,
+            &preflight.receipt_digest,
+            outcome.reported.clone(),
+            outcome.recorded_at,
+        )?,
+        *outcome
+    );
+    assert!(matches!(
+        reopened.record_reported_outcome(
+            &selected.permit.permit_id,
+            &preflight.receipt_digest,
+            outcome.reported.clone(),
+            outcome.recorded_at + TimeDelta::seconds(1),
+        ),
+        Err(PolicyError::PermitStateConflict)
+    ));
+    assert_eq!(reopened.state(&selected.permit.permit_id)?, selected);
+    let legacy_binding = binding()?;
+    let legacy = store.issue(&legacy_binding, now())?;
+    store.consume(&legacy.permit_id, &legacy_binding, now())?;
+    let legacy_record = reopened.state(&legacy.permit_id)?;
+    assert!(matches!(
+        legacy_record.state,
+        PermitStateV1::Consumed { .. }
+    ));
+    assert!(legacy_record.preflight_receipt.is_none());
+    assert!(legacy_record.outcome_receipt.is_none());
+    assert!(reopened
+        .record_reported_outcome(
+            &legacy.permit_id,
+            &preflight.receipt_digest,
+            reported_success(),
+            now(),
+        )
+        .is_err());
+    Ok(())
+}

@@ -601,8 +601,6 @@ fn default_ingress_output_limit() -> u64 {
     64 * 1024
 }
 
-struct DuplicateSafeValue(serde_json::Value);
-
 /// Typed failures from recursive duplicate-safe JSON parsing.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Error)]
 pub enum StrictJsonError {
@@ -614,98 +612,15 @@ pub enum StrictJsonError {
     Malformed,
 }
 
-impl<'de> Deserialize<'de> for DuplicateSafeValue {
-    fn deserialize<D: Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
-        struct ValueVisitor;
-
-        impl<'de> serde::de::Visitor<'de> for ValueVisitor {
-            type Value = serde_json::Value;
-
-            fn expecting(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-                formatter.write_str("a duplicate-free JSON value")
-            }
-
-            fn visit_bool<E: serde::de::Error>(self, value: bool) -> Result<Self::Value, E> {
-                Ok(serde_json::Value::Bool(value))
-            }
-
-            fn visit_i64<E: serde::de::Error>(self, value: i64) -> Result<Self::Value, E> {
-                Ok(value.into())
-            }
-
-            fn visit_u64<E: serde::de::Error>(self, value: u64) -> Result<Self::Value, E> {
-                Ok(value.into())
-            }
-
-            fn visit_f64<E: serde::de::Error>(self, value: f64) -> Result<Self::Value, E> {
-                serde_json::Number::from_f64(value)
-                    .map(serde_json::Value::Number)
-                    .ok_or_else(|| E::custom("non-finite JSON number"))
-            }
-
-            fn visit_str<E: serde::de::Error>(self, value: &str) -> Result<Self::Value, E> {
-                Ok(serde_json::Value::String(value.into()))
-            }
-
-            fn visit_string<E: serde::de::Error>(self, value: String) -> Result<Self::Value, E> {
-                Ok(serde_json::Value::String(value))
-            }
-
-            fn visit_none<E: serde::de::Error>(self) -> Result<Self::Value, E> {
-                Ok(serde_json::Value::Null)
-            }
-
-            fn visit_unit<E: serde::de::Error>(self) -> Result<Self::Value, E> {
-                Ok(serde_json::Value::Null)
-            }
-
-            fn visit_some<D: Deserializer<'de>>(self, value: D) -> Result<Self::Value, D::Error> {
-                DuplicateSafeValue::deserialize(value).map(|parsed| parsed.0)
-            }
-
-            fn visit_seq<A: serde::de::SeqAccess<'de>>(
-                self,
-                mut sequence: A,
-            ) -> Result<Self::Value, A::Error> {
-                let mut values = Vec::new();
-                while let Some(value) = sequence.next_element::<DuplicateSafeValue>()? {
-                    values.push(value.0);
-                }
-                Ok(serde_json::Value::Array(values))
-            }
-
-            fn visit_map<A: serde::de::MapAccess<'de>>(
-                self,
-                mut map: A,
-            ) -> Result<Self::Value, A::Error> {
-                let mut values = serde_json::Map::new();
-                while let Some(key) = map.next_key::<String>()? {
-                    if values.contains_key(&key) {
-                        return Err(serde::de::Error::custom("duplicate object key"));
-                    }
-                    let value = map.next_value::<DuplicateSafeValue>()?;
-                    values.insert(key, value.0);
-                }
-                Ok(serde_json::Value::Object(values))
-            }
-        }
-
-        deserializer.deserialize_any(ValueVisitor).map(Self)
-    }
-}
-
-/// Parse exactly one JSON value while rejecting duplicate object keys at every
-/// nesting depth before serde can normalize them.
+/// Parse exactly one JSON value through the canonical Libraries raw owner.
+/// The UTF-8 conversion borrows the original bytes; no parsed map is serialized
+/// and presented as caller ingress. Detailed owner errors remain bounded here.
 pub fn parse_strict_json_value(input: &[u8]) -> Result<serde_json::Value, StrictJsonError> {
-    serde_json::from_slice::<DuplicateSafeValue>(input)
-        .map(|value| value.0)
-        .map_err(|error| {
-            if error.to_string().contains("duplicate object key") {
-                StrictJsonError::DuplicateKey
-            } else {
-                StrictJsonError::Malformed
-            }
-        })
+    let input = std::str::from_utf8(input).map_err(|_| StrictJsonError::Malformed)?;
+    boundary_compiler::parse_and_validate(input).map_err(|error| match error {
+        boundary_compiler::JcsError::DuplicateKey { .. } => StrictJsonError::DuplicateKey,
+        _ => StrictJsonError::Malformed,
+    })
 }
 
 pub fn parse_run_spec_bytes(input: &[u8]) -> Result<RunSpecV1, RunSpecIngressError> {
@@ -718,9 +633,9 @@ pub fn parse_run_spec_bytes(input: &[u8]) -> Result<RunSpecV1, RunSpecIngressErr
         StrictJsonError::DuplicateKey => RunSpecIngressError::DuplicateKey,
         StrictJsonError::Malformed => RunSpecIngressError::Malformed,
     })?;
-    // The contract-owned recursive visitor validates duplicate freedom on the
-    // original attacker bytes. The admitted boundary owner then supplies the
-    // canonical representation; its depth-only duplicate pre-scan is not used.
+    // The canonical boundary owner rejects duplicates on the original input
+    // before providing the legacy canonical representation. Parsing is not
+    // schema validation or execution authority.
     let canonical = Canonicalizer::new()
         .canonicalize_bytes(&parsed)
         .map_err(|_| RunSpecIngressError::CanonicalBoundary)?;

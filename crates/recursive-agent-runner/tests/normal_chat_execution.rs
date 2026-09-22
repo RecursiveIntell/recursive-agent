@@ -52,6 +52,7 @@ struct PublicationFaultClock<'a> {
     backend_calls: &'a std::sync::atomic::AtomicUsize,
     artifact_path: std::path::PathBuf,
     enabled: bool,
+    corrupt_response: bool,
     installed: std::sync::atomic::AtomicBool,
 }
 impl recursive_agent_runner::Clock for PublicationFaultClock<'_> {
@@ -66,6 +67,22 @@ impl recursive_agent_runner::Clock for PublicationFaultClock<'_> {
                 std::fs::Permissions::from_mode(0o500),
             );
             self.installed.store(result.is_ok(), SeqCst);
+        }
+        if self.corrupt_response
+            && self.backend_calls.load(SeqCst) > 0
+            && !self.installed.load(SeqCst)
+        {
+            let fault = || -> Result<(), Box<dyn std::error::Error>> {
+                for entry in std::fs::read_dir(&self.artifact_path)? {
+                    let entry = entry?;
+                    if entry.path().extension().is_some_and(|e| e == "meta") {
+                        continue;
+                    }
+                    std::fs::write(entry.path(), b"{}")?;
+                }
+                Ok(())
+            };
+            self.installed.store(fault().is_ok(), SeqCst);
         }
         now() + TimeDelta::milliseconds(1)
     }
@@ -236,6 +253,12 @@ fn native_chat_v2_backend_error_is_ambiguous_and_not_retried(
 fn native_chat_observation_storage_failure_preserves_response_and_outcome(
 ) -> Result<(), Box<dyn std::error::Error>> {
     run_fixture(7)
+}
+
+#[test]
+fn native_chat_rechecks_published_bytes_before_settlement() -> Result<(), Box<dyn std::error::Error>>
+{
+    run_fixture(8)
 }
 
 fn run_fixture(mode: u8) -> Result<(), Box<dyn std::error::Error>> {
@@ -426,6 +449,7 @@ fn run_fixture(mode: u8) -> Result<(), Box<dyn std::error::Error>> {
         backend_calls: &backend.0,
         artifact_path: root.path().join("artifacts"),
         enabled: mode == 7,
+        corrupt_response: mode == 8,
         installed: std::sync::atomic::AtomicBool::new(false),
     };
     let executor = recursive_agent_runner::NativeNormalChatExecutor::new(
@@ -587,7 +611,12 @@ fn run_fixture(mode: u8) -> Result<(), Box<dyn std::error::Error>> {
             }
             _ => return Err("combined artifact budget was not enforced".into()),
         }
-    } else if mode == 3 {
+    } else if matches!(mode, 3 | 8) {
+        if mode == 8 {
+            assert!(publication_clock
+                .installed
+                .load(std::sync::atomic::Ordering::SeqCst));
+        }
         assert!(matches!(
             observed,
             Err(recursive_agent_runner::NativeNormalChatError::Artifact(_))
@@ -636,6 +665,27 @@ fn run_fixture(mode: u8) -> Result<(), Box<dyn std::error::Error>> {
             serde_json::to_value(&result.response_artifact)?
         );
         assert_eq!(joined["outcome"], serde_json::to_value(&result.outcome)?);
+        // The canonical owner must retain the exact published association, not
+        // leave the caller to select arbitrary well-hashed artifacts on restart.
+        let reopened = open_store(root.path())?;
+        let record = serde_json::to_value(reopened.state(&permit.permit_id)?)?;
+        let settlement = &record["normal_chat_settlement"];
+        assert_eq!(
+            settlement["schema"],
+            "recursive-agent.normal-chat-settlement/v1"
+        );
+        assert_eq!(
+            settlement["response"],
+            serde_json::to_value(&result.response_artifact)?
+        );
+        assert_eq!(
+            settlement["observation"],
+            serde_json::to_value(&result.observation_artifact)?
+        );
+        assert_eq!(
+            settlement["outcome"],
+            serde_json::to_value(&result.outcome)?
+        );
     } else {
         assert!(matches!(
             observed,
@@ -647,6 +697,15 @@ fn run_fixture(mode: u8) -> Result<(), Box<dyn std::error::Error>> {
         .is_err());
     assert_eq!(backend.0.load(std::sync::atomic::Ordering::SeqCst), 1);
 
+    if mode != 0 {
+        assert!(
+            store
+                .state(&permit.permit_id)?
+                .normal_chat_settlement
+                .is_none(),
+            "partial or invalid publication must not settle"
+        );
+    }
     // Read the exact native record from disk, rather than trust the executor's return.
     let mut matched = 0;
     for entry in std::fs::read_dir(root.path())? {
@@ -675,7 +734,10 @@ fn run_fixture(mode: u8) -> Result<(), Box<dyn std::error::Error>> {
         let outcome = record.outcome_receipt.ok_or("missing native outcome")?;
         outcome.validate()?;
         assert_eq!(outcome.preflight_receipt_digest, preflight.receipt_digest);
-        let expected = if matches!(mode, 0 | 6 | 7) {
+        // Modes 6–8 fail publication after a successful backend return. Keep
+        // the reported backend outcome; publication failure is not a rewrite
+        // to ambiguous backend execution, and never permits another dispatch.
+        let expected = if matches!(mode, 0 | 6 | 7 | 8) {
             recursive_agent_policy::ReportedEffectStateV1::Succeeded
         } else {
             recursive_agent_policy::ReportedEffectStateV1::OutcomeAmbiguous

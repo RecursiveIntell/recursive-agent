@@ -201,9 +201,18 @@ fn cfg_06_provider_lane_serializes_while_global_capacity_is_ten() {
             let reservation = queued_domain
                 .reserve(provider_request(format!("provider-{index}")))
                 .unwrap();
-            let _activity = oracle.begin();
+            let activity = oracle.begin();
             thread::sleep(Duration::from_millis(1));
+            let next_begin = oracle.begins.load(Ordering::SeqCst) + 1;
+            drop(activity);
             reservation.release().unwrap();
+            // Force a successor to start before this worker exits. The oracle
+            // must measure activity inside the reservation, not thread lifetime.
+            if next_begin <= 10 {
+                wait_until(&queued_domain, || {
+                    oracle.begins.load(Ordering::SeqCst) >= next_begin
+                });
+            }
         }));
     }
     wait_until(&domain, || domain.snapshot().unwrap().queued.len() == 9);

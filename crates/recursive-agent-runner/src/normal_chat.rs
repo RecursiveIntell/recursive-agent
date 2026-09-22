@@ -1,5 +1,8 @@
 //! Candidate native conversation executor. Not registered with the daemon or
 //! host. This records observed backend outcomes, not a full terminal run chain.
+#[cfg(test)]
+mod publication_tests;
+
 use crate::Clock;
 use recursive_agent_contracts::{
     content_digest, ArtifactDescriptorV1, CurrentPermitId, ToolCallSpecV1,
@@ -26,6 +29,10 @@ pub enum NativeNormalChatError {
     Artifact(#[from] LedgerError),
     #[error("normal-chat encoding failed")]
     Encoding,
+    #[error("normal-chat publication binding invalid; consumed permit must not be retried")]
+    PublicationInvalid,
+    #[error("backend was invoked; settlement persistence failed; do not re-execute this permit")]
+    SettlementPersistenceFailed(#[source] Box<PolicyError>),
     #[error("backend outcome is ambiguous; permit outcome retained")]
     BackendAmbiguous,
     #[error("observation publication failed; response and backend outcome retained; do not re-execute this permit")]
@@ -51,22 +58,38 @@ pub enum NativeNormalChatError {
     },
 }
 
-// Versioned data-plane record, not replay authority. The native ledger must
-// still anchor its descriptor before a recovery path may select it. Legacy
-// untagged response artifacts are not reinterpreted as this schema.
-#[derive(serde::Serialize)]
-struct RecordedNormalChatResponseV1<'a> {
+// Versioned data-plane record, not replay authority. Policy binds descriptors;
+// no public historical loader is exposed. Legacy untagged artifacts are denied.
+#[derive(serde::Serialize, serde::Deserialize)]
+#[serde(deny_unknown_fields)]
+struct RecordedNormalChatResponseV1 {
     schema: RecordedNormalChatResponseSchemaV1,
-    attempt_id: &'a recursive_agent_contracts::NormalChatAttemptId,
-    permit_id: &'a CurrentPermitId,
-    preflight_receipt_digest: &'a recursive_agent_contracts::ContentDigest,
-    response: &'a recursive_agent_provider::CompletionResponseV1,
+    attempt_id: recursive_agent_contracts::NormalChatAttemptId,
+    permit_id: CurrentPermitId,
+    preflight_receipt_digest: recursive_agent_contracts::ContentDigest,
+    response: recursive_agent_provider::CompletionResponseV1,
 }
 
-#[derive(serde::Serialize)]
+#[derive(serde::Serialize, serde::Deserialize)]
 enum RecordedNormalChatResponseSchemaV1 {
     #[serde(rename = "recursive-agent.normal-chat-recorded-response/v1")]
     V1,
+}
+
+#[derive(serde::Serialize, serde::Deserialize)]
+enum RecordedNormalChatObservationSchemaV1 {
+    #[serde(rename = "recursive-agent.normal-chat-observation/v1")]
+    V1,
+}
+
+#[derive(serde::Serialize, serde::Deserialize)]
+#[serde(deny_unknown_fields)]
+struct RecordedNormalChatObservationV1 {
+    schema: RecordedNormalChatObservationSchemaV1,
+    attempt: recursive_agent_contracts::NormalChatAttemptId,
+    response: ArtifactDescriptorV1,
+    preflight: recursive_agent_policy::PermitPreflightReceiptV1,
+    outcome: PermitOutcomeReceiptV1,
 }
 
 pub struct NativeNormalChatObservation {
@@ -221,11 +244,13 @@ impl<'a, B: CompletionBackend> NativeNormalChatExecutor<'a, B> {
             args: serde_json::json!({"attempt": attempt, "request": request}),
             frozen_clock: None,
         };
-        let evidence =
-            self.permits
-                .consume_normal_chat(permit_id, admission, &call, self.verifier, || {
-                    self.clock.now()
-                })?;
+        let (evidence, continuation) = self.permits.consume_normal_chat_for_execution(
+            permit_id,
+            admission,
+            &call,
+            self.verifier,
+            || self.clock.now(),
+        )?;
         let preflight = self.permits.normal_chat_preflight(permit_id)?;
         let start = std::time::Instant::now();
         let response = dispatch(self.backend, request);
@@ -248,10 +273,10 @@ impl<'a, B: CompletionBackend> NativeNormalChatExecutor<'a, B> {
         };
         let recorded_response = RecordedNormalChatResponseV1 {
             schema: RecordedNormalChatResponseSchemaV1::V1,
-            attempt_id: &attempt.attempt_id,
-            permit_id,
-            preflight_receipt_digest: &preflight.receipt_digest,
-            response: &response,
+            attempt_id: attempt.attempt_id.clone(),
+            permit_id: permit_id.clone(),
+            preflight_receipt_digest: preflight.receipt_digest.clone(),
+            response: response.clone(),
         };
         let encoded = recursive_agent_contracts::jcs_canonical(&recorded_response)
             .map_err(|_| NativeNormalChatError::Encoding)?;
@@ -301,15 +326,15 @@ impl<'a, B: CompletionBackend> NativeNormalChatExecutor<'a, B> {
             },
             self.clock.now(),
         )?;
-        let observation = serde_json::json!({
-            "schema": "recursive-agent.normal-chat-observation/v1",
-            "attempt": attempt.attempt_id,
-            "response": response_artifact,
-            "preflight": preflight,
-            "outcome": outcome,
-        });
-        let encoded_observation =
-            serde_json::to_vec(&observation).map_err(|_| NativeNormalChatError::Encoding)?;
+        let observation = RecordedNormalChatObservationV1 {
+            schema: RecordedNormalChatObservationSchemaV1::V1,
+            attempt: attempt.attempt_id.clone(),
+            response: response_artifact.clone(),
+            preflight,
+            outcome: outcome.clone(),
+        };
+        let encoded_observation = recursive_agent_contracts::jcs_canonical(&observation)
+            .map_err(|_| NativeNormalChatError::Encoding)?;
         let required_bytes = response_artifact
             .byte_length
             .checked_add(u64::try_from(encoded_observation.len()).unwrap_or(u64::MAX));
@@ -336,10 +361,110 @@ impl<'a, B: CompletionBackend> NativeNormalChatExecutor<'a, B> {
                     });
                 }
             };
-        Ok(NativeNormalChatObservation {
-            response_artifact,
-            outcome,
-            observation_artifact,
-        })
+        validate_publication(
+            self.permits,
+            self.artifacts,
+            permit_id,
+            &response_artifact,
+            &observation_artifact,
+        )?;
+        self.permits
+            .settle_normal_chat(&continuation, &response_artifact, &observation_artifact)
+            .map_err(|e| NativeNormalChatError::SettlementPersistenceFailed(Box::new(e)))?;
+        load_live_settlement(self.permits, self.artifacts, permit_id)
     }
+}
+
+// Private live readback only. A future historical access API needs its own
+// owner authorization; neither settlement nor an artifact hash grants that.
+fn load_live_settlement(
+    permits: &DurablePermitStore,
+    artifacts: &ArtifactStore,
+    permit_id: &CurrentPermitId,
+) -> Result<NativeNormalChatObservation, NativeNormalChatError> {
+    let record = permits.state(permit_id)?;
+    let settlement = record
+        .normal_chat_settlement
+        .ok_or(NativeNormalChatError::PublicationInvalid)?;
+    validate_publication(
+        permits,
+        artifacts,
+        permit_id,
+        &settlement.response,
+        &settlement.observation,
+    )
+}
+
+fn decode_record<T: serde::de::DeserializeOwned + serde::Serialize>(
+    bytes: &[u8],
+) -> Result<T, NativeNormalChatError> {
+    let value = recursive_agent_contracts::parse_strict_json_value(bytes)
+        .map_err(|_| NativeNormalChatError::PublicationInvalid)?;
+    let decoded: T =
+        serde_json::from_value(value).map_err(|_| NativeNormalChatError::PublicationInvalid)?;
+    if recursive_agent_contracts::jcs_canonical(&decoded)
+        .map_err(|_| NativeNormalChatError::PublicationInvalid)?
+        != bytes
+    {
+        return Err(NativeNormalChatError::PublicationInvalid);
+    }
+    Ok(decoded)
+}
+
+// Caller descriptors occur only on the just-executed native publication path.
+// Live readback above supplies descriptors solely from the policy record.
+fn validate_publication(
+    permits: &DurablePermitStore,
+    artifacts: &ArtifactStore,
+    permit_id: &CurrentPermitId,
+    response_descriptor: &ArtifactDescriptorV1,
+    observation_descriptor: &ArtifactDescriptorV1,
+) -> Result<NativeNormalChatObservation, NativeNormalChatError> {
+    let root = artifacts.run_root_identity();
+    if permits.run_root_identity() != (root.device, root.inode) {
+        return Err(NativeNormalChatError::StoreMismatch);
+    }
+    let invalid = || NativeNormalChatError::PublicationInvalid;
+    let record = permits.state(permit_id)?;
+    let admission = record
+        .retained_normal_chat_admission
+        .as_ref()
+        .ok_or_else(invalid)?;
+    let preflight = record.preflight_receipt.as_ref().ok_or_else(invalid)?;
+    let outcome = record.outcome_receipt.as_ref().ok_or_else(invalid)?;
+    let budget = &record.permit.binding.budget;
+    if outcome.reported.state != ReportedEffectStateV1::Succeeded
+        || outcome.reported.duration_ms > budget.max_wall_time_ms
+        || response_descriptor
+            .byte_length
+            .checked_add(observation_descriptor.byte_length)
+            .map_or(true, |bytes| bytes > budget.max_artifact_bytes)
+    {
+        return Err(invalid());
+    }
+    for descriptor in [response_descriptor, observation_descriptor] {
+        if descriptor.media_type != "application/json" || descriptor.encoding.is_some() {
+            return Err(invalid());
+        }
+    }
+    let response: RecordedNormalChatResponseV1 =
+        decode_record(&artifacts.get(response_descriptor)?)?;
+    let observation: RecordedNormalChatObservationV1 =
+        decode_record(&artifacts.get(observation_descriptor)?)?;
+    if response.permit_id != *permit_id
+        || response.attempt_id != admission.attempt.attempt_id
+        || response.preflight_receipt_digest != preflight.receipt_digest
+        || response.response.text.len() as u64 > budget.max_output_bytes
+        || observation.attempt != admission.attempt.attempt_id
+        || observation.response != *response_descriptor
+        || observation.preflight != *preflight
+        || observation.outcome != *outcome
+    {
+        return Err(invalid());
+    }
+    Ok(NativeNormalChatObservation {
+        response_artifact: response_descriptor.clone(),
+        observation_artifact: observation_descriptor.clone(),
+        outcome: outcome.clone(),
+    })
 }

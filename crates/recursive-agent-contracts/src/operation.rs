@@ -296,19 +296,16 @@ pub fn parse_operation_envelope_bytes(
             maximum_bytes: MAX_RUN_SPEC_INPUT_BYTES,
         });
     }
-    let parsed = serde_json::from_slice::<crate::DuplicateSafeValue>(input).map_err(|error| {
-        if error.to_string().contains("duplicate object key") {
-            OperationIngressError::DuplicateKey
-        } else {
-            OperationIngressError::Malformed
-        }
+    let parsed = crate::parse_strict_json_value(input).map_err(|error| match error {
+        crate::StrictJsonError::DuplicateKey => OperationIngressError::DuplicateKey,
+        crate::StrictJsonError::Malformed => OperationIngressError::Malformed,
     })?;
     let canonical =
-        crate::jcs_canonical(&parsed.0).map_err(|_| OperationIngressError::CanonicalBoundary)?;
+        crate::jcs_canonical(&parsed).map_err(|_| OperationIngressError::CanonicalBoundary)?;
     if canonical.len() > MAX_RUN_SPEC_MATERIAL_BYTES {
         return Err(OperationIngressError::CanonicalBoundary);
     }
-    let envelope = serde_json::from_value::<OperationEnvelopeV1>(parsed.0)
+    let envelope = serde_json::from_value::<OperationEnvelopeV1>(parsed)
         .map_err(|_| OperationIngressError::Malformed)?;
     envelope
         .validate()
@@ -325,19 +322,16 @@ pub fn parse_child_operation_proposal_v2_bytes(
             maximum_bytes: MAX_RUN_SPEC_INPUT_BYTES,
         });
     }
-    let parsed = serde_json::from_slice::<crate::DuplicateSafeValue>(input).map_err(|error| {
-        if error.to_string().contains("duplicate object key") {
-            OperationIngressError::DuplicateKey
-        } else {
-            OperationIngressError::Malformed
-        }
+    let parsed = crate::parse_strict_json_value(input).map_err(|error| match error {
+        crate::StrictJsonError::DuplicateKey => OperationIngressError::DuplicateKey,
+        crate::StrictJsonError::Malformed => OperationIngressError::Malformed,
     })?;
     let canonical =
-        crate::jcs_canonical(&parsed.0).map_err(|_| OperationIngressError::CanonicalBoundary)?;
+        crate::jcs_canonical(&parsed).map_err(|_| OperationIngressError::CanonicalBoundary)?;
     if canonical.len() > MAX_RUN_SPEC_MATERIAL_BYTES {
         return Err(OperationIngressError::CanonicalBoundary);
     }
-    let proposal = serde_json::from_value::<ChildOperationProposalV2>(parsed.0)
+    let proposal = serde_json::from_value::<ChildOperationProposalV2>(parsed)
         .map_err(|_| OperationIngressError::Malformed)?;
     proposal
         .validate()
@@ -354,19 +348,16 @@ pub fn parse_child_operation_envelope_v2_bytes(
             maximum_bytes: MAX_RUN_SPEC_INPUT_BYTES,
         });
     }
-    let parsed = serde_json::from_slice::<crate::DuplicateSafeValue>(input).map_err(|error| {
-        if error.to_string().contains("duplicate object key") {
-            OperationIngressError::DuplicateKey
-        } else {
-            OperationIngressError::Malformed
-        }
+    let parsed = crate::parse_strict_json_value(input).map_err(|error| match error {
+        crate::StrictJsonError::DuplicateKey => OperationIngressError::DuplicateKey,
+        crate::StrictJsonError::Malformed => OperationIngressError::Malformed,
     })?;
     let canonical =
-        crate::jcs_canonical(&parsed.0).map_err(|_| OperationIngressError::CanonicalBoundary)?;
+        crate::jcs_canonical(&parsed).map_err(|_| OperationIngressError::CanonicalBoundary)?;
     if canonical.len() > MAX_RUN_SPEC_MATERIAL_BYTES {
         return Err(OperationIngressError::CanonicalBoundary);
     }
-    let envelope = serde_json::from_value::<ChildOperationEnvelopeV2>(parsed.0)
+    let envelope = serde_json::from_value::<ChildOperationEnvelopeV2>(parsed)
         .map_err(|_| OperationIngressError::Malformed)?;
     envelope
         .validate()

@@ -14,7 +14,7 @@ concurrency:
   cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 env:
-  LIBRARIES_SHA: 6b55d85fb9ebf4ed5b5228f4d33f2cf7bc393f6a
+  LIBRARIES_SHA: 0b099ec416de60f6adafb182f1d1e83795d05c56
   CARGO_BUILD_JOBS: "2"
   CARGO_TERM_COLOR: always
   CARGO_NET_OFFLINE: "false"
@@ -37,7 +37,7 @@ jobs:
         uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
         with:
           repository: RecursiveIntell/Libraries
-          ref: 6b55d85fb9ebf4ed5b5228f4d33f2cf7bc393f6a
+          ref: 0b099ec416de60f6adafb182f1d1e83795d05c56
           fetch-depth: 1
           path: Libraries
 
