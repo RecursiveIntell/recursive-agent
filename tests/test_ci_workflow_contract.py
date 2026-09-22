@@ -3,7 +3,7 @@ from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
 WORKFLOW = ROOT / ".github" / "workflows" / "ci.yml"
-LIBRARIES_SHA = "b7967434eca8852d2bf38f6bfebb4088495f7e62"
+LIBRARIES_SHA = "0b099ec416de60f6adafb182f1d1e83795d05c56"
 CHECKOUT_SHA = "de0fac2e4500dabe0009e67214ff5f5447ce83dd"
 
 
