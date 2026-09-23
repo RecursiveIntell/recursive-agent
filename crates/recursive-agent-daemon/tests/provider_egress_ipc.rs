@@ -489,6 +489,10 @@ fn disposable_full_agent_v3_turn_uses_real_native_ipc_and_fixture_provider(
         .ok_or_else(|| format!("fixture summary missing from stdout: {stdout}"))?;
     let summary: serde_json::Value = serde_json::from_str(summary_line)?;
     assert_eq!(summary["result"], "PASS");
+    assert_eq!(summary["legacy_top_level_gate"], false);
+    assert_eq!(summary["namespaced_gate"], true);
+    assert_eq!(summary["legacy_run_entries"], 0);
+    assert_eq!(summary["default_socket_exists"], false);
     assert_eq!(summary["invalid_run_entries"], 0);
     assert_eq!(summary["valid_run_entries"], 1);
     assert_eq!(summary["external_provider"], false);

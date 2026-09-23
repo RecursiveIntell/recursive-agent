@@ -37,9 +37,13 @@ with tempfile.TemporaryDirectory(prefix="ac08-v3-agent-") as tmp:
     home = Path(tmp)
     shutil.copytree(plugin_source, home / "plugins" / "recursive-agent-native",
                     ignore=shutil.ignore_patterns("__pycache__", "*.pyc"))
-    (home / "config.yaml").write_text(yaml.safe_dump({"plugins": {
+    os.environ["HOME"] = str(home)
+    fallback_socket = home / ".local/share/recursive-agent/run/ra.sock"
+    assert not fallback_socket.exists() and socket_path != fallback_socket
+    config_path = home / "config.yaml"
+    config_path.write_text(yaml.safe_dump({"plugins": {
         "enabled": ["recursive-agent-native"],
-        "entries": {"recursive-agent-native": {"settings": {"socket_path": str(socket_path)}}},
+        "entries": {"recursive-agent-native": {"socket_path": str(socket_path)}},
     }}), encoding="utf-8")
     os.environ["HERMES_HOME"] = str(home)
     os.environ.pop("HERMES_SAFE_MODE", None)
@@ -57,7 +61,17 @@ with tempfile.TemporaryDirectory(prefix="ac08-v3-agent-") as tmp:
         plugin = manager._plugins.get("recursive-agent-native")
         assert plugin and plugin.enabled and plugin.error is None, plugin
         entry = registry.get_entry("recursive_agent_execute", scope=manager.scope_key)
-        assert entry and entry.toolset == "recursive_agent" and entry.check_fn()
+        assert entry and entry.toolset == "recursive_agent"
+        legacy_gate = entry.check_fn()
+        legacy_run_entries = len(list(runs.iterdir()))
+        assert legacy_gate is False
+        assert legacy_run_entries == 0 and not fallback_socket.exists()
+        config_path.write_text(yaml.safe_dump({"plugins": {
+            "enabled": ["recursive-agent-native"],
+            "entries": {"recursive-agent-native": {"settings": {"socket_path": str(socket_path)}}},
+        }}), encoding="utf-8")
+        namespaced_gate = entry.check_fn()
+        assert namespaced_gate is True
         with patch("run_agent.OpenAI"):
             agent = cast(Any, AIAgent(
                 api_key="disposable-not-a-secret", base_url="http://127.0.0.1:1/v1",
@@ -98,6 +112,9 @@ with tempfile.TemporaryDirectory(prefix="ac08-v3-agent-") as tmp:
         assert positive["recorded_output"] == {"model": "fixture-model", "text": "native-ipc-v3-response"}, positive
         assert len(list(runs.iterdir())) == 1, "positive V3 turn did not create exactly one run"
         print("AC08_V3_RESULT=" + json.dumps({"result": "PASS", "route": "AIAgent.run_conversation -> selected plugin -> Rust provider fixture",
+                          "legacy_top_level_gate": legacy_gate, "namespaced_gate": namespaced_gate,
+                          "legacy_run_entries": legacy_run_entries,
+                          "default_socket_exists": fallback_socket.exists(),
                           "invalid_run_entries": 0, "valid_run_entries": 1, "verified": True,
                           "recorded_output": positive["recorded_output"], "external_provider": False,
                           "installed_route": False}))
