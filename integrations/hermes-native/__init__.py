@@ -158,12 +158,15 @@ def register(ctx) -> None:
     def handler(args, **kwargs) -> str:
         return _handler(ctx, args, **kwargs)
 
+    def available() -> bool:
+        return check_recursive_agent_available(ctx)
+
     ctx.register_tool(
         name=TOOL_NAME,
         toolset=TOOLSET,
         schema=RECURSIVE_AGENT_EXECUTE_SCHEMA,
         handler=handler,
-        check_fn=check_recursive_agent_available,
+        check_fn=available,
         description=(
             "Submit one bounded recursive-agent native action and return "
             "daemon-derived terminal status plus strict verification facts."

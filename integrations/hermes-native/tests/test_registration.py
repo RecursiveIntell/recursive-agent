@@ -63,6 +63,20 @@ def test_register_exposes_one_non_overriding_tool_in_recursive_agent_toolset():
     assert reg["handler"]({}) == "recursive_agent_execute: unavailable: envelope_path required"
 
 
+def test_registered_service_gate_uses_namespaced_socket(monkeypatch):
+    class ConfiguredCtx(StubCtx):
+        def get_config(self, key, default=None):
+            assert key == "socket_path"
+            return "/fixture/explicit.sock"
+
+    ctx = ConfiguredCtx()
+    seen = []
+    monkeypatch.setattr(plugin, "check_socket_available", lambda path: seen.append(path) or True)
+    plugin.register(ctx)
+    assert ctx.registrations[0]["check_fn"]() is True
+    assert seen == ["/fixture/explicit.sock"]
+
+
 def test_check_fn_returns_false_when_socket_absent(tmp_path):
     # Point the plugin at a socket that does not exist.
     missing = str(tmp_path / "does-not-exist.sock")
