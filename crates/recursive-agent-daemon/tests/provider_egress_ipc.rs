@@ -370,7 +370,7 @@ ctx = Context(sys.argv[2])
 plugin.register(ctx)
 assert len(ctx.tools) == 1
 assert ctx.tools[0]['name'] == 'recursive_agent_execute'
-assert ctx.tools[0]['check_fn'](ctx) is True
+assert ctx.tools[0]['check_fn']() is True
 print(ctx.tools[0]['handler']({'envelope_path': sys.argv[3]}))
 "#;
     let plugin_dir =
