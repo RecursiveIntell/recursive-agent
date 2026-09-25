@@ -269,6 +269,23 @@ pub struct CompletionResponseV1 {
     pub raw: serde_json::Value,
 }
 
+/// Provider tool proposal, not an executable or authorized tool call.
+/// Original argument bytes are copied directly from the provider's decoded
+/// JSON string, before any nested JSON object is materialized.
+#[derive(Debug, Clone, PartialEq)]
+pub struct ProviderToolProposalV3 {
+    pub id: String,
+    pub name: String,
+    pub original_arguments: Vec<u8>,
+    pub admitted_arguments: serde_json::Value,
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub struct ProviderToolResponseV3 {
+    pub model: String,
+    pub tool_calls: Vec<ProviderToolProposalV3>,
+}
+
 /// Exact schema tag for the closed provider conversation request representation.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 pub enum ConversationRequestSchemaV1 {
@@ -880,6 +897,128 @@ impl HttpCompletionBackend {
         let body = prepare_openai_compatible_chat_request_v2(request)?;
         self.complete_openai_conversation_with_resolver(&request.provider, body, resolver)
     }
+
+    /// A separate, opt-in proposal path. Text-only completion remains closed.
+    /// No tool invocation or policy decision is performed by this provider.
+    pub fn receive_tool_calls_v3_with_resolver<R: CredentialResolver>(
+        &self,
+        request: &ConversationRequestV2,
+        resolver: &R,
+    ) -> Result<ProviderToolResponseV3, ProviderError> {
+        request.validate()?;
+        let body = prepare_openai_compatible_chat_request_v2(request)?;
+        let ProviderSpecV1::OpenAiCompatible {
+            base_url,
+            model,
+            credential_ref,
+        } = &request.provider
+        else {
+            return Err(ProviderError::UnsupportedConversationProvider);
+        };
+        let credential = resolver
+            .resolve(credential_ref)
+            .map_err(map_credential_error)?;
+        let token = std::str::from_utf8(credential.as_bytes())
+            .map_err(|_| ProviderError::InvalidCredential)?;
+        let response = self
+            .build_client()?
+            .post(base_url.route_url(ProviderRoute::OpenAiChatCompletions))
+            .bearer_auth(token)
+            .json(&body)
+            .send()
+            .map_err(|_| ProviderError::Http {
+                operation: "openai_tool_proposals",
+            })?;
+        if !response.status().is_success() {
+            return Err(ProviderError::HttpStatus {
+                status: response.status().as_u16(),
+            });
+        }
+        let raw = decode_bounded_response_json(response)?;
+        let choices = raw
+            .get("choices")
+            .and_then(serde_json::Value::as_array)
+            .filter(|choices| choices.len() == 1)
+            .ok_or(ProviderError::InvalidConversationToolCall)?;
+        let message = choices[0]
+            .get("message")
+            .ok_or(ProviderError::InvalidConversationToolCall)?;
+        let message_fields = message
+            .as_object()
+            .ok_or(ProviderError::InvalidConversationToolCall)?;
+        if message_fields.len() != 3
+            || message.get("role").and_then(serde_json::Value::as_str) != Some("assistant")
+            || !message_fields.contains_key("content")
+            || !message_fields.contains_key("tool_calls")
+            || !message
+                .get("content")
+                .is_some_and(serde_json::Value::is_null)
+        {
+            return Err(ProviderError::InvalidConversationToolCall);
+        }
+        let calls = message
+            .get("tool_calls")
+            .and_then(serde_json::Value::as_array)
+            .filter(|calls| !calls.is_empty())
+            .ok_or(ProviderError::InvalidConversationToolCall)?;
+        let mut seen = std::collections::BTreeSet::new();
+        let mut tool_calls = Vec::with_capacity(calls.len());
+        for call in calls {
+            let fields = call
+                .as_object()
+                .ok_or(ProviderError::InvalidConversationToolCall)?;
+            let function_fields = call
+                .get("function")
+                .and_then(serde_json::Value::as_object)
+                .ok_or(ProviderError::InvalidConversationToolCall)?;
+            if fields.len() != 3
+                || !fields.contains_key("id")
+                || !fields.contains_key("type")
+                || !fields.contains_key("function")
+                || function_fields.len() != 2
+                || !function_fields.contains_key("name")
+                || !function_fields.contains_key("arguments")
+            {
+                return Err(ProviderError::InvalidConversationToolCall);
+            }
+            let id = call
+                .get("id")
+                .and_then(serde_json::Value::as_str)
+                .ok_or(ProviderError::InvalidConversationToolCall)?;
+            let name = call
+                .pointer("/function/name")
+                .and_then(serde_json::Value::as_str)
+                .ok_or(ProviderError::InvalidConversationToolCall)?;
+            let arguments = call
+                .pointer("/function/arguments")
+                .and_then(serde_json::Value::as_str)
+                .ok_or(ProviderError::InvalidConversationToolCall)?;
+            if call.get("type").and_then(serde_json::Value::as_str) != Some("function")
+                || !seen.insert(id)
+            {
+                return Err(ProviderError::InvalidConversationToolCall);
+            }
+            validate_conversation_identifier(id, "provider call id")?;
+            validate_conversation_identifier(name, "provider tool name")?;
+            // This is the Libraries owner on the *original nested JSON bytes*.
+            // Parsing the outer HTTP document does not parse the arguments string.
+            let admitted_arguments = boundary_compiler::parse_and_validate(arguments)
+                .map_err(|_| ProviderError::InvalidConversationToolCall)?;
+            if !admitted_arguments.is_object() {
+                return Err(ProviderError::InvalidConversationToolCall);
+            }
+            tool_calls.push(ProviderToolProposalV3 {
+                id: id.to_owned(),
+                name: name.to_owned(),
+                original_arguments: arguments.as_bytes().to_vec(),
+                admitted_arguments,
+            });
+        }
+        Ok(ProviderToolResponseV3 {
+            model: model.clone(),
+            tool_calls,
+        })
+    }
 }
 
 fn map_credential_error(error: CredentialResolveError) -> ProviderError {
@@ -938,6 +1077,22 @@ fn decode_openai_response(
         });
     }
     let raw = decode_bounded_response_json(response)?;
+    // A text-only request has exactly one selected answer. Reject calls in
+    // any choice, then reject unsupported multi-choice responses rather than
+    // returning choices[0] while silently dropping other provider output.
+    if let Some(choices) = raw.get("choices").and_then(serde_json::Value::as_array) {
+        if choices.iter().any(|choice| {
+            choice.pointer("/message/tool_calls").is_some()
+                || choice.pointer("/message/function_call").is_some()
+        }) {
+            return Err(ProviderError::InvalidConversationToolCall);
+        }
+        if choices.len() != 1 {
+            return Err(ProviderError::Malformed(
+                "expected exactly one provider choice".into(),
+            ));
+        }
+    }
     let text = raw
         .get("choices")
         .and_then(|choices| choices.get(0))
@@ -1034,26 +1189,7 @@ impl CompletionBackend for HttpCompletionBackend {
                     .map_err(|_| ProviderError::Http {
                         operation: "openai_completion",
                     })?;
-                let status = response.status();
-                if !status.is_success() {
-                    return Err(ProviderError::HttpStatus {
-                        status: status.as_u16(),
-                    });
-                }
-                let raw = decode_bounded_response_json(response)?;
-                let text = raw
-                    .get("choices")
-                    .and_then(|choices| choices.get(0))
-                    .and_then(|choice| choice.get("message"))
-                    .and_then(|message| message.get("content"))
-                    .and_then(serde_json::Value::as_str)
-                    .filter(|text| !text.is_empty())
-                    .ok_or_else(|| ProviderError::Malformed("missing non-empty content".into()))?;
-                Ok(CompletionResponseV1 {
-                    model: model.clone(),
-                    text: text.to_owned(),
-                    raw,
-                })
+                decode_openai_response(model, response)
             }
         }
     }
