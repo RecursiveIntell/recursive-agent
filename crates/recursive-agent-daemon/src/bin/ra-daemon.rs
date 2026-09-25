@@ -8,6 +8,7 @@
 //!   ra-daemon serve --root <runs> --socket <path> [--max-concurrent N]
 
 use std::fs;
+use std::io::Read;
 #[cfg(unix)]
 use std::os::unix::fs::MetadataExt;
 use std::path::PathBuf;
@@ -67,6 +68,23 @@ enum Cmd {
         /// Required whenever a production verifier enrollment is configured.
         #[arg(long)]
         production_write_root: Option<PathBuf>,
+        /// Operator-owned scope/controller enrollment. Scope grants cannot be
+        /// supplied through IPC. The native authority must be initialized first.
+        #[arg(long)]
+        context_authority_file: Option<PathBuf>,
+    },
+    /// Permanently fence a native external namespace and print its enrollment
+    /// challenge. Does not enroll a controller or authorize any effect.
+    InitializeContextAuthority {
+        #[arg(long)]
+        root: PathBuf,
+    },
+    /// Print the canonical public verifier digest used by scope enrollment.
+    DescribeProductionVerifier {
+        #[arg(long)]
+        production_verifier_file: PathBuf,
+        #[arg(long)]
+        production_write_root: PathBuf,
     },
     /// Emit one canonical native operation envelope as JSON (for the Hermes
     /// integration and tests to submit over IPC).
@@ -281,6 +299,37 @@ fn load_production_verifier(
     )
 }
 
+fn load_context_authority(
+    path: &std::path::Path,
+) -> Result<recursive_agent_policy::ContextAuthorityConfigurationV1, Box<dyn std::error::Error>> {
+    let fd = rustix::fs::open(
+        path,
+        rustix::fs::OFlags::RDONLY
+            | rustix::fs::OFlags::NOFOLLOW
+            | rustix::fs::OFlags::CLOEXEC
+            | rustix::fs::OFlags::NONBLOCK,
+        rustix::fs::Mode::empty(),
+    )?;
+    let file = fs::File::from(fd);
+    let metadata = file.metadata()?;
+    const MAX_BYTES: u64 = 1024 * 1024;
+    if !metadata.is_file()
+        || metadata.len() > MAX_BYTES
+        || metadata.uid() != rustix::process::getuid().as_raw()
+        || metadata.mode() & 0o077 != 0
+    {
+        return Err(
+            "context authority enrollment must be a bounded, owned mode-0600 regular file".into(),
+        );
+    }
+    let mut bytes = Vec::new();
+    file.take(MAX_BYTES + 1).read_to_end(&mut bytes)?;
+    if bytes.len() as u64 > MAX_BYTES {
+        return Err("context authority enrollment exceeds bound".into());
+    }
+    Ok(serde_json::from_slice(&bytes)?)
+}
+
 fn build_runtime(
     root: &std::path::Path,
     audit_root: Option<PathBuf>,
@@ -318,6 +367,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             max_concurrent,
             production_verifier_file,
             production_write_root,
+            context_authority_file,
         } => {
             fs::create_dir_all(&root)?;
             let production_verifier = match (production_verifier_file.as_deref(), production_write_root.as_deref()) {
@@ -329,7 +379,10 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                     "production verifier file and production write root must be configured together".into(),
                 ),
             };
-            let runtime = build_runtime(&root, audit_root, production_verifier)?;
+            let mut runtime = build_runtime(&root, audit_root, production_verifier)?;
+            if let Some(path) = context_authority_file {
+                runtime = runtime.with_context_authority(&load_context_authority(&path)?)?;
+            }
             // The socket parent is the directory containing the socket path.
             let parent = socket
                 .parent()
@@ -342,6 +395,22 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             let (listener, path) = bind_private_socket(&parent, name)?;
             eprintln!("ra-daemon: serving on {path:?}");
             serve(listener, Arc::new(runtime), max_concurrent)?;
+            Ok(())
+        }
+        Cmd::InitializeContextAuthority { root } => {
+            fs::create_dir_all(&root)?;
+            let store =
+                recursive_agent_policy::DurablePermitStore::from_dir_fd(&fs::File::open(root)?)?;
+            println!("{}", store.initialize_context_authority()?);
+            Ok(())
+        }
+        Cmd::DescribeProductionVerifier {
+            production_verifier_file,
+            production_write_root,
+        } => {
+            let verifier =
+                load_production_verifier(&production_verifier_file, &production_write_root)?;
+            println!("{}", verifier.context_authority_digest()?);
             Ok(())
         }
         Cmd::EmitEnvelope { text } => {

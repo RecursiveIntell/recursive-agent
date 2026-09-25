@@ -25,6 +25,7 @@ nix = { version = "0.30.1", features = ["socket"] }
 base64 = "0.22"
 
 [dev-dependencies]
+ed25519-dalek = { workspace = true }
 tempfile = "3"
 async-trait = "0.1"
 recursive-agent-policy = { path = "../recursive-agent-policy", features = ["test-only-approval-fixture"] }

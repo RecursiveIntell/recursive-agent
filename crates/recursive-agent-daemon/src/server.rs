@@ -376,6 +376,100 @@ fn dispatch(
                 "outcome_artifact": outcome,
             }))
         }
+        IpcRequestV1::ScopedPermitIssue { witness, context } => {
+            let permit = runtime.issue_scoped_external_permit(witness, context)?;
+            Ok(serde_json::json!({"request_id": request.request_id, "permit": permit}))
+        }
+        IpcRequestV1::ScopedPermitConsume { permit, call } => {
+            let preflight = runtime.consume_scoped_external_permit(permit, call)?;
+            Ok(serde_json::json!({"request_id": request.request_id, "preflight": preflight}))
+        }
+        IpcRequestV1::ScopedPermitReadback { permit } => {
+            let record = runtime.read_scoped_external_permit(permit)?;
+            Ok(serde_json::json!({"request_id": request.request_id, "record": record}))
+        }
+        IpcRequestV1::ScopedPermitOutcomeRecord {
+            permit,
+            preflight_receipt_digest,
+            reported,
+        } => {
+            let outcome = runtime.settle_scoped_external_permit(
+                permit,
+                preflight_receipt_digest,
+                reported.clone(),
+            )?;
+            Ok(serde_json::json!({"request_id": request.request_id, "outcome": outcome}))
+        }
+        IpcRequestV1::ContextAuthorityTransition { transition } => {
+            let receipt = runtime.transition_context_authority(transition)?;
+            Ok(serde_json::json!({"request_id": request.request_id, "receipt": receipt}))
+        }
+        IpcRequestV1::ContextAuthorityReadback { incarnation, scope } => {
+            let snapshot = runtime.read_context_authority(incarnation, scope)?;
+            Ok(serde_json::json!({"request_id": request.request_id, "snapshot": snapshot}))
+        }
+        IpcRequestV1::ContextTransitionReadback { transition } => {
+            let receipt = runtime.read_context_transition(transition)?;
+            Ok(serde_json::json!({"request_id": request.request_id, "receipt": receipt}))
+        }
+        IpcRequestV1::ContextStoreIdentity { nonce } => {
+            let digest =
+                recursive_agent_contracts::content_digest(&("ares.context-store/v1", nonce))
+                    .map_err(|e| {
+                        ServerError::Runtime(recursive_agent_runner::RuntimeServiceError::Policy(
+                            recursive_agent_policy::PolicyError::Contract(e),
+                        ))
+                    })?;
+            Ok(serde_json::json!({"request_id": request.request_id, "store": digest}))
+        }
+        IpcRequestV1::ContextCallPrepare { authority, witness } => {
+            let material = recursive_agent_policy::prepare_context_call(authority, witness)
+                .map_err(|e| {
+                    ServerError::Runtime(recursive_agent_runner::RuntimeServiceError::Policy(e))
+                })?;
+            let bytes = material.signing_bytes().map_err(|e| {
+                ServerError::Runtime(recursive_agent_runner::RuntimeServiceError::Policy(e))
+            })?;
+            Ok(
+                serde_json::json!({"request_id": request.request_id, "material": material, "signing_bytes": bytes}),
+            )
+        }
+        IpcRequestV1::ContextTransitionPrepare {
+            authority,
+            transition_ref,
+            action,
+        } => {
+            let material = recursive_agent_policy::prepare_context_transition(
+                authority,
+                transition_ref,
+                action,
+            )
+            .map_err(|e| {
+                ServerError::Runtime(recursive_agent_runner::RuntimeServiceError::Policy(e))
+            })?;
+            let bytes = material.signing_bytes().map_err(|e| {
+                ServerError::Runtime(recursive_agent_runner::RuntimeServiceError::Policy(e))
+            })?;
+            Ok(
+                serde_json::json!({"request_id": request.request_id, "material": material, "signing_bytes": bytes}),
+            )
+        }
+        IpcRequestV1::PermitReadback {
+            permit_id,
+            binding,
+            preflight_receipt_digest,
+        } => {
+            let readback = runtime.read_external_permit(
+                permit_id,
+                binding,
+                preflight_receipt_digest.as_ref(),
+            )?;
+            Ok(serde_json::json!({
+                "request_id": request.request_id,
+                "permit_id": permit_id,
+                "readback": readback,
+            }))
+        }
         IpcRequestV1::Submit { operation } => {
             let handle = runtime.submit(operation)?;
             Ok(serde_json::json!({

@@ -316,6 +316,137 @@ fn daemon_consumes_and_records_external_permit_receipts_over_ipc() -> TestResult
         recorded["outcome_artifact"]["reported"]["state"],
         "outcome_ambiguous"
     );
+    // Reconnect after an uncertain ACK: use an exact read-only identity. The
+    // daemon returns persisted artifacts and never consumes another permit.
+    drop(stream);
+    let mut stream = connect_with_retry(&socket_path, &server_thread)?;
+    let readback = serde_json::json!({
+        "schema": IPC_REQUEST_SCHEMA_V1,
+        "protocol_version": IPC_PROTOCOL_VERSION_V1,
+        "request_id": "permit-readback",
+        "request": {"kind": "permit_readback", "permit_id": permit.permit_id,
+            "binding": binding, "preflight_receipt_digest": digest},
+    });
+    stream.write_all(&frame(&serde_json::to_vec(&readback)?))?;
+    stream.flush()?;
+    let reconciled = read_response(&mut stream)?;
+    assert_eq!(
+        reconciled["readback"]["schema"],
+        "recursive-agent.external-permit-readback/v1"
+    );
+    assert_eq!(
+        reconciled["readback"]["preflight"],
+        consumed["preflight_artifact"]
+    );
+    assert_eq!(
+        reconciled["readback"]["outcome"],
+        recorded["outcome_artifact"]
+    );
+    let mut wrong = readback.clone();
+    wrong["request_id"] = serde_json::json!("permit-readback-wrong");
+    wrong["request"]["binding"]["actor"] = serde_json::json!("actor:foreign");
+    stream.write_all(&frame(&serde_json::to_vec(&wrong)?))?;
+    stream.flush()?;
+    assert!(read_response(&mut stream)?["error"].is_object());
+    Ok(())
+}
+
+#[test]
+fn dropped_external_consume_and_outcome_acks_reconcile_without_reexecution() -> TestResult {
+    let tmp = tempfile::tempdir()?;
+    let runtime_root = tmp.path().join("dropped-ack-root");
+    std::fs::create_dir(&runtime_root)?;
+    let call = ToolCallSpecV1 {
+        tool: "echo".into(),
+        args: serde_json::json!({"text": "lost-ack"}),
+        frozen_clock: None,
+    };
+    let binding = external_permit_binding(&call)?;
+    let root = std::fs::File::open(&runtime_root)?;
+    let permits = DurablePermitStore::from_dir_fd(&root)?;
+    let permit = permits.issue(&binding, FixedClock.now())?;
+    let service = native_service(&runtime_root)?;
+    let (listener, socket_path) = bind_private_socket(tmp.path(), "lost-ack.sock")?;
+    let server_thread = std::thread::spawn(move || {
+        let _ = serve(listener, Arc::new(service), 4);
+    });
+    let envelope = |id: &str, request: serde_json::Value| {
+        serde_json::json!({
+            "schema": IPC_REQUEST_SCHEMA_V1, "protocol_version": IPC_PROTOCOL_VERSION_V1,
+            "request_id": id, "request": request,
+        })
+    };
+    let mut stream = connect_with_retry(&socket_path, &server_thread)?;
+    let consume = envelope(
+        "lost-consume",
+        serde_json::json!({
+            "kind": "permit_consume", "permit_id": permit.permit_id, "binding": binding, "call": call,
+        }),
+    );
+    stream.write_all(&frame(&serde_json::to_vec(&consume)?))?;
+    stream.flush()?;
+    stream.shutdown(std::net::Shutdown::Both)?;
+    drop(stream); // No consume response is read.
+    let deadline = std::time::Instant::now() + Duration::from_secs(3);
+    let preflight = loop {
+        if let Some(receipt) = permits.state(&permit.permit_id)?.preflight_receipt {
+            break receipt;
+        }
+        if std::time::Instant::now() >= deadline {
+            return Err("consumption was not recorded".into());
+        }
+        std::thread::sleep(Duration::from_millis(5));
+    };
+    let mut stream = connect_with_retry(&socket_path, &server_thread)?;
+    let outcome = envelope(
+        "lost-outcome",
+        serde_json::json!({
+            "kind": "permit_outcome_record", "permit_id": permit.permit_id,
+            "preflight_receipt_digest": preflight.receipt_digest,
+            "reported": {"state": "outcome_ambiguous", "duration_ms": 9, "error_type": "lost_tool_ack"},
+        }),
+    );
+    stream.write_all(&frame(&serde_json::to_vec(&outcome)?))?;
+    stream.flush()?;
+    stream.shutdown(std::net::Shutdown::Both)?;
+    drop(stream); // No outcome response is read either.
+    let deadline = std::time::Instant::now() + Duration::from_secs(3);
+    let persisted = loop {
+        let record = permits.state(&permit.permit_id)?;
+        if record.outcome_receipt.is_some() {
+            break record;
+        }
+        if std::time::Instant::now() >= deadline {
+            return Err("outcome was not recorded".into());
+        }
+        std::thread::sleep(Duration::from_millis(5));
+    };
+    let mut stream = connect_with_retry(&socket_path, &server_thread)?;
+    let readback = envelope(
+        "recover",
+        serde_json::json!({
+            "kind": "permit_readback", "permit_id": permit.permit_id, "binding": binding,
+            "preflight_receipt_digest": preflight.receipt_digest,
+        }),
+    );
+    stream.write_all(&frame(&serde_json::to_vec(&readback)?))?;
+    stream.flush()?;
+    let recovered = read_response(&mut stream)?;
+    assert_eq!(
+        recovered["readback"]["preflight"],
+        serde_json::to_value(&preflight)?
+    );
+    assert_eq!(
+        recovered["readback"]["outcome"],
+        serde_json::to_value(&persisted.outcome_receipt)?
+    );
+    assert_eq!(permits.state(&permit.permit_id)?, persisted);
+    let mut replay = consume;
+    replay["request_id"] = serde_json::json!("replay-denied");
+    stream.write_all(&frame(&serde_json::to_vec(&replay)?))?;
+    stream.flush()?;
+    assert!(read_response(&mut stream)?["error"].is_object());
+    assert_eq!(permits.state(&permit.permit_id)?, persisted);
     Ok(())
 }
 
@@ -453,6 +584,184 @@ fn production_witness(call: ToolCallSpecV1) -> ProductionApprovalWitnessV1 {
         key_id: String::new(),
         signature: Vec::new(),
     }
+}
+
+#[test]
+fn scoped_daemon_retirement_lost_ack_restart_and_old_verifier_fence() -> TestResult {
+    use ed25519_dalek::{Signer, SigningKey};
+    use recursive_agent_policy::{
+        ContextAdmissionModeV1, ContextAuthorityConfigurationV1, ContextAuthoritySchemaV1,
+        ContextHeadV1, ContextScopeGrantV1, ContextScopeV1, ScopedExecutionPermitV1,
+    };
+    let tmp = tempfile::tempdir()?;
+    let root = tmp.path().join("scoped");
+    std::fs::create_dir(&root)?;
+    let store = DurablePermitStore::from_dir_fd(&std::fs::File::open(&root)?)?;
+    let approver = ProductionApprovalSignerV1::from_seed("operator".into(), [9; 32]);
+    let controller = SigningKey::from_bytes(&[4; 32]);
+    let scope = ContextScopeV1 {
+        store: content_digest(&"ares-store")?,
+        profile: "work".into(),
+        root: "root-1".into(),
+    };
+    let mut configuration = ContextAuthorityConfigurationV1 {
+        schema: ContextAuthoritySchemaV1::V1,
+        incarnation: store.initialize_context_authority()?,
+        revision: 1,
+        approval_verifier: approver.verifier()?.context_authority_digest()?,
+        grants: vec![ContextScopeGrantV1 {
+            scope: scope.clone(),
+            controller_public_key: controller.verifying_key().to_bytes(),
+            actor: ActorPrincipalV1::try_new("ares-desktop:interactive")?,
+            policy_version: "production-permit-v1".into(),
+            policy_digest: content_digest(&"policy")?,
+            write_root: PRODUCTION_PERMIT_TARGET_ROOT.into(),
+            initial_head: ContextHeadV1 {
+                context: "parent".into(),
+                generation: 1,
+                mode: ContextAdmissionModeV1::Active,
+            },
+            not_before: FixedClock.now(),
+            expires_at: FixedClock.now() + chrono::TimeDelta::hours(1),
+            max_effects: 8,
+            max_transitions: 8,
+            previous_grant: None,
+        }],
+    };
+    let old_service = Arc::new(
+        native_service(&root)?
+            .with_production_approval_verifier(approver.verifier()?)
+            .with_context_authority(&configuration)?,
+    );
+    let (listener, socket) = bind_private_socket(tmp.path(), "scoped.sock")?;
+    let server_service = Arc::clone(&old_service);
+    let thread = std::thread::spawn(move || {
+        let _ = serve(listener, server_service, 4);
+    });
+    let mut stream = connect_with_retry(&socket, &thread)?;
+    let sequence = std::sync::atomic::AtomicU64::new(0);
+    let send = |stream: &mut UnixStream,
+                body: serde_json::Value|
+     -> Result<serde_json::Value, Box<dyn std::error::Error>> {
+        let request_id = format!(
+            "scope-test-{}",
+            sequence.fetch_add(1, std::sync::atomic::Ordering::Relaxed)
+        );
+        let request = serde_json::json!({"schema":IPC_REQUEST_SCHEMA_V1, "protocol_version":IPC_PROTOCOL_VERSION_V1, "request_id":request_id, "request":body});
+        stream.write_all(&frame(&serde_json::to_vec(&request)?))?;
+        stream.flush()?;
+        read_response(stream)
+    };
+    let snapshot = send(
+        &mut stream,
+        serde_json::json!({"kind":"context_authority_readback", "incarnation":configuration.incarnation, "scope":scope}),
+    )?;
+    let authority = snapshot["snapshot"]["authority"].clone();
+    assert_eq!(
+        snapshot["snapshot"]["grant"],
+        serde_json::to_value(&configuration.grants[0])?
+    );
+    assert_eq!(
+        snapshot["snapshot"]["approval_verifier"],
+        serde_json::to_value(&configuration.approval_verifier)?
+    );
+    let call = ToolCallSpecV1 {
+        tool: "write_file".into(),
+        args: serde_json::json!({"path":format!("{PRODUCTION_PERMIT_TARGET_ROOT}/out.txt"),"content":"approved"}),
+        frozen_clock: None,
+    };
+    let witness = approver.sign(production_witness(call.clone()))?;
+    let prepared = send(
+        &mut stream,
+        serde_json::json!({"kind":"context_call_prepare", "authority":authority,"witness":witness}),
+    )?;
+    let mut context = prepared["material"].clone();
+    let bytes: Vec<u8> = serde_json::from_value(prepared["signing_bytes"].clone())?;
+    context["signature"] = serde_json::to_value(controller.sign(&bytes).to_bytes().to_vec())?;
+    let issued = send(
+        &mut stream,
+        serde_json::json!({"kind":"scoped_permit_issue","witness":witness,"context":context}),
+    )?;
+    assert!(issued["error"].is_null(), "{issued}");
+    let permit: ScopedExecutionPermitV1 = serde_json::from_value(issued["permit"].clone())?;
+    let legacy = send(
+        &mut stream,
+        serde_json::json!({"kind":"permit_consume", "permit_id":permit.effect.permit_id,"binding":permit.effect.binding,"call":call}),
+    )?;
+    assert_eq!(legacy["error"]["code"], "runtime_error");
+    let consumed = send(
+        &mut stream,
+        serde_json::json!({"kind":"scoped_permit_consume", "permit":permit,"call":call}),
+    )?;
+    assert!(consumed["error"].is_null(), "{consumed}");
+    let prepared = send(
+        &mut stream,
+        serde_json::json!({"kind":"context_transition_prepare", "authority":authority,"transition_ref":"rebase:one", "action":{"action":"retire", "successor_context":"child"}}),
+    )?;
+    let mut transition = prepared["material"].clone();
+    let bytes: Vec<u8> = serde_json::from_value(prepared["signing_bytes"].clone())?;
+    transition["signature"] = serde_json::to_value(controller.sign(&bytes).to_bytes().to_vec())?;
+    // Submit retirement and close without accepting its ACK.
+    let request = serde_json::json!({"schema":IPC_REQUEST_SCHEMA_V1,"protocol_version":IPC_PROTOCOL_VERSION_V1,"request_id":"lost-retirement","request":{"kind":"context_authority_transition","transition":transition}});
+    stream.write_all(&frame(&serde_json::to_vec(&request)?))?;
+    stream.flush()?;
+    drop(stream);
+    let exact: recursive_agent_policy::ContextTransitionRequestV1 =
+        serde_json::from_value(transition.clone())?;
+    let deadline = std::time::Instant::now() + Duration::from_secs(5);
+    while store.read_context_transition(&exact)?.is_none() {
+        assert!(
+            std::time::Instant::now() < deadline,
+            "retirement did not persist"
+        );
+        std::thread::yield_now();
+    }
+    let restarted = native_service(&root)?
+        .with_production_approval_verifier(approver.verifier()?)
+        .with_context_authority(&configuration)?;
+    let receipt = restarted
+        .read_context_transition(&exact)?
+        .ok_or("missing receipt")?;
+    assert_eq!(receipt.consumed.len(), 1);
+    assert_eq!(receipt.consumed[0].permit_id, permit.permit_id);
+    assert_eq!(restarted.transition_context_authority(&exact)?, receipt);
+    assert!(restarted
+        .consume_scoped_external_permit(&permit, &call)
+        .is_err());
+    let preflight: recursive_agent_policy::ScopedPermitPreflightV1 =
+        serde_json::from_value(consumed["preflight"].clone())?;
+    restarted.settle_scoped_external_permit(
+        &permit,
+        &preflight.receipt_digest,
+        recursive_agent_policy::ReportedEffectOutcomeV1 {
+            state: recursive_agent_policy::ReportedEffectStateV1::OutcomeAmbiguous,
+            duration_ms: 1,
+            error_type: Some("lost_effect_ack".into()),
+        },
+    )?;
+    assert!(restarted
+        .read_scoped_external_permit(&permit)?
+        .outcome
+        .is_some());
+    assert!(native_service(&root)?
+        .with_context_authority(&configuration)
+        .is_err());
+    let new_approver = ProductionApprovalSignerV1::from_seed("operator-new".into(), [10; 32]);
+    assert!(native_service(&root)?
+        .with_production_approval_verifier(new_approver.verifier()?)
+        .with_context_authority(&configuration)
+        .is_err());
+    configuration.revision += 1;
+    configuration.approval_verifier = new_approver.verifier()?.context_authority_digest()?;
+    let _new_service = native_service(&root)?
+        .with_production_approval_verifier(new_approver.verifier()?)
+        .with_context_authority(&configuration)?;
+    // The old runtime remains alive, but its durable access was superseded.
+    assert!(old_service.transition_context_authority(&exact).is_err());
+    assert!(old_service
+        .consume_scoped_external_permit(&permit, &call)
+        .is_err());
+    Ok(())
 }
 
 #[test]

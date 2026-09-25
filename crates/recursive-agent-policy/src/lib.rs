@@ -1,5 +1,8 @@
 //! Static allowlist and durable, single-use capability leases.
 
+mod context_authority;
+pub use context_authority::*;
+
 use std::collections::{BTreeMap, BTreeSet};
 use std::fs::File;
 use std::io::{Read, Write};
@@ -1139,6 +1142,26 @@ pub struct PermitPreflightReceiptV1 {
     pub evidence: PermitEvidenceV1,
     pub recorded_at: DateTime<Utc>,
     pub receipt_digest: ContentDigest,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+pub enum ExternalPermitReadbackSchemaV1 {
+    #[serde(rename = "recursive-agent.external-permit-readback/v1")]
+    V1,
+}
+
+/// Read-only reconciliation of one exact external binding. Historical receipts
+/// never grant permission to dispatch or replay an effect after an uncertain ACK.
+/// Missing receipts remain missing; legacy consumption is not reconstructed.
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct ExternalPermitReadbackV1 {
+    pub schema: ExternalPermitReadbackSchemaV1,
+    pub permit_id: CurrentPermitId,
+    pub binding: PermitBindingV1,
+    pub state: PermitStateV1,
+    pub preflight: Option<PermitPreflightReceiptV1>,
+    pub outcome: Option<PermitOutcomeReceiptV1>,
 }
 
 impl PermitPreflightReceiptV1 {
@@ -2752,6 +2775,7 @@ impl DurablePermitStore {
             ));
         }
         self.with_lock(|| {
+            self.reject_legacy_context_admission()?;
             let parent = binding
                 .parent_permit_id
                 .as_ref()
@@ -3046,6 +3070,7 @@ impl DurablePermitStore {
         mut trusted_clock: impl FnMut() -> DateTime<Utc>,
     ) -> Result<(PermitEvidenceV1, NormalChatConsumption), PolicyError> {
         self.with_lock(|| {
+            self.reject_legacy_context_admission()?;
             // Waiting for the process/thread lock may outlive admission validity.
             // Sample inside the critical section, never reuse a pre-wait instant.
             let trusted_now = trusted_clock();
@@ -3136,10 +3161,14 @@ impl DurablePermitStore {
         &self,
         permit_id: &CurrentPermitId,
         dispatch: &PermitBindingV1,
-        trusted_now: DateTime<Utc>,
+        clock: impl Fn() -> DateTime<Utc>,
     ) -> Result<PermitPreflightReceiptV1, PolicyError> {
         dispatch.validate()?;
         self.with_lock(|| {
+            self.reject_legacy_context_admission()?;
+            // The caller must supply its trusted clock, not a timestamp taken
+            // before waiting on another process's permit-store lock.
+            let trusted_now = clock();
             let mut record = self.read_record_or_reject(permit_id)?;
             if record.permit.binding.tool == NORMAL_CHAT_LANE {
                 return Err(PolicyError::InvalidLease(
@@ -3153,12 +3182,21 @@ impl DurablePermitStore {
                     .map_err(|_| rejected(permit_id, PermitRejectionReasonV1::WrongParent))?;
                 validate_parent_binding(&record.permit, &parent, trusted_now)?;
             }
+            let final_now = clock();
+            if final_now < trusted_now {
+                return Err(PolicyError::InvalidLease("trusted clock regressed".into()));
+            }
+            validate_dispatch(permit_id, &record, dispatch, final_now)?;
+            if let Some(parent_id) = &record.permit.binding.parent_permit_id {
+                let parent = self.read_record(parent_id)?;
+                validate_parent_binding(&record.permit, &parent, final_now)?;
+            }
             record.state = PermitStateV1::Consumed {
-                consumed_at: trusted_now,
+                consumed_at: final_now,
             };
             let receipt = PermitPreflightReceiptV1::create(
                 PermitEvidenceV1::from_record(&record)?,
-                trusted_now,
+                final_now,
             )?;
             record.preflight_receipt = Some(receipt.clone());
             self.replace_record(&record, None)?;
@@ -3237,13 +3275,10 @@ impl DurablePermitStore {
             }
             if let Some(existing) = &record.outcome_receipt {
                 existing.validate()?;
-                let proposed = PermitOutcomeReceiptV1::create(
-                    permit_id.clone(),
-                    preflight_receipt_digest.clone(),
-                    reported,
-                    trusted_now,
-                )?;
-                if *existing == proposed {
+                // Identity is the exact semantic report bound to this consumed
+                // preflight. An ACK retry must return the persisted timestamp
+                // and digest, never mint a new receipt or overwrite ambiguity.
+                if existing.reported == reported {
                     return Ok(existing.clone());
                 }
                 return Err(PolicyError::PermitStateConflict);
@@ -3269,6 +3304,7 @@ impl DurablePermitStore {
     ) -> Result<PermitRecordV1, PolicyError> {
         dispatch.validate()?;
         self.with_lock(|| {
+            self.reject_legacy_context_admission()?;
             let mut record = self.read_record_or_reject(permit_id)?;
             if record.permit.binding.tool == NORMAL_CHAT_LANE {
                 return Err(PolicyError::InvalidLease(
@@ -3334,6 +3370,38 @@ impl DurablePermitStore {
 
     pub fn state(&self, permit_id: &CurrentPermitId) -> Result<PermitRecordV1, PolicyError> {
         self.with_lock(|| self.read_record_or_reject(permit_id))
+    }
+
+    pub fn read_external_permit(
+        &self,
+        permit_id: &CurrentPermitId,
+        expected_binding: &PermitBindingV1,
+        expected_preflight: Option<&ContentDigest>,
+    ) -> Result<ExternalPermitReadbackV1, PolicyError> {
+        expected_binding.validate()?;
+        self.with_lock(|| {
+            let record = self.read_record_or_reject(permit_id)?;
+            if record.permit.binding != *expected_binding
+                || record.permit.binding.tool == NORMAL_CHAT_LANE
+                || expected_preflight.is_some_and(|digest| {
+                    record
+                        .preflight_receipt
+                        .as_ref()
+                        .map(|receipt| &receipt.receipt_digest)
+                        != Some(digest)
+                })
+            {
+                return Err(rejected(permit_id, PermitRejectionReasonV1::WrongAction));
+            }
+            Ok(ExternalPermitReadbackV1 {
+                schema: ExternalPermitReadbackSchemaV1::V1,
+                permit_id: permit_id.clone(),
+                binding: record.permit.binding,
+                state: record.state,
+                preflight: record.preflight_receipt,
+                outcome: record.outcome_receipt,
+            })
+        })
     }
 
     pub fn validate_parent_authority(

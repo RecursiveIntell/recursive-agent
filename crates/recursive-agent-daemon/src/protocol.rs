@@ -167,6 +167,47 @@ pub enum IpcRequestV1 {
     PermitIssueProduction {
         witness: Box<ProductionApprovalWitnessV1>,
     },
+    /// Separate scoped protocol; never downgraded to legacy permit calls.
+    ScopedPermitIssue {
+        witness: Box<ProductionApprovalWitnessV1>,
+        context: Box<recursive_agent_policy::ContextCallBindingV1>,
+    },
+    ScopedPermitConsume {
+        permit: Box<recursive_agent_policy::ScopedExecutionPermitV1>,
+        call: ToolCallSpecV1,
+    },
+    ScopedPermitReadback {
+        permit: Box<recursive_agent_policy::ScopedExecutionPermitV1>,
+    },
+    ScopedPermitOutcomeRecord {
+        permit: Box<recursive_agent_policy::ScopedExecutionPermitV1>,
+        preflight_receipt_digest: recursive_agent_contracts::ContentDigest,
+        reported: ReportedEffectOutcomeV1,
+    },
+    ContextAuthorityTransition {
+        transition: Box<recursive_agent_policy::ContextTransitionRequestV1>,
+    },
+    ContextAuthorityReadback {
+        incarnation: recursive_agent_contracts::ContentDigest,
+        scope: recursive_agent_policy::ContextScopeV1,
+    },
+    ContextTransitionReadback {
+        transition: Box<recursive_agent_policy::ContextTransitionRequestV1>,
+    },
+    /// Pure canonicalization for an Ares-owned random store nonce. This does
+    /// not enroll a scope or authenticate an Ares store association.
+    ContextStoreIdentity { nonce: [u8; 32] },
+    /// Pure typed signing material. Only the enrolled controller can sign it;
+    /// the separate production effect witness is still required at issuance.
+    ContextCallPrepare {
+        authority: Box<recursive_agent_policy::ContextAuthorityBindingV1>,
+        witness: Box<ProductionApprovalWitnessV1>,
+    },
+    ContextTransitionPrepare {
+        authority: Box<recursive_agent_policy::ContextAuthorityBindingV1>,
+        transition_ref: String,
+        action: recursive_agent_policy::ContextTransitionActionV1,
+    },
     /// Record the bounded executor-reported outcome for one consumed preflight.
     PermitOutcomeRecord {
         /// Permit consumed by the paired preflight RPC.
@@ -176,6 +217,13 @@ pub enum IpcRequestV1 {
         /// Bounded result reported after Ares observes a local tool return,
         /// local error, or an ambiguous outcome.
         reported: ReportedEffectOutcomeV1,
+    },
+    /// Read-only exact-binding reconciliation. A consumed receipt is historical
+    /// evidence, never permission to execute after a lost consumption ACK.
+    PermitReadback {
+        permit_id: CurrentPermitId,
+        binding: Box<PermitBindingV1>,
+        preflight_receipt_digest: Option<recursive_agent_contracts::ContentDigest>,
     },
     /// Submit one distinct closed V3 provider-egress operation. This variant is
     /// never decoded as or downgraded to the V1 operation family.

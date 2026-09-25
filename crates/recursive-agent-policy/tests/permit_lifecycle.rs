@@ -420,7 +420,7 @@ fn receipt_record(
     let mut binding = binding()?;
     binding.actor = ActorPrincipalV1::try_new(actor)?;
     let permit = store.issue(&binding, now())?;
-    let preflight = store.consume_with_preflight(&permit.permit_id, &binding, now())?;
+    let preflight = store.consume_with_preflight(&permit.permit_id, &binding, now)?;
     if with_outcome {
         store.record_reported_outcome(
             &permit.permit_id,
@@ -663,15 +663,15 @@ fn receipt_roundtrip_preserves_idempotency_and_legacy_consumption() -> TestResul
         )?,
         *outcome
     );
-    assert!(matches!(
+    assert_eq!(
         reopened.record_reported_outcome(
             &selected.permit.permit_id,
             &preflight.receipt_digest,
             outcome.reported.clone(),
             outcome.recorded_at + TimeDelta::seconds(1),
-        ),
-        Err(PolicyError::PermitStateConflict)
-    ));
+        )?,
+        *outcome
+    );
     assert_eq!(reopened.state(&selected.permit.permit_id)?, selected);
     let legacy_binding = binding()?;
     let legacy = store.issue(&legacy_binding, now())?;
@@ -691,5 +691,152 @@ fn receipt_roundtrip_preserves_idempotency_and_legacy_consumption() -> TestResul
             now(),
         )
         .is_err());
+    Ok(())
+}
+
+#[test]
+fn external_readback_reconciles_reopen_without_consuming_or_replaying() -> TestResult {
+    let root = tempfile::tempdir()?;
+    let store = open_store(root.path())?;
+    let binding = binding()?;
+    let permit = store.issue(&binding, now())?;
+    let issued = store.read_external_permit(&permit.permit_id, &binding, None)?;
+    assert_eq!(issued.state, PermitStateV1::Issued);
+    assert!(issued.preflight.is_none() && issued.outcome.is_none());
+    let preflight = store.consume_with_preflight(&permit.permit_id, &binding, now)?;
+    drop(store); // Consumption ACK was lost. Readback grants no second consumption.
+    let reopened = open_store(root.path())?;
+    let readback = reopened.read_external_permit(
+        &permit.permit_id,
+        &binding,
+        Some(&preflight.receipt_digest),
+    )?;
+    assert_eq!(readback.preflight, Some(preflight.clone()));
+    assert!(readback.outcome.is_none());
+    assert!(reopened
+        .consume_with_preflight(&permit.permit_id, &binding, now)
+        .is_err());
+    let outcome = reopened.record_reported_outcome(
+        &permit.permit_id,
+        &preflight.receipt_digest,
+        reported_success(),
+        now(),
+    )?;
+    let after = open_store(root.path())?.read_external_permit(
+        &permit.permit_id,
+        &binding,
+        Some(&preflight.receipt_digest),
+    )?;
+    assert_eq!(after.outcome, Some(outcome));
+    let mut wrong_binding = binding.clone();
+    wrong_binding.actor = ActorPrincipalV1::try_new("actor:other")?;
+    assert!(reopened
+        .read_external_permit(&permit.permit_id, &wrong_binding, None)
+        .is_err());
+    assert!(reopened
+        .read_external_permit(
+            &permit.permit_id,
+            &binding,
+            Some(&content_digest(&"foreign")?),
+        )
+        .is_err());
+    let mut conflicting = reported_success();
+    conflicting.duration_ms += 1;
+    assert!(matches!(
+        reopened.record_reported_outcome(
+            &permit.permit_id,
+            &preflight.receipt_digest,
+            conflicting,
+            now() + TimeDelta::seconds(3),
+        ),
+        Err(PolicyError::PermitStateConflict)
+    ));
+    assert_eq!(
+        reopened.read_external_permit(&permit.permit_id, &binding, None)?,
+        after
+    );
+    Ok(())
+}
+
+#[test]
+fn external_preflight_clock_is_sampled_after_store_lock_wait() -> TestResult {
+    use std::os::fd::AsFd;
+    use std::sync::{
+        atomic::{AtomicBool, Ordering},
+        mpsc, Arc,
+    };
+    use std::time::Duration;
+    let root = tempfile::tempdir()?;
+    let store = open_store(root.path())?;
+    let binding = binding()?;
+    let permit = store.issue(&binding, now())?;
+    let lock = std::fs::OpenOptions::new()
+        .read(true)
+        .write(true)
+        .open(root.path().join(".permit.lock"))?;
+    rustix::fs::flock(lock.as_fd(), rustix::fs::FlockOperation::LockExclusive)?;
+    let expired = Arc::new(AtomicBool::new(false));
+    let selected_expired = Arc::clone(&expired);
+    let selected_id = permit.permit_id.clone();
+    let selected_binding = binding.clone();
+    let (started_tx, started_rx) = mpsc::channel();
+    let (sample_tx, sample_rx) = mpsc::channel();
+    let worker = std::thread::spawn(move || {
+        let _ = started_tx.send(());
+        store.consume_with_preflight(&selected_id, &selected_binding, || {
+            let _ = sample_tx.send(());
+            if selected_expired.load(Ordering::SeqCst) {
+                selected_binding.expires_at
+            } else {
+                now()
+            }
+        })
+    });
+    started_rx.recv_timeout(Duration::from_secs(2))?;
+    assert!(matches!(
+        sample_rx.recv_timeout(Duration::from_millis(50)),
+        Err(mpsc::RecvTimeoutError::Timeout)
+    ));
+    expired.store(true, Ordering::SeqCst);
+    rustix::fs::flock(lock.as_fd(), rustix::fs::FlockOperation::Unlock)?;
+    assert!(matches!(
+        worker.join().map_err(|_| "consume thread panicked")?,
+        Err(PolicyError::PermitRejected {
+            reason: PermitRejectionReasonV1::Expired,
+            ..
+        })
+    ));
+    assert_eq!(
+        open_store(root.path())?.state(&permit.permit_id)?.state,
+        PermitStateV1::Issued
+    );
+    Ok(())
+}
+
+#[test]
+fn external_preflight_rechecks_final_clock_and_rejects_regression() -> TestResult {
+    use std::cell::Cell;
+    for final_time in [
+        now() + TimeDelta::seconds(60),
+        now() - TimeDelta::seconds(1),
+    ] {
+        let root = tempfile::tempdir()?;
+        let store = open_store(root.path())?;
+        let binding = binding()?;
+        let permit = store.issue(&binding, now())?;
+        let calls = Cell::new(0);
+        assert!(store
+            .consume_with_preflight(&permit.permit_id, &binding, || {
+                calls.set(calls.get() + 1);
+                if calls.get() == 1 {
+                    now()
+                } else {
+                    final_time
+                }
+            })
+            .is_err());
+        assert_eq!(calls.get(), 2);
+        assert_eq!(store.state(&permit.permit_id)?.state, PermitStateV1::Issued);
+    }
     Ok(())
 }

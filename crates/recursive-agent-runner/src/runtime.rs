@@ -461,6 +461,7 @@ pub struct RuntimeService {
     scheduler: std::sync::Mutex<Option<crate::SchedulerStore>>,
     operator_approval_verifier: Option<OperatorApprovalVerifierV1>,
     production_approval_verifier: Option<ProductionApprovalVerifierV1>,
+    context_authority: Option<recursive_agent_policy::ContextAuthorityAccess>,
 }
 
 impl RuntimeService {
@@ -486,6 +487,7 @@ impl RuntimeService {
             scheduler: std::sync::Mutex::new(None),
             operator_approval_verifier: None,
             production_approval_verifier: None,
+            context_authority: None,
         }
     }
 
@@ -501,6 +503,139 @@ impl RuntimeService {
     ) -> Self {
         self.production_approval_verifier = Some(verifier);
         self
+    }
+
+    /// Install an operator-owned startup enrollment through the native permit
+    /// owner. Ares cannot enroll keys or scope labels over IPC.
+    pub fn with_context_authority(
+        mut self,
+        configuration: &recursive_agent_policy::ContextAuthorityConfigurationV1,
+    ) -> Result<Self, RuntimeServiceError> {
+        let verifier = self
+            .production_approval_verifier
+            .as_ref()
+            .ok_or(RuntimeServiceError::PermitIssuanceDisabled)?;
+        if verifier.context_authority_digest()? != configuration.approval_verifier {
+            return Err(RuntimeServiceError::Policy(PolicyError::InvalidLease(
+                "context authority approval verifier enrollment mismatch".into(),
+            )));
+        }
+        let root = std::fs::File::open(self.dependencies.output_root())?;
+        let permits = DurablePermitStore::from_dir_fd(&root)?;
+        self.context_authority = Some(permits.enroll_context_authority(configuration)?);
+        Ok(self)
+    }
+
+    pub fn issue_scoped_external_permit(
+        &self,
+        witness: &ProductionApprovalWitnessV1,
+        context: &recursive_agent_policy::ContextCallBindingV1,
+    ) -> Result<recursive_agent_policy::ScopedExecutionPermitV1, RuntimeServiceError> {
+        let verifier = self
+            .production_approval_verifier
+            .as_ref()
+            .ok_or(RuntimeServiceError::PermitIssuanceDisabled)?;
+        let access = self
+            .context_authority
+            .as_ref()
+            .ok_or(RuntimeServiceError::PermitIssuanceDisabled)?;
+        let root = std::fs::File::open(self.dependencies.output_root())?;
+        Ok(
+            DurablePermitStore::from_dir_fd(&root)?.issue_scoped_external_permit(
+                access,
+                verifier,
+                witness,
+                context,
+                || self.dependencies.clock().now(),
+            )?,
+        )
+    }
+
+    pub fn consume_scoped_external_permit(
+        &self,
+        permit: &recursive_agent_policy::ScopedExecutionPermitV1,
+        call: &ToolCallSpecV1,
+    ) -> Result<recursive_agent_policy::ScopedPermitPreflightV1, RuntimeServiceError> {
+        let verifier = self
+            .production_approval_verifier
+            .as_ref()
+            .ok_or(RuntimeServiceError::PermitIssuanceDisabled)?;
+        let access = self
+            .context_authority
+            .as_ref()
+            .ok_or(RuntimeServiceError::PermitIssuanceDisabled)?;
+        let root = std::fs::File::open(self.dependencies.output_root())?;
+        Ok(
+            DurablePermitStore::from_dir_fd(&root)?.consume_scoped_external_permit(
+                access,
+                verifier,
+                permit,
+                call,
+                || self.dependencies.clock().now(),
+            )?,
+        )
+    }
+
+    pub fn transition_context_authority(
+        &self,
+        request: &recursive_agent_policy::ContextTransitionRequestV1,
+    ) -> Result<recursive_agent_policy::ContextTransitionReceiptV1, RuntimeServiceError> {
+        let access = self
+            .context_authority
+            .as_ref()
+            .ok_or(RuntimeServiceError::PermitIssuanceDisabled)?;
+        let root = std::fs::File::open(self.dependencies.output_root())?;
+        Ok(
+            DurablePermitStore::from_dir_fd(&root)?.transition_context_authority(
+                access,
+                request,
+                || self.dependencies.clock().now(),
+                None,
+            )?,
+        )
+    }
+
+    pub fn read_scoped_external_permit(
+        &self,
+        permit: &recursive_agent_policy::ScopedExecutionPermitV1,
+    ) -> Result<recursive_agent_policy::ScopedPermitRecordV1, RuntimeServiceError> {
+        let root = std::fs::File::open(self.dependencies.output_root())?;
+        Ok(DurablePermitStore::from_dir_fd(&root)?.read_scoped_external_permit(permit)?)
+    }
+
+    pub fn read_context_authority(
+        &self,
+        incarnation: &recursive_agent_contracts::ContentDigest,
+        scope: &recursive_agent_policy::ContextScopeV1,
+    ) -> Result<recursive_agent_policy::ContextAuthoritySnapshotV1, RuntimeServiceError> {
+        let root = std::fs::File::open(self.dependencies.output_root())?;
+        Ok(DurablePermitStore::from_dir_fd(&root)?.read_context_authority(incarnation, scope)?)
+    }
+
+    pub fn read_context_transition(
+        &self,
+        request: &recursive_agent_policy::ContextTransitionRequestV1,
+    ) -> Result<Option<recursive_agent_policy::ContextTransitionReceiptV1>, RuntimeServiceError>
+    {
+        let root = std::fs::File::open(self.dependencies.output_root())?;
+        Ok(DurablePermitStore::from_dir_fd(&root)?.read_context_transition(request)?)
+    }
+
+    pub fn settle_scoped_external_permit(
+        &self,
+        permit: &recursive_agent_policy::ScopedExecutionPermitV1,
+        preflight_digest: &recursive_agent_contracts::ContentDigest,
+        reported: ReportedEffectOutcomeV1,
+    ) -> Result<PermitOutcomeReceiptV1, RuntimeServiceError> {
+        let root = std::fs::File::open(self.dependencies.output_root())?;
+        Ok(
+            DurablePermitStore::from_dir_fd(&root)?.settle_scoped_external_permit(
+                permit,
+                preflight_digest,
+                reported,
+                || self.dependencies.clock().now(),
+            )?,
+        )
     }
 
     pub fn issue_production_permit(
@@ -597,13 +732,20 @@ impl RuntimeService {
         dispatch.args_digest = content_digest(&call.args)?;
         let root = std::fs::File::open(self.dependencies.output_root())?;
         let permits = DurablePermitStore::from_dir_fd(&root)?;
-        Ok(
-            permits.consume_with_preflight(
-                permit_id,
-                &dispatch,
-                self.dependencies.clock().now(),
-            )?,
-        )
+        Ok(permits
+            .consume_with_preflight(permit_id, &dispatch, || self.dependencies.clock().now())?)
+    }
+
+    /// Read persisted external permit receipts without granting dispatch or retry.
+    pub fn read_external_permit(
+        &self,
+        permit_id: &CurrentPermitId,
+        binding: &recursive_agent_policy::PermitBindingV1,
+        preflight_receipt_digest: Option<&recursive_agent_contracts::ContentDigest>,
+    ) -> Result<recursive_agent_policy::ExternalPermitReadbackV1, RuntimeServiceError> {
+        let root = std::fs::File::open(self.dependencies.output_root())?;
+        let permits = DurablePermitStore::from_dir_fd(&root)?;
+        Ok(permits.read_external_permit(permit_id, binding, preflight_receipt_digest)?)
     }
 
     /// Persist a bounded executor-reported outcome bound to a consumed
