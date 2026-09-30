@@ -209,23 +209,25 @@ fn handle_connection(stream: UnixStream, runtime: Arc<RuntimeService>) -> Result
         // on the correlated request instead of dropping the connection and
         // making a transcript/verification failure look like an unavailable
         // daemon to local adapters.
-        let response = match dispatch(&request, &runtime) {
-            Ok(response) => response,
-            Err(error) => serde_json::json!({
-                "request_id": request.request_id,
-                "error": {
-                    "code": "runtime_error",
-                    "message": error.to_string(),
-                },
-            }),
-        };
-        if request.request_id == "lost-retirement" {
-            eprintln!(
-                "RETIREMENT_DIAGNOSTIC thread={:?} completed_lost_retirement error={:?}",
-                std::thread::current().id(),
-                response.get("error")
-            );
+        // Diagnostic branch only: explicit synthetic fixture request IDs.
+        // Remove both fault hooks before any repair is merged.
+        if request.request_id == "diagnostic-delay-retirement" {
+            std::thread::sleep(Duration::from_secs(6));
         }
+        let response = if request.request_id == "diagnostic-reject-retirement" {
+            serde_json::json!({"request_id": request.request_id, "error": {"code": "diagnostic_rejection"}})
+        } else {
+            match dispatch(&request, &runtime) {
+                Ok(response) => response,
+                Err(error) => serde_json::json!({
+                    "request_id": request.request_id,
+                    "error": {
+                        "code": "runtime_error",
+                        "message": error.to_string(),
+                    },
+                }),
+            }
+        };
         let resp_bytes = serde_json::to_vec(&response)?;
         let mut frame = (resp_bytes.len() as u32).to_be_bytes().to_vec();
         frame.extend_from_slice(&resp_bytes);

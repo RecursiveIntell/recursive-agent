@@ -588,6 +588,10 @@ fn production_witness(call: ToolCallSpecV1) -> ProductionApprovalWitnessV1 {
 
 #[test]
 fn scoped_daemon_retirement_lost_ack_restart_and_old_verifier_fence() -> TestResult {
+    scoped_retirement_fixture("lost-retirement")
+}
+
+fn scoped_retirement_fixture(retirement_request_id: &str) -> TestResult {
     use ed25519_dalek::{Signer, SigningKey};
     use recursive_agent_policy::{
         ContextAdmissionModeV1, ContextAuthorityConfigurationV1, ContextAuthoritySchemaV1,
@@ -702,31 +706,37 @@ fn scoped_daemon_retirement_lost_ack_restart_and_old_verifier_fence() -> TestRes
     let bytes: Vec<u8> = serde_json::from_value(prepared["signing_bytes"].clone())?;
     transition["signature"] = serde_json::to_value(controller.sign(&bytes).to_bytes().to_vec())?;
     // Submit retirement and close without accepting its ACK.
-    let request = serde_json::json!({"schema":IPC_REQUEST_SCHEMA_V1,"protocol_version":IPC_PROTOCOL_VERSION_V1,"request_id":"lost-retirement","request":{"kind":"context_authority_transition","transition":transition}});
+    let request = serde_json::json!({"schema":IPC_REQUEST_SCHEMA_V1,"protocol_version":IPC_PROTOCOL_VERSION_V1,"request_id":retirement_request_id,"request":{"kind":"context_authority_transition","transition":transition}});
+    assert_eq!(
+        old_service
+            .managed_admission_snapshot()?
+            .open_ipc_connections,
+        1
+    );
     stream.write_all(&frame(&serde_json::to_vec(&request)?))?;
     stream.flush()?;
     drop(stream);
     let exact: recursive_agent_policy::ContextTransitionRequestV1 =
         serde_json::from_value(transition.clone())?;
     let deadline = std::time::Instant::now() + Duration::from_secs(5);
-    let mut diagnostic_polls = 0;
-    while store.read_context_transition(&exact)?.is_none() {
-        diagnostic_polls += 1;
-        let within_original_deadline = std::time::Instant::now() < deadline;
-        if !within_original_deadline {
-            eprintln!("RETIREMENT_DIAGNOSTIC five_second_gate_failed polls={diagnostic_polls}");
-            // The gate has already failed. Stop contending and retain the
-            // fixture briefly so a waiting writer can report its observation.
-            // This does not extend the deadline or permit a passing result.
-            std::thread::sleep(Duration::from_millis(500));
-        }
+    // Wait for this established connection's worker to finish without taking
+    // the permit-store lock away from retirement. Connection accounting is
+    // only synchronization; the exact durable receipt below remains the proof.
+    while old_service
+        .managed_admission_snapshot()?
+        .open_ipc_connections
+        != 0
+    {
         assert!(
-            within_original_deadline,
-            "retirement did not persist; diagnostic_polls={diagnostic_polls}"
+            std::time::Instant::now() < deadline,
+            "retirement connection did not finish"
         );
-        std::thread::yield_now();
+        std::thread::sleep(Duration::from_millis(5));
     }
-    eprintln!("RETIREMENT_DIAGNOSTIC observed_retirement polls={diagnostic_polls}");
+    assert!(
+        store.read_context_transition(&exact)?.is_some(),
+        "retirement did not persist after daemon connection closed"
+    );
     let restarted = native_service(&root)?
         .with_production_approval_verifier(approver.verifier()?)
         .with_context_authority(&configuration)?;
@@ -1337,10 +1347,42 @@ fn slow_reader_does_not_block_other_clients() -> TestResult {
     Ok(())
 }
 
+// Temporary mutation sensitivity gates; never ship their server fault hooks.
 #[test]
-fn diagnostic_scoped_retirement_original_fixture_repetition() -> TestResult {
-    for attempt in 1..=128 {
-        eprintln!("RETIREMENT_DIAGNOSTIC original_fixture_attempt={attempt}");
+fn diagnostic_rejected_retirement_fails_exact_durable_readback() {
+    let failed =
+        std::panic::catch_unwind(|| scoped_retirement_fixture("diagnostic-reject-retirement"))
+            .expect_err("rejected retirement must fail the receipt assertion");
+    let message = failed
+        .downcast_ref::<String>()
+        .map(String::as_str)
+        .or_else(|| failed.downcast_ref::<&str>().copied())
+        .unwrap_or("");
+    assert!(
+        message.contains("retirement did not persist after daemon connection closed"),
+        "wrong failure: {message}"
+    );
+}
+
+#[test]
+fn diagnostic_delayed_retirement_still_fails_five_second_gate() {
+    let failed =
+        std::panic::catch_unwind(|| scoped_retirement_fixture("diagnostic-delay-retirement"))
+            .expect_err("delayed retirement must fail the five-second gate");
+    let message = failed
+        .downcast_ref::<String>()
+        .map(String::as_str)
+        .or_else(|| failed.downcast_ref::<&str>().copied())
+        .unwrap_or("");
+    assert!(
+        message.contains("retirement connection did not finish"),
+        "wrong failure: {message}"
+    );
+}
+
+#[test]
+fn diagnostic_repaired_retirement_original_fixture_repetition() -> TestResult {
+    for _ in 0..128 {
         scoped_daemon_retirement_lost_ack_restart_and_old_verifier_fence()?;
     }
     Ok(())
