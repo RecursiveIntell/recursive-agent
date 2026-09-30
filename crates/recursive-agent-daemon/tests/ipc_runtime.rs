@@ -703,19 +703,36 @@ fn scoped_daemon_retirement_lost_ack_restart_and_old_verifier_fence() -> TestRes
     transition["signature"] = serde_json::to_value(controller.sign(&bytes).to_bytes().to_vec())?;
     // Submit retirement and close without accepting its ACK.
     let request = serde_json::json!({"schema":IPC_REQUEST_SCHEMA_V1,"protocol_version":IPC_PROTOCOL_VERSION_V1,"request_id":"lost-retirement","request":{"kind":"context_authority_transition","transition":transition}});
+    assert_eq!(
+        old_service
+            .managed_admission_snapshot()?
+            .open_ipc_connections,
+        1
+    );
     stream.write_all(&frame(&serde_json::to_vec(&request)?))?;
     stream.flush()?;
     drop(stream);
     let exact: recursive_agent_policy::ContextTransitionRequestV1 =
         serde_json::from_value(transition.clone())?;
     let deadline = std::time::Instant::now() + Duration::from_secs(5);
-    while store.read_context_transition(&exact)?.is_none() {
+    // Wait for this established connection's worker to finish without taking
+    // the permit-store lock away from retirement. Connection accounting is
+    // only synchronization; the exact durable receipt below remains the proof.
+    while old_service
+        .managed_admission_snapshot()?
+        .open_ipc_connections
+        != 0
+    {
         assert!(
             std::time::Instant::now() < deadline,
-            "retirement did not persist"
+            "retirement connection did not finish"
         );
-        std::thread::yield_now();
+        std::thread::sleep(Duration::from_millis(5));
     }
+    assert!(
+        store.read_context_transition(&exact)?.is_some(),
+        "retirement did not persist after daemon connection closed"
+    );
     let restarted = native_service(&root)?
         .with_production_approval_verifier(approver.verifier()?)
         .with_context_authority(&configuration)?;
