@@ -709,13 +709,16 @@ fn scoped_daemon_retirement_lost_ack_restart_and_old_verifier_fence() -> TestRes
     let exact: recursive_agent_policy::ContextTransitionRequestV1 =
         serde_json::from_value(transition.clone())?;
     let deadline = std::time::Instant::now() + Duration::from_secs(5);
+    let mut diagnostic_polls = 0;
     while store.read_context_transition(&exact)?.is_none() {
+        diagnostic_polls += 1;
         assert!(
             std::time::Instant::now() < deadline,
-            "retirement did not persist"
+            "retirement did not persist; diagnostic_polls={diagnostic_polls}"
         );
         std::thread::yield_now();
     }
+    eprintln!("RETIREMENT_DIAGNOSTIC observed_retirement polls={diagnostic_polls}");
     let restarted = native_service(&root)?
         .with_production_approval_verifier(approver.verifier()?)
         .with_context_authority(&configuration)?;
@@ -1323,5 +1326,14 @@ fn slow_reader_does_not_block_other_clients() -> TestResult {
     let response = read_response(&mut fast)?;
     assert_eq!(response["request_id"], "req-fast");
     assert_eq!(response["status"]["state"], "terminal");
+    Ok(())
+}
+
+#[test]
+fn diagnostic_scoped_retirement_original_fixture_repetition() -> TestResult {
+    for attempt in 1..=24 {
+        eprintln!("RETIREMENT_DIAGNOSTIC original_fixture_attempt={attempt}");
+        scoped_daemon_retirement_lost_ack_restart_and_old_verifier_fence()?;
+    }
     Ok(())
 }

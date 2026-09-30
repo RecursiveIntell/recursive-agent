@@ -209,6 +209,12 @@ fn handle_connection(stream: UnixStream, runtime: Arc<RuntimeService>) -> Result
         // on the correlated request instead of dropping the connection and
         // making a transcript/verification failure look like an unavailable
         // daemon to local adapters.
+        if request.request_id == "lost-retirement" {
+            eprintln!(
+                "RETIREMENT_DIAGNOSTIC thread={:?} admitted_lost_retirement",
+                std::thread::current().id()
+            );
+        }
         let response = match dispatch(&request, &runtime) {
             Ok(response) => response,
             Err(error) => serde_json::json!({
@@ -219,6 +225,13 @@ fn handle_connection(stream: UnixStream, runtime: Arc<RuntimeService>) -> Result
                 },
             }),
         };
+        if request.request_id == "lost-retirement" {
+            eprintln!(
+                "RETIREMENT_DIAGNOSTIC thread={:?} completed_lost_retirement error={:?}",
+                std::thread::current().id(),
+                response.get("error")
+            );
+        }
         let resp_bytes = serde_json::to_vec(&response)?;
         let mut frame = (resp_bytes.len() as u32).to_be_bytes().to_vec();
         frame.extend_from_slice(&resp_bytes);
