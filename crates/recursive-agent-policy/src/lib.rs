@@ -3435,12 +3435,6 @@ impl DurablePermitStore {
             .map_err(|_| PolicyError::PermitStateConflict)?;
         let diagnostic = std::thread::current().name().is_none();
         let started = std::time::Instant::now();
-        if diagnostic {
-            eprintln!(
-                "RETIREMENT_DIAGNOSTIC thread={:?} waiting_for_permit_lock",
-                std::thread::current().id()
-            );
-        }
         rustix::fs::flock(self.lock.as_fd(), FlockOperation::LockExclusive)
             .map_err(std::io::Error::from)?;
         if diagnostic {

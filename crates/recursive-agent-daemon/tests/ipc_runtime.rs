@@ -712,8 +712,16 @@ fn scoped_daemon_retirement_lost_ack_restart_and_old_verifier_fence() -> TestRes
     let mut diagnostic_polls = 0;
     while store.read_context_transition(&exact)?.is_none() {
         diagnostic_polls += 1;
+        let within_original_deadline = std::time::Instant::now() < deadline;
+        if !within_original_deadline {
+            eprintln!("RETIREMENT_DIAGNOSTIC five_second_gate_failed polls={diagnostic_polls}");
+            // The gate has already failed. Stop contending and retain the
+            // fixture briefly so a waiting writer can report its observation.
+            // This does not extend the deadline or permit a passing result.
+            std::thread::sleep(Duration::from_millis(500));
+        }
         assert!(
-            std::time::Instant::now() < deadline,
+            within_original_deadline,
             "retirement did not persist; diagnostic_polls={diagnostic_polls}"
         );
         std::thread::yield_now();
@@ -1331,7 +1339,7 @@ fn slow_reader_does_not_block_other_clients() -> TestResult {
 
 #[test]
 fn diagnostic_scoped_retirement_original_fixture_repetition() -> TestResult {
-    for attempt in 1..=24 {
+    for attempt in 1..=128 {
         eprintln!("RETIREMENT_DIAGNOSTIC original_fixture_attempt={attempt}");
         scoped_daemon_retirement_lost_ack_restart_and_old_verifier_fence()?;
     }
