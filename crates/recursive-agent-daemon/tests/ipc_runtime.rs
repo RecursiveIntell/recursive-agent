@@ -588,10 +588,6 @@ fn production_witness(call: ToolCallSpecV1) -> ProductionApprovalWitnessV1 {
 
 #[test]
 fn scoped_daemon_retirement_lost_ack_restart_and_old_verifier_fence() -> TestResult {
-    scoped_retirement_fixture("lost-retirement")
-}
-
-fn scoped_retirement_fixture(retirement_request_id: &str) -> TestResult {
     use ed25519_dalek::{Signer, SigningKey};
     use recursive_agent_policy::{
         ContextAdmissionModeV1, ContextAuthorityConfigurationV1, ContextAuthoritySchemaV1,
@@ -706,7 +702,7 @@ fn scoped_retirement_fixture(retirement_request_id: &str) -> TestResult {
     let bytes: Vec<u8> = serde_json::from_value(prepared["signing_bytes"].clone())?;
     transition["signature"] = serde_json::to_value(controller.sign(&bytes).to_bytes().to_vec())?;
     // Submit retirement and close without accepting its ACK.
-    let request = serde_json::json!({"schema":IPC_REQUEST_SCHEMA_V1,"protocol_version":IPC_PROTOCOL_VERSION_V1,"request_id":retirement_request_id,"request":{"kind":"context_authority_transition","transition":transition}});
+    let request = serde_json::json!({"schema":IPC_REQUEST_SCHEMA_V1,"protocol_version":IPC_PROTOCOL_VERSION_V1,"request_id":"lost-retirement","request":{"kind":"context_authority_transition","transition":transition}});
     assert_eq!(
         old_service
             .managed_admission_snapshot()?
@@ -1344,46 +1340,5 @@ fn slow_reader_does_not_block_other_clients() -> TestResult {
     let response = read_response(&mut fast)?;
     assert_eq!(response["request_id"], "req-fast");
     assert_eq!(response["status"]["state"], "terminal");
-    Ok(())
-}
-
-// Temporary mutation sensitivity gates; never ship their server fault hooks.
-#[test]
-fn diagnostic_rejected_retirement_fails_exact_durable_readback() {
-    let failed =
-        std::panic::catch_unwind(|| scoped_retirement_fixture("diagnostic-reject-retirement"))
-            .expect_err("rejected retirement must fail the receipt assertion");
-    let message = failed
-        .downcast_ref::<String>()
-        .map(String::as_str)
-        .or_else(|| failed.downcast_ref::<&str>().copied())
-        .unwrap_or("");
-    assert!(
-        message.contains("retirement did not persist after daemon connection closed"),
-        "wrong failure: {message}"
-    );
-}
-
-#[test]
-fn diagnostic_delayed_retirement_still_fails_five_second_gate() {
-    let failed =
-        std::panic::catch_unwind(|| scoped_retirement_fixture("diagnostic-delay-retirement"))
-            .expect_err("delayed retirement must fail the five-second gate");
-    let message = failed
-        .downcast_ref::<String>()
-        .map(String::as_str)
-        .or_else(|| failed.downcast_ref::<&str>().copied())
-        .unwrap_or("");
-    assert!(
-        message.contains("retirement connection did not finish"),
-        "wrong failure: {message}"
-    );
-}
-
-#[test]
-fn diagnostic_repaired_retirement_original_fixture_repetition() -> TestResult {
-    for _ in 0..128 {
-        scoped_daemon_retirement_lost_ack_restart_and_old_verifier_fence()?;
-    }
     Ok(())
 }
