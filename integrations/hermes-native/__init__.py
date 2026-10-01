@@ -15,8 +15,9 @@ try:
     from .client import (
         DaemonClientError,
         DaemonRunFailure,
+        MAX_OPERATION_INPUT_BYTES,
         check_socket_available,
-        submit_and_status,
+        submit_and_status_raw,
     )
     from .schema import RECURSIVE_AGENT_EXECUTE_SCHEMA
 except ImportError:
@@ -29,8 +30,9 @@ except ImportError:
     from client import (
         DaemonClientError,
         DaemonRunFailure,
+        MAX_OPERATION_INPUT_BYTES,
         check_socket_available,
-        submit_and_status,
+        submit_and_status_raw,
     )
     from schema import RECURSIVE_AGENT_EXECUTE_SCHEMA
 
@@ -54,17 +56,11 @@ DEFAULT_SOCKET_PATH = str(
 
 
 def _resolve_socket(ctx) -> str:
-    """Resolve the daemon socket path from plugin config, falling back safely."""
-    try:
-        cfg = getattr(ctx, "config", None) or {}
-        plugins_cfg = cfg.get("plugins", {}).get("entries", {}).get(
-            "recursive-agent-native", {}
-        )
-        sock = plugins_cfg.get("socket_path")
-        if sock:
-            return str(sock)
-    except Exception:
-        pass
+    """Read the socket from Hermes' namespaced plugin settings API."""
+    if ctx is not None:
+        socket_path = ctx.get_config("socket_path")
+        if isinstance(socket_path, str) and socket_path:
+            return socket_path
     return DEFAULT_SOCKET_PATH
 
 
@@ -98,16 +94,16 @@ def _handler(ctx, args, **kwargs) -> str:
     envelope_path = str((args or {}).get("envelope_path", ""))
     if envelope_path:
         try:
-            import json as _json
-
-            with open(envelope_path, encoding="utf-8") as _f:
-                envelope = _json.load(_f)
-        except (OSError, ValueError) as error:
+            with open(envelope_path, "rb") as source:
+                raw = source.read(MAX_OPERATION_INPUT_BYTES + 1)
+            if len(raw) > MAX_OPERATION_INPUT_BYTES:
+                return "recursive_agent_execute: unavailable: operation exceeds byte limit"
+        except OSError as error:
             return f"recursive_agent_execute: unavailable: cannot read envelope: {error}"
     else:
         return "recursive_agent_execute: unavailable: envelope_path required"
     try:
-        result = submit_and_status(socket_path, envelope)
+        result = submit_and_status_raw(socket_path, raw)
     except DaemonRunFailure as error:
         return json.dumps(
             {
@@ -135,19 +131,23 @@ def _handler(ctx, args, **kwargs) -> str:
         final_head = verification["final_head"]
     except (KeyError, TypeError):
         return "recursive_agent_execute: unavailable: daemon verification facts missing"
-    return json.dumps(
-        {
-            "schema": "recursive-agent.hermes-result/v1",
-            "state": state,
-            "run_id": run_id,
-            "run_dir": run_dir,
-            "verified": verified,
-            "chain_length": chain_length,
-            "final_head": final_head,
-        },
-        separators=(",", ":"),
-        sort_keys=True,
-    )
+    response = {
+        "schema": "recursive-agent.hermes-result/v1",
+        "state": state,
+        "run_id": run_id,
+        "run_dir": run_dir,
+        "verified": verified,
+        "chain_length": chain_length,
+        "final_head": final_head,
+    }
+    if result.get("operation_family") == "provider_egress_v3":
+        output = result.get("recorded_output")
+        if (not isinstance(output, dict) or set(output) != {"model", "text"}
+                or not isinstance(output["model"], str) or not output["model"]
+                or not isinstance(output["text"], str)):
+            return "recursive_agent_execute: unavailable: daemon recorded output facts missing"
+        response["recorded_output"] = output
+    return json.dumps(response, separators=(",", ":"), sort_keys=True)
 
 
 def register(ctx) -> None:
@@ -158,12 +158,15 @@ def register(ctx) -> None:
     def handler(args, **kwargs) -> str:
         return _handler(ctx, args, **kwargs)
 
+    def available() -> bool:
+        return check_recursive_agent_available(ctx)
+
     ctx.register_tool(
         name=TOOL_NAME,
         toolset=TOOLSET,
         schema=RECURSIVE_AGENT_EXECUTE_SCHEMA,
         handler=handler,
-        check_fn=check_recursive_agent_available,
+        check_fn=available,
         description=(
             "Submit one bounded recursive-agent native action and return "
             "daemon-derived terminal status plus strict verification facts."

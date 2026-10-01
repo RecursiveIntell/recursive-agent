@@ -31,8 +31,8 @@ pub use managed_admission::{
     ManagedReservation, ManagedUsageV1, PROVIDER_LANE, SANDBOX_PROCESS_LANE, TOOL_LANE,
 };
 pub use runtime::{
-    NativeOperationExecutor, RuntimeCancelResultV1, RuntimeHandleV1, RuntimeLiveParentV2,
-    RuntimeService, RuntimeServiceError, RuntimeStatusV1,
+    NativeOperationExecutor, RecordedProviderOutputV3, RuntimeCancelResultV1, RuntimeHandleV1,
+    RuntimeLiveParentV2, RuntimeService, RuntimeServiceError, RuntimeStatusV1,
 };
 pub use scheduler::{
     LeaseGrantV1, OperationRow, ProjectedState, SchedulerStore, SchedulerStoreError,
@@ -542,6 +542,14 @@ pub(crate) fn run_child_spec_with_run_id(
     }
 }
 
+pub(crate) fn provider_egress_step_call(arguments: serde_json::Value) -> ToolCallSpecV1 {
+    ToolCallSpecV1 {
+        tool: "sealed_completion".into(),
+        args: arguments,
+        frozen_clock: None,
+    }
+}
+
 pub(crate) fn run_provider_egress_operation_v3_with_run_id(
     operation: &ProviderEgressOperationEnvelopeV3,
     out_root: &Path,
@@ -564,11 +572,7 @@ pub(crate) fn run_provider_egress_operation_v3_with_run_id(
         name: "provider-egress-operation-v3".into(),
         steps: vec![StepSpecV1 {
             name: "sealed_completion".into(),
-            call: ToolCallSpecV1 {
-                tool: "sealed_completion".into(),
-                args: arguments,
-                frozen_clock: None,
-            },
+            call: provider_egress_step_call(arguments),
         }],
         frozen_clock: None,
         policy_version: "candidate-egress-v1".into(),

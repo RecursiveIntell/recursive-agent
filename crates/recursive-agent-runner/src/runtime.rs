@@ -9,9 +9,9 @@ use recursive_agent_contracts::{
     content_digest, derive_child_operation_id, derive_child_operation_proposal_digest,
     derive_operation_id, derive_provider_egress_operation_id, derive_step_id,
     parse_operation_envelope_bytes, ChildOperationEnvelopeV2, ChildOperationProposalV2,
-    ChildRunAuthorityV1, ContractError, CurrentPermitId, CurrentRunId, OperationEnvelopeV1,
-    ProviderEgressOperationEnvelopeV3, ReceiptKindV1, RunTerminalStateV1, RuntimeEventV1,
-    ToolCallSpecV1,
+    ChildRunAuthorityV1, ContentDigest, ContractError, CurrentPermitId, CurrentRunId,
+    OperationEnvelopeV1, ProviderEgressOperationEnvelopeV3, ReceiptKindV1, RunTerminalStateV1,
+    RuntimeEventV1, ToolCallSpecV1,
 };
 use recursive_agent_ledger::{
     committed_events_directory_bound, verified_snapshot_directory_bound,
@@ -26,11 +26,12 @@ use recursive_agent_policy::{
     ProductionApprovalWitnessV1, ProviderEgressAdmissionRequestV1, ReportedEffectOutcomeV1,
 };
 use recursive_agent_provider::{CompletionBackend, CompletionRequestV1, ProviderSpecV1};
+use serde::Deserialize;
 use stack_ids::{AttemptId, TraceCtx, TrialId};
 use thiserror::Error;
 
 use crate::{
-    run_child_spec_with_run_id, run_live_parent_spec_with_run_id,
+    provider_egress_step_call, run_child_spec_with_run_id, run_live_parent_spec_with_run_id,
     run_provider_egress_operation_v3_with_run_id, run_spec_internal_with_run_id,
     AutonomousBudgetV1, AutonomousCancellation, AutonomousError, AutonomousExecutor,
     AutonomousIntentV1, AutonomousPlanner, AutonomousResultV1, AutonomousTranscript,
@@ -65,6 +66,23 @@ pub struct RuntimeHandleV1 {
     run_id: CurrentRunId,
     /// Content-addressed directory containing the committed evidence chain.
     run_dir: std::path::PathBuf,
+}
+
+/// Bounded, caller-bound projection of a strictly verified recorded provider response.
+/// It contains neither a filesystem path nor the provider's raw payload.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct RecordedProviderOutputV3 {
+    pub model: String,
+    pub text: String,
+}
+
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct RecordedProviderPayloadV3 {
+    model: String,
+    text: String,
+    binding_digest: ContentDigest,
+    request_digest: ContentDigest,
 }
 
 impl RuntimeHandleV1 {
@@ -167,6 +185,9 @@ pub enum RuntimeServiceError {
     /// Recorded replay was requested before a verified V3 run exists.
     #[error("recorded provider-egress replay is unavailable")]
     ProviderEgressReplayUnavailable,
+    /// The bound recorded response is missing, malformed, or mismatches its sealed route.
+    #[error("recorded provider output does not match the sealed request")]
+    RecordedProviderOutputMalformed,
     /// The same operation is already executing through this service instance.
     #[error("operation is already active: {operation_id}")]
     OperationAlreadyActive {
@@ -995,13 +1016,34 @@ impl RuntimeService {
         })
     }
 
-    /// Read a previously verified V3 result without provider, tool, credential,
-    /// current-policy, or current-route access. This is recorded replay only:
-    /// absence or corruption fails closed, and no new receipt is appended.
+    /// Read strictly verified V3 evidence only after current policy authorizes
+    /// the sealed request. The provider and tool are not called and no run
+    /// receipt is appended; the injected policy verifier may have its own
+    /// side effects, so this is not a general effect-free API.
     pub fn replay_provider_egress_v3(
         &self,
         operation: &ProviderEgressOperationEnvelopeV3,
     ) -> Result<RuntimeHandleV1, RuntimeServiceError> {
+        self.verified_provider_replay_v3(operation)
+            .map(|(handle, _)| handle)
+    }
+
+    /// Consume a recorded response after fresh exact-operation and current-policy
+    /// checks. Unlike a returned path handle, the evidence and artifact are read
+    /// through the same descriptor-pinned run root. This does not call a provider
+    /// or append a run receipt; the policy callback can have its own effects.
+    pub fn read_recorded_provider_output_v3(
+        &self,
+        operation: &ProviderEgressOperationEnvelopeV3,
+    ) -> Result<RecordedProviderOutputV3, RuntimeServiceError> {
+        self.verified_provider_replay_v3(operation)
+            .map(|(_, output)| output)
+    }
+
+    fn verified_provider_replay_v3(
+        &self,
+        operation: &ProviderEgressOperationEnvelopeV3,
+    ) -> Result<(RuntimeHandleV1, RecordedProviderOutputV3), RuntimeServiceError> {
         operation.validate_structure()?;
         let operation_id = derive_provider_egress_operation_id(operation)?;
         let run_dir = self
@@ -1011,12 +1053,104 @@ impl RuntimeService {
         if !run_dir.is_dir() {
             return Err(RuntimeServiceError::ProviderEgressReplayUnavailable);
         }
-        self.verify(&operation_id)?;
-        Ok(RuntimeHandleV1 {
-            operation_id: operation_id.clone(),
-            run_id: operation_id,
-            run_dir,
-        })
+        let verifier = self
+            .dependencies
+            .provider_egress_verifier()
+            .ok_or(RuntimeServiceError::ProviderEgressDisabled)?;
+        let request: CompletionRequestV1 =
+            serde_json::from_value(operation.sealed_completion.arguments.request.clone())
+                .map_err(|_| RuntimeServiceError::ProviderRequestMalformed)?;
+        if content_digest(&request)? != operation.sealed_completion.arguments.binding.request_digest
+        {
+            return Err(RuntimeServiceError::ProviderRequestMalformed);
+        }
+        let binding = &operation.sealed_completion.arguments.binding;
+        if !request
+            .provider
+            .matches_egress_binding(&binding.provider_identity, &binding.model_ref)
+        {
+            return Err(RuntimeServiceError::ProviderBindingMismatch);
+        }
+        let trusted_now = self.dependencies.clock().now();
+        operation.validate_at(trusted_now)?;
+        let tool_arguments = serde_json::to_value(&operation.sealed_completion.arguments)
+            .map_err(|_| RuntimeServiceError::ProviderRequestMalformed)?;
+        let admission_request = ProviderEgressAdmissionRequestV1::new(
+            "sealed_completion",
+            binding.clone(),
+            content_digest(&request)?,
+            content_digest(&tool_arguments)?,
+        )
+        .map_err(RunError::Policy)?;
+        let sealed_step_digest =
+            content_digest(&provider_egress_step_call(tool_arguments.clone()))?;
+        // Evidence must be strict-valid before an injected policy callback can
+        // observe or consume a current authorization. A failed replay never
+        // invokes the verifier, even if it has external side effects.
+        let (snapshot, store) =
+            recursive_agent_ledger::verified_provider_replay_snapshot_read_only(
+                &RunPaths::new(run_dir.clone()),
+                recursive_agent_ledger::ProviderReplayExpectationV3 {
+                    run_id: &operation_id,
+                    operation_digest: &content_digest(operation)?,
+                    sealed_step_digest: &sealed_step_digest,
+                    admission: &admission_request,
+                },
+            )?;
+        if snapshot.verification().verified_run_id.as_ref() != Some(&operation_id) {
+            return Err(RuntimeServiceError::RunIdentityMismatch {
+                expected: operation_id.to_string(),
+                observed: snapshot
+                    .verification()
+                    .verified_run_id
+                    .as_ref()
+                    .map_or_else(|| "none".into(), ToString::to_string),
+            });
+        }
+        // Strict chain validity alone does not establish that the application
+        // payload is decodable or belongs to this sealed request. Validate it
+        // through the pinned store before a policy callback with possible effects.
+        let completed = snapshot
+            .receipts()
+            .iter()
+            .find(|receipt| receipt.kind == ReceiptKindV1::StepCompleted)
+            .ok_or(RuntimeServiceError::RecordedProviderOutputMalformed)?;
+        let descriptor = completed
+            .artifact_refs
+            .first()
+            .ok_or(RuntimeServiceError::RecordedProviderOutputMalformed)?;
+        let payload: RecordedProviderPayloadV3 = serde_json::from_slice(&store.get(descriptor)?)
+            .map_err(|_| RuntimeServiceError::RecordedProviderOutputMalformed)?;
+        if payload.binding_digest != binding.binding_digest
+            || payload.request_digest != binding.request_digest
+            || format!("model:{}", payload.model) != binding.model_ref
+        {
+            return Err(RuntimeServiceError::RecordedProviderOutputMalformed);
+        }
+        let output = RecordedProviderOutputV3 {
+            model: payload.model,
+            text: payload.text,
+        };
+        // Strict verification can outlast a lease. Admit against the current
+        // owner clock, not the time sampled before the filesystem read.
+        authorize_provider_egress(
+            verifier,
+            &admission_request,
+            self.dependencies.clock().now(),
+        )
+        .map_err(RunError::Policy)?;
+        recursive_agent_ledger::verify_run_root_identity_read_only(
+            &RunPaths::new(run_dir.clone()),
+            store.run_root_identity(),
+        )?;
+        Ok((
+            RuntimeHandleV1 {
+                operation_id: operation_id.clone(),
+                run_id: operation_id,
+                run_dir,
+            },
+            output,
+        ))
     }
 
     /// Run the bounded autonomous loop inside the canonical runtime owner.
