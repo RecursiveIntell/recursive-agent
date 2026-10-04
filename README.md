@@ -23,6 +23,10 @@ reliability, autonomous recursion, native child lineage, real-provider
 execution, or external integration. `cargo deny check advisories bans licenses
 sources` and bounded ingress fuzzing were subsequently recorded as passing in the August 22 closeout. Those dated receipts supersede the older unavailable-tool/license-policy blockers; they still require rerunning for a new source/environment.
 
+## Source checkout prerequisite
+
+The root [`Cargo.toml`](Cargo.toml) resolves `boundary-compiler`, `stack-ids`, `bitemporal-runtime`, `claim-ledger`, and `llm-tool-runtime` by path from a sibling `../Libraries` checkout. Place compatible `Libraries/` and `recursive-agent/` checkouts under the same parent before building; a `recursive-agent` checkout alone cannot resolve those workspace dependencies. The dated validation below does not certify an arbitrary new pairing of their default branches.
+
 ## Original M0 boundary
 
 The baseline M0 design provides a deterministic local run that emits a
@@ -34,8 +38,8 @@ or deterministic replay guarantee for a provider response.
 # From the root of your recursive-agent checkout:
 cargo build --release
 ./target/release/ra doctor
-./target/release/ra run fixtures/hello-run.json
-./target/release/ra verify <run-dir-printed-above>
+./target/release/ra run --spec fixtures/hello-run.json
+./target/release/ra verify --run <run-dir-printed-above>
 ```
 
 ## Experimental provider-facing autonomous-loop surface
