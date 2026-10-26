@@ -23,9 +23,52 @@ reliability, autonomous recursion, native child lineage, real-provider
 execution, or external integration. `cargo deny check advisories bans licenses
 sources` and bounded ingress fuzzing were subsequently recorded as passing in the August 22 closeout. Those dated receipts supersede the older unavailable-tool/license-policy blockers; they still require rerunning for a new source/environment.
 
+<!-- last-verified: 2026-10-26 -->
+<!-- Scope: source-pairing and CLI option/default notes only; broader validation evidence retains its recorded cutoff. -->
+
 ## Source checkout prerequisite
 
-The root [`Cargo.toml`](Cargo.toml) resolves `boundary-compiler`, `stack-ids`, `bitemporal-runtime`, `claim-ledger`, and `llm-tool-runtime` by path from a sibling `../Libraries` checkout. Place compatible `Libraries/` and `recursive-agent/` checkouts under the same parent before building; a `recursive-agent` checkout alone cannot resolve those workspace dependencies. The dated validation below does not certify an arbitrary new pairing of their default branches.
+The root [`Cargo.toml`](Cargo.toml) resolves `boundary-compiler`, `stack-ids`, `bitemporal-runtime`, `claim-ledger`, and `llm-tool-runtime` by path from a sibling `../Libraries` checkout. A `recursive-agent` checkout alone cannot resolve those workspace dependencies. CI pairs this source with [`Libraries` commit `0b099ec416de60f6adafb182f1d1e83795d05c56`](https://github.com/RecursiveIntell/Libraries/commit/0b099ec416de60f6adafb182f1d1e83795d05c56); use that pin for the documented CI pairing rather than assuming the current `Libraries` default branch is compatible.
+
+From a parent directory where neither checkout already exists, create the paired roots with:
+
+```bash
+git clone https://github.com/RecursiveIntell/recursive-agent.git
+git clone https://github.com/RecursiveIntell/Libraries.git
+git -C Libraries checkout 0b099ec416de60f6adafb182f1d1e83795d05c56
+cd recursive-agent
+```
+
+The commands above describe the current CI source pairing; they have not been run as a clean onboarding flow here. The dated validation below does not certify an arbitrary new pairing of the repositories' default branches.
+
+## CLI options and defaults
+
+The CLI is implemented in [`crates/recursive-agent-cli/src/main.rs`](crates/recursive-agent-cli/src/main.rs). After building, `ra --help` and each subcommand's `--help` show the parser-generated usage. The table records the parser's current named options; it does not imply that the experimental provider-facing path has been validated. Clap also supplies `-h`/`--help` and `-V`/`--version`.
+
+| Command | Option | Required or default |
+|---|---|---|
+| Global CLI option | `--log-level` | `info` |
+| `ra` and subcommands | `-h`, `--help` | Generated usage; no command runs |
+| `ra` | `-V`, `--version` | CLI package version (`0.1.0`) |
+| `ra run` | `--spec <PATH>` | Required run-spec file |
+| `ra run` | `--out <DIR>` | `$RECURSIVE_AGENT_RUNS` when present; otherwise `$HOME/.local/share/recursive-agent/runs` (or `./.local/share/recursive-agent/runs` if `HOME` is absent) |
+| `ra run` | `--runtime <embedded\|ipc>` | `embedded`; no automatic fallback between modes |
+| `ra run` | `--socket <PATH>` | No default; required with `--runtime ipc` |
+| `ra autonomous` | `--goal <TEXT>` | Required |
+| `ra autonomous` | `--model <NAME>` | Required; must be admitted by the configured provider |
+| `ra autonomous` | `--provider-url <URL>` | `http://127.0.0.1:11434` |
+| `ra autonomous` | `--out <DIR>` | `$RECURSIVE_AGENT_RUNS/autonomous` when present; otherwise `$HOME/.local/share/recursive-agent/runs/autonomous` (or `./.local/share/recursive-agent/runs/autonomous` if `HOME` is absent) |
+| `ra autonomous` | `--max-depth` | `3` |
+| `ra autonomous` | `--max-steps` | `8` |
+| `ra autonomous` | `--max-children` | `2` |
+| `ra autonomous` | `--max-wall-time-ms` | `120000` |
+| `ra autonomous` | `--max-output-bytes` | `65536` |
+| `ra autonomous` | `--max-tokens` | Unset unless supplied |
+| `ra verify`, `ra replay` | `--run <DIR>` | Required |
+| `ra pack export` | `--run <DIR>`, `--out <DIR>` | Both required |
+| `ra pack verify`, `ra pack replay` | `--pack <DIR>` | Required |
+
+When `RECURSIVE_AGENT_RUNS` is present, its value is the run-data root; otherwise the CLI derives the root from `HOME` (falling back to `.` if `HOME` is absent). `ra run` uses that root directly, while `ra autonomous` appends an `autonomous/` directory. The autonomous command accepts an Ollama-compatible URL and model name; no API-key environment variable is defined by this CLI parser. No external provider call is included in the validation for this README.
 
 ## Original M0 boundary
 
