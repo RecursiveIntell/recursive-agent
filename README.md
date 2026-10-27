@@ -51,7 +51,7 @@ The CLI is implemented in [`crates/recursive-agent-cli/src/main.rs`](crates/recu
 | `ra` and subcommands | `-h`, `--help` | Generated usage; no command runs |
 | `ra` | `-V`, `--version` | CLI package version (`0.1.0`) |
 | `ra run` | `--spec <PATH>` | Required run-spec file |
-| `ra run` | `--out <DIR>` | `$RECURSIVE_AGENT_RUNS` when present; otherwise `$HOME/.local/share/recursive-agent/runs` (or `./.local/share/recursive-agent/runs` if `HOME` is absent) |
+| `ra run` | `--out <DIR>` | Embedded mode only; ignored with `--runtime ipc`. `$RECURSIVE_AGENT_RUNS` when present; otherwise `$HOME/.local/share/recursive-agent/runs` (or `./.local/share/recursive-agent/runs` if `HOME` is absent) |
 | `ra run` | `--runtime <embedded\|ipc>` | `embedded`; no automatic fallback between modes |
 | `ra run` | `--socket <PATH>` | No default; required with `--runtime ipc` |
 | `ra autonomous` | `--goal <TEXT>` | Required |
@@ -68,7 +68,7 @@ The CLI is implemented in [`crates/recursive-agent-cli/src/main.rs`](crates/recu
 | `ra pack export` | `--run <DIR>`, `--out <DIR>` | Both required |
 | `ra pack verify`, `ra pack replay` | `--pack <DIR>` | Required |
 
-When `RECURSIVE_AGENT_RUNS` is present, its value is the run-data root; otherwise the CLI derives the root from `HOME` (falling back to `.` if `HOME` is absent). `ra run` uses that root directly, while `ra autonomous` appends an `autonomous/` directory. The autonomous command accepts an Ollama-compatible URL and model name; no API-key environment variable is defined by this CLI parser. No external provider call is included in the validation for this README.
+When `RECURSIVE_AGENT_RUNS` is present, its value is the run-data root; otherwise the CLI derives the root from `HOME` (falling back to `.` if `HOME` is absent). Embedded `ra run` uses that root directly, while `ra autonomous` appends an `autonomous/` directory. In IPC mode, the server owns the run output location; the CLI's `--out` option does not change it. The autonomous command accepts an Ollama-compatible URL and model name; no API-key environment variable is defined by this CLI parser. No external provider call is included in the validation for this README.
 
 ## Original M0 boundary
 
