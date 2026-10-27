@@ -9,7 +9,7 @@ use recursive_agent_contracts::{
 };
 use recursive_agent_ledger::{
     make_receipt, open, verified_snapshot_with_artifact_store_directory_bound,
-    verify_directory_bound, ReceiptDraftV1, RunPaths,
+    verify_directory_bound, LedgerError, ReceiptDraftV1, RunPaths,
 };
 use recursive_agent_policy::{
     PolicyError, ProviderEgressAdmissionEvidenceV1, ProviderEgressAdmissionVerifier,
@@ -24,6 +24,7 @@ use recursive_agent_runner::{
     RuntimePolicyDependencyV1, RuntimeProviderDependencyV1, RuntimeSandboxDependencyV1,
     RuntimeService, RuntimeServiceError, RuntimeStoreDependencyV1,
 };
+use std::collections::BTreeMap;
 use std::sync::{
     atomic::{AtomicI64, AtomicUsize, Ordering},
     mpsc, Arc, Mutex,
@@ -65,6 +66,21 @@ impl Clock for AdvancingClock {
     }
 }
 
+struct ExpiringBetweenChecksClock(AtomicUsize);
+
+impl Clock for ExpiringBetweenChecksClock {
+    fn now(&self) -> chrono::DateTime<Utc> {
+        let seconds = if self.0.fetch_add(1, Ordering::SeqCst) == 0 {
+            1_788_220_800
+        } else {
+            1_925_000_000
+        };
+        Utc.timestamp_opt(seconds, 0)
+            .single()
+            .unwrap_or(chrono::DateTime::<Utc>::UNIX_EPOCH)
+    }
+}
+
 struct AllowCurrentEgress;
 
 impl ProviderEgressAdmissionVerifier for AllowCurrentEgress {
@@ -75,6 +91,41 @@ impl ProviderEgressAdmissionVerifier for AllowCurrentEgress {
     fn authorize(&self, admission: &ValidatedProviderEgressAdmissionV1) -> Result<(), PolicyError> {
         if admission.lane() != "sealed_completion" {
             return Err(PolicyError::ToolNotAllowed(admission.lane().into()));
+        }
+        Ok(())
+    }
+}
+
+struct DenyCurrentEgress;
+
+impl ProviderEgressAdmissionVerifier for DenyCurrentEgress {
+    fn authorize(&self, _: &ValidatedProviderEgressAdmissionV1) -> Result<(), PolicyError> {
+        Err(PolicyError::NetworkUnavailable)
+    }
+}
+
+struct CountingCurrentEgress(Arc<AtomicUsize>);
+
+impl ProviderEgressAdmissionVerifier for CountingCurrentEgress {
+    fn authorize(&self, _: &ValidatedProviderEgressAdmissionV1) -> Result<(), PolicyError> {
+        self.0.fetch_add(1, Ordering::Relaxed);
+        Ok(())
+    }
+}
+
+struct ReplacingCurrentEgress {
+    original: std::path::PathBuf,
+    staged: std::path::PathBuf,
+    calls: Arc<AtomicUsize>,
+}
+
+impl ProviderEgressAdmissionVerifier for ReplacingCurrentEgress {
+    fn authorize(&self, _: &ValidatedProviderEgressAdmissionV1) -> Result<(), PolicyError> {
+        self.calls.fetch_add(1, Ordering::Relaxed);
+        if std::fs::rename(&self.original, self.original.with_extension("held")).is_err()
+            || std::fs::rename(&self.staged, &self.original).is_err()
+        {
+            return Err(PolicyError::NetworkUnavailable);
         }
         Ok(())
     }
@@ -232,7 +283,15 @@ fn candidate_service_with_backend<B: CompletionBackend + Send + Sync + 'static>(
 fn replay_only_service(
     output_root: &std::path::Path,
 ) -> Result<RuntimeService, Box<dyn std::error::Error>> {
-    let dependencies = RuntimeDependencies::builder()
+    replay_only_service_with_policy(output_root, None, 1_925_000_000)
+}
+
+fn replay_only_service_with_policy(
+    output_root: &std::path::Path,
+    verifier: Option<Arc<dyn ProviderEgressAdmissionVerifier>>,
+    now: i64,
+) -> Result<RuntimeService, Box<dyn std::error::Error>> {
+    let mut builder = RuntimeDependencies::builder()
         .policy(RuntimePolicyDependencyV1::Native)
         .sandbox(RuntimeSandboxDependencyV1::Native)
         .tool_runtime(Arc::new(llm_tool_runtime::ToolRuntime::new(
@@ -240,11 +299,56 @@ fn replay_only_service(
         )))
         .provider(RuntimeProviderDependencyV1::Disabled)
         .ledger(RuntimeLedgerDependencyV1::Native)
-        .clock(Arc::new(MutableClock::new(1_925_000_000)))
+        .clock(Arc::new(MutableClock::new(now)))
         .store(RuntimeStoreDependencyV1::Native)
-        .output_root(output_root)
-        .build()?;
-    Ok(RuntimeService::new(dependencies))
+        .output_root(output_root);
+    if let Some(verifier) = verifier {
+        builder = builder.provider_egress_verifier(verifier);
+    }
+    Ok(RuntimeService::new(builder.build()?))
+}
+
+fn run_tree_bytes(
+    root: &std::path::Path,
+) -> std::io::Result<BTreeMap<std::path::PathBuf, Vec<u8>>> {
+    fn collect(
+        directory: &std::path::Path,
+        relative: &std::path::Path,
+        files: &mut BTreeMap<std::path::PathBuf, Vec<u8>>,
+    ) -> std::io::Result<()> {
+        for entry in std::fs::read_dir(directory)? {
+            let entry = entry?;
+            let relative_path = relative.join(entry.file_name());
+            let kind = entry.file_type()?;
+            if kind.is_dir() {
+                files.insert(relative_path.clone(), Vec::new());
+                collect(&entry.path(), &relative_path, files)?;
+            } else if kind.is_file() {
+                files.insert(relative_path, std::fs::read(entry.path())?);
+            } else {
+                return Err(std::io::Error::other("unexpected run-tree entry"));
+            }
+        }
+        Ok(())
+    }
+
+    let mut files = BTreeMap::new();
+    collect(root, std::path::Path::new(""), &mut files)?;
+    Ok(files)
+}
+
+fn copy_run_tree(source: &std::path::Path, target: &std::path::Path) -> std::io::Result<()> {
+    std::fs::create_dir(target)?;
+    for entry in std::fs::read_dir(source)? {
+        let entry = entry?;
+        let destination = target.join(entry.file_name());
+        if entry.file_type()?.is_dir() {
+            copy_run_tree(&entry.path(), &destination)?;
+        } else {
+            std::fs::copy(entry.path(), destination)?;
+        }
+    }
+    Ok(())
 }
 
 fn rebuild_without_admission_receipt(
@@ -290,6 +394,114 @@ fn rebuild_without_admission_receipt(
     Ok(paths)
 }
 
+// Construct a self-consistent chain under the SAME canonical run path while
+// replacing the admission artifact with a valid but wrong sealed context.
+fn replace_with_wrong_binding_chain(
+    source: &recursive_agent_ledger::VerifiedReceiptSnapshot,
+    source_store: &recursive_agent_ledger::ArtifactStore,
+    run_dir: &std::path::Path,
+) -> Result<(), Box<dyn std::error::Error>> {
+    std::fs::rename(run_dir, run_dir.with_extension("held"))?;
+    let mut chain = open(&RunPaths::new(run_dir))?;
+    let target_store = chain.artifact_store()?;
+    for receipt in source.receipts() {
+        let mut artifacts = Vec::new();
+        for descriptor in &receipt.artifact_refs {
+            let bytes = if receipt.kind == ReceiptKindV1::ProviderEgressAdmitted {
+                let mut evidence: ProviderEgressAdmissionEvidenceV1 =
+                    serde_json::from_slice(&source_store.get(descriptor)?)?;
+                let binding = &evidence.binding;
+                evidence.binding =
+                    ProviderEgressBindingV1::seal(ProviderEgressBindingMaterialV1 {
+                        policy_basis_ref: binding.policy_basis_ref.clone(),
+                        policy_basis_digest: binding.policy_basis_digest.clone(),
+                        context_digest: format!("sha256:{}", "f".repeat(64)),
+                        source_revision: binding.source_revision.clone(),
+                        graph_obligation_ref: binding.graph_obligation_ref.clone(),
+                        graph_obligation_digest: binding.graph_obligation_digest.clone(),
+                        route_class: binding.route_class.clone(),
+                        provider_identity: binding.provider_identity.clone(),
+                        model_ref: binding.model_ref.clone(),
+                        input_tokens: binding.input_tokens,
+                        output_reserve: binding.output_reserve,
+                        request_digest: binding.request_digest.clone(),
+                        not_after: binding.not_after,
+                    })?;
+                evidence.validate()?;
+                serde_json::to_vec(&evidence)?
+            } else {
+                source_store.get(descriptor)?
+            };
+            artifacts.push(target_store.put(
+                &bytes,
+                &descriptor.media_type,
+                descriptor.encoding.clone(),
+            )?);
+        }
+        chain.append(make_receipt(
+            ReceiptDraftV1 {
+                run_id: receipt.run_id.clone(),
+                step_id: receipt.step_id.clone(),
+                kind: receipt.kind.clone(),
+                valid_time: receipt.valid_time,
+                lineage: receipt.lineage.clone(),
+                spec_digest: receipt.spec_digest.clone(),
+                args_digest: receipt.args_digest.clone(),
+                artifact_refs: artifacts,
+                outcome: receipt.outcome.clone(),
+            },
+            chain.head().clone(),
+        )?)?;
+    }
+    Ok(())
+}
+
+// Keep the caller/admission/step chain intact while making the recorded
+// response invalid at the application boundary. Generic strict verification
+// must still pass, otherwise this fixture would not test policy ordering.
+fn replace_with_malformed_response_chain(
+    source: &recursive_agent_ledger::VerifiedReceiptSnapshot,
+    source_store: &recursive_agent_ledger::ArtifactStore,
+    run_dir: &std::path::Path,
+) -> Result<(), Box<dyn std::error::Error>> {
+    std::fs::rename(run_dir, run_dir.with_extension("held"))?;
+    let mut chain = open(&RunPaths::new(run_dir))?;
+    let target_store = chain.artifact_store()?;
+    for receipt in source.receipts() {
+        let mut artifacts = Vec::new();
+        for descriptor in &receipt.artifact_refs {
+            let bytes = if matches!(
+                receipt.kind,
+                ReceiptKindV1::ArtifactStored | ReceiptKindV1::StepCompleted
+            ) {
+                b"not-json".to_vec()
+            } else {
+                source_store.get(descriptor)?
+            };
+            artifacts.push(target_store.put(
+                &bytes,
+                &descriptor.media_type,
+                descriptor.encoding.clone(),
+            )?);
+        }
+        chain.append(make_receipt(
+            ReceiptDraftV1 {
+                run_id: receipt.run_id.clone(),
+                step_id: receipt.step_id.clone(),
+                kind: receipt.kind.clone(),
+                valid_time: receipt.valid_time,
+                lineage: receipt.lineage.clone(),
+                spec_digest: receipt.spec_digest.clone(),
+                args_digest: receipt.args_digest.clone(),
+                artifact_refs: artifacts,
+                outcome: receipt.outcome.clone(),
+            },
+            chain.head().clone(),
+        )?)?;
+    }
+    Ok(())
+}
+
 #[test]
 fn active_provider_execution_is_visible_as_in_flight_until_backend_returns(
 ) -> Result<(), Box<dyn std::error::Error>> {
@@ -326,6 +538,50 @@ fn active_provider_execution_is_visible_as_in_flight_until_backend_returns(
     assert!(completed.active.is_empty());
     assert!(completed.draining.is_empty());
     assert_eq!(completed.provider_requests_in_flight, 0);
+    Ok(())
+}
+
+// Rebuild an otherwise valid run with a StepCompleted receipt claiming a
+// different sealed step, while retaining the original operation/admission.
+fn replace_with_wrong_step_digest_chain(
+    source: &recursive_agent_ledger::VerifiedReceiptSnapshot,
+    source_store: &recursive_agent_ledger::ArtifactStore,
+    run_dir: &std::path::Path,
+) -> Result<(), Box<dyn std::error::Error>> {
+    std::fs::rename(run_dir, run_dir.with_extension("held"))?;
+    let mut chain = open(&RunPaths::new(run_dir))?;
+    let target_store = chain.artifact_store()?;
+    for receipt in source.receipts() {
+        let mut artifacts = Vec::new();
+        for descriptor in &receipt.artifact_refs {
+            let bytes = source_store.get(descriptor)?;
+            let copied =
+                target_store.put(&bytes, &descriptor.media_type, descriptor.encoding.clone())?;
+            if copied != *descriptor {
+                return Err("copied artifact descriptor changed".into());
+            }
+            artifacts.push(copied);
+        }
+        let spec_digest = if receipt.kind == ReceiptKindV1::StepCompleted {
+            ContentDigest::compute(b"different-sealed-step")
+        } else {
+            receipt.spec_digest.clone()
+        };
+        chain.append(make_receipt(
+            ReceiptDraftV1 {
+                run_id: receipt.run_id.clone(),
+                step_id: receipt.step_id.clone(),
+                kind: receipt.kind.clone(),
+                valid_time: receipt.valid_time,
+                lineage: receipt.lineage.clone(),
+                spec_digest,
+                args_digest: receipt.args_digest.clone(),
+                artifact_refs: artifacts,
+                outcome: receipt.outcome.clone(),
+            },
+            chain.head().clone(),
+        )?)?;
+    }
     Ok(())
 }
 
@@ -387,14 +643,394 @@ fn v3_candidate_executes_once_then_replays_verified_artifact_without_backend(
     assert!(payload.get("raw").is_none());
 
     clock.set(1_925_000_000);
+    let before = run_tree_bytes(handle.run_dir())?;
     let replay_service = replay_only_service(output.path())?;
-    let replayed = replay_service.replay_provider_egress_v3(&operation)?;
+    assert!(matches!(
+        replay_service.replay_provider_egress_v3(&operation),
+        Err(RuntimeServiceError::ProviderEgressDisabled)
+    ));
+    assert_eq!(run_tree_bytes(handle.run_dir())?, before);
+    assert_eq!(calls.load(Ordering::Relaxed), 1);
+    assert!(matches!(
+        replay_service.submit_provider_egress_v3(&operation),
+        Err(RuntimeServiceError::ProviderEgressDisabled)
+    ));
+    assert_eq!(run_tree_bytes(handle.run_dir())?, before);
+    assert_eq!(calls.load(Ordering::Relaxed), 1);
+    let expired_service = replay_only_service_with_policy(
+        output.path(),
+        Some(Arc::new(AllowCurrentEgress)),
+        1_925_000_000,
+    )?;
+    assert!(matches!(
+        expired_service.replay_provider_egress_v3(&operation),
+        Err(RuntimeServiceError::Contract(_))
+    ));
+    assert_eq!(run_tree_bytes(handle.run_dir())?, before);
+    assert_eq!(calls.load(Ordering::Relaxed), 1);
+    let denied_service = replay_only_service_with_policy(
+        output.path(),
+        Some(Arc::new(DenyCurrentEgress)),
+        1_788_220_800,
+    )?;
+    assert!(matches!(
+        denied_service.replay_provider_egress_v3(&operation),
+        Err(RuntimeServiceError::Run(
+            recursive_agent_runner::RunError::Policy(PolicyError::NetworkUnavailable)
+        ))
+    ));
+    assert_eq!(run_tree_bytes(handle.run_dir())?, before);
+    assert_eq!(calls.load(Ordering::Relaxed), 1);
+    // Denial must also precede effects when a backend is actually configured.
+    let denied_clock: Arc<dyn Clock> = Arc::new(MutableClock::new(1_788_220_800));
+    let replay_calls = Arc::new(AtomicUsize::new(0));
+    let verifier: Arc<dyn ProviderEgressAdmissionVerifier> = Arc::new(DenyCurrentEgress);
+    let configured_runtime = tool_runtime_with_sealed_completion(
+        ToolRegistry::new(),
+        FixtureBackend(replay_calls.clone()),
+        denied_clock.clone(),
+        verifier.clone(),
+    );
+    let configured_denied = RuntimeService::new(
+        RuntimeDependencies::builder()
+            .policy(RuntimePolicyDependencyV1::Native)
+            .sandbox(RuntimeSandboxDependencyV1::Native)
+            .tool_runtime(Arc::new(configured_runtime))
+            .provider(RuntimeProviderDependencyV1::Configured(provider()?))
+            .ledger(RuntimeLedgerDependencyV1::Native)
+            .clock(denied_clock)
+            .store(RuntimeStoreDependencyV1::Native)
+            .output_root(output.path())
+            .provider_egress_verifier(verifier)
+            .build()?,
+    );
+    assert!(matches!(
+        configured_denied.replay_provider_egress_v3(&operation),
+        Err(RuntimeServiceError::Run(
+            recursive_agent_runner::RunError::Policy(PolicyError::NetworkUnavailable)
+        ))
+    ));
+    assert_eq!(replay_calls.load(Ordering::Relaxed), 0);
+    assert_eq!(run_tree_bytes(handle.run_dir())?, before);
+    let configured_allowed = candidate_service(
+        output.path(),
+        replay_calls.clone(),
+        Arc::new(MutableClock::new(1_788_220_800)),
+        true,
+    )?;
+    assert_eq!(
+        configured_allowed
+            .replay_provider_egress_v3(&operation)?
+            .run_id(),
+        handle.run_id()
+    );
+    assert_eq!(replay_calls.load(Ordering::Relaxed), 0);
+    assert_eq!(run_tree_bytes(handle.run_dir())?, before);
+    let allowed_service = replay_only_service_with_policy(
+        output.path(),
+        Some(Arc::new(AllowCurrentEgress)),
+        1_788_220_800,
+    )?;
+    let replayed = allowed_service.replay_provider_egress_v3(&operation)?;
     assert_eq!(replayed.run_id(), handle.run_id());
+    assert_eq!(run_tree_bytes(handle.run_dir())?, before);
     assert_eq!(
         calls.load(Ordering::Relaxed),
         1,
         "recorded replay called the backend"
     );
+    // A tail repair must not be performed by a recorded readback.
+    let log = handle.run_dir().join("receipts.ndjson");
+    let mut bytes = std::fs::read(&log)?;
+    assert_eq!(bytes.pop(), Some(b'\n'));
+    std::fs::write(&log, &bytes)?;
+    let repairable = run_tree_bytes(handle.run_dir())?;
+    assert!(allowed_service
+        .replay_provider_egress_v3(&operation)
+        .is_err());
+    assert_eq!(run_tree_bytes(handle.run_dir())?, repairable);
+    assert_eq!(calls.load(Ordering::Relaxed), 1);
+
+    // A stale but well-formed metadata projection must likewise remain
+    // untouched, rather than being silently rebuilt during replay.
+    bytes.push(b'\n');
+    std::fs::write(&log, bytes)?;
+    let meta_path = handle.run_dir().join("chain.meta");
+    let mut stale: serde_json::Value = serde_json::from_slice(&std::fs::read(&meta_path)?)?;
+    stale["length"] = serde_json::json!(0);
+    std::fs::write(
+        &meta_path,
+        recursive_agent_contracts::jcs_canonical(&stale)?,
+    )?;
+    let stale_before = run_tree_bytes(handle.run_dir())?;
+    assert!(allowed_service
+        .replay_provider_egress_v3(&operation)
+        .is_err());
+    assert_eq!(run_tree_bytes(handle.run_dir())?, stale_before);
+    assert_eq!(replay_calls.load(Ordering::Relaxed), 0);
+    Ok(())
+}
+
+#[test]
+fn replay_rejects_valid_chain_with_a_different_sealed_binding_before_policy(
+) -> Result<(), Box<dyn std::error::Error>> {
+    let output = tempfile::tempdir()?;
+    let operation = operation()?;
+    let calls = Arc::new(AtomicUsize::new(0));
+    let writer = candidate_service(
+        output.path(),
+        calls.clone(),
+        Arc::new(MutableClock::new(1_788_220_800)),
+        true,
+    )?;
+    let handle = writer.submit_provider_egress_v3(&operation)?;
+    let (snapshot, store) =
+        verified_snapshot_with_artifact_store_directory_bound(&RunPaths::new(handle.run_dir()))?;
+    replace_with_wrong_binding_chain(&snapshot, &store, handle.run_dir())?;
+    // This is NOT simple corruption: the substituted chain passes the
+    // generic strict verifier under the same run ID and canonical path.
+    assert!(verify_directory_bound(&RunPaths::new(handle.run_dir()))?.current_strict_success);
+    let checks = Arc::new(AtomicUsize::new(0));
+    let replay = replay_only_service_with_policy(
+        output.path(),
+        Some(Arc::new(CountingCurrentEgress(checks.clone()))),
+        1_788_220_800,
+    )?;
+    let before = run_tree_bytes(handle.run_dir())?;
+    assert!(replay.replay_provider_egress_v3(&operation).is_err());
+    assert_eq!(checks.load(Ordering::Relaxed), 0);
+    assert_eq!(calls.load(Ordering::Relaxed), 1);
+    assert_eq!(run_tree_bytes(handle.run_dir())?, before);
+    Ok(())
+}
+
+#[test]
+fn replay_rejects_valid_chain_with_a_different_sealed_step_before_policy(
+) -> Result<(), Box<dyn std::error::Error>> {
+    let output = tempfile::tempdir()?;
+    let operation = operation()?;
+    let calls = Arc::new(AtomicUsize::new(0));
+    let writer = candidate_service(
+        output.path(),
+        calls.clone(),
+        Arc::new(MutableClock::new(1_788_220_800)),
+        true,
+    )?;
+    let handle = writer.submit_provider_egress_v3(&operation)?;
+    let (snapshot, store) =
+        verified_snapshot_with_artifact_store_directory_bound(&RunPaths::new(handle.run_dir()))?;
+    replace_with_wrong_step_digest_chain(&snapshot, &store, handle.run_dir())?;
+    assert!(verify_directory_bound(&RunPaths::new(handle.run_dir()))?.current_strict_success);
+    let checks = Arc::new(AtomicUsize::new(0));
+    let replay = replay_only_service_with_policy(
+        output.path(),
+        Some(Arc::new(CountingCurrentEgress(checks.clone()))),
+        1_788_220_800,
+    )?;
+    let before = run_tree_bytes(handle.run_dir())?;
+    assert!(matches!(
+        replay.replay_provider_egress_v3(&operation),
+        Err(RuntimeServiceError::Ledger(LedgerError::RunPackInvalid(message)))
+            if message == "recorded provider step does not bind admission"
+    ));
+    assert_eq!(checks.load(Ordering::Relaxed), 0);
+    assert_eq!(calls.load(Ordering::Relaxed), 1);
+    assert_eq!(run_tree_bytes(handle.run_dir())?, before);
+    Ok(())
+}
+
+#[test]
+fn recorded_output_consumer_rechecks_sealed_operation_after_handle_return(
+) -> Result<(), Box<dyn std::error::Error>> {
+    let output = tempfile::tempdir()?;
+    let operation = operation()?;
+    let backend_calls = Arc::new(AtomicUsize::new(0));
+    let writer = candidate_service(
+        output.path(),
+        backend_calls.clone(),
+        Arc::new(MutableClock::new(1_788_220_800)),
+        true,
+    )?;
+    let handle = writer.submit_provider_egress_v3(&operation)?;
+    let policy_calls = Arc::new(AtomicUsize::new(0));
+    let reader = replay_only_service_with_policy(
+        output.path(),
+        Some(Arc::new(CountingCurrentEgress(policy_calls.clone()))),
+        1_788_220_800,
+    )?;
+    let replayed = reader.replay_provider_egress_v3(&operation)?;
+    assert_eq!(replayed.run_dir(), handle.run_dir());
+    let output_record = reader.read_recorded_provider_output_v3(&operation)?;
+    assert_eq!(output_record.text, "receipt-bound fixture response");
+    assert_eq!(output_record.model, "fixture-model");
+    assert_eq!(policy_calls.load(Ordering::Relaxed), 2);
+
+    // A previously returned path handle cannot authorize a later read.
+    let (snapshot, store) =
+        verified_snapshot_with_artifact_store_directory_bound(&RunPaths::new(handle.run_dir()))?;
+    replace_with_wrong_binding_chain(&snapshot, &store, handle.run_dir())?;
+    assert!(verify_directory_bound(&RunPaths::new(handle.run_dir()))?.current_strict_success);
+    let before = run_tree_bytes(handle.run_dir())?;
+    assert!(matches!(
+        reader.read_recorded_provider_output_v3(&operation),
+        Err(RuntimeServiceError::Ledger(LedgerError::RunPackInvalid(message)))
+            if message == "recorded provider admission does not bind caller"
+    ));
+    assert_eq!(policy_calls.load(Ordering::Relaxed), 2);
+    assert_eq!(backend_calls.load(Ordering::Relaxed), 1);
+    assert_eq!(run_tree_bytes(handle.run_dir())?, before);
+    Ok(())
+}
+
+#[test]
+fn malformed_recorded_output_is_rejected_before_current_policy(
+) -> Result<(), Box<dyn std::error::Error>> {
+    let output = tempfile::tempdir()?;
+    let operation = operation()?;
+    let backend_calls = Arc::new(AtomicUsize::new(0));
+    let writer = candidate_service(
+        output.path(),
+        backend_calls.clone(),
+        Arc::new(MutableClock::new(1_788_220_800)),
+        true,
+    )?;
+    let handle = writer.submit_provider_egress_v3(&operation)?;
+    let (snapshot, store) =
+        verified_snapshot_with_artifact_store_directory_bound(&RunPaths::new(handle.run_dir()))?;
+    replace_with_malformed_response_chain(&snapshot, &store, handle.run_dir())?;
+    assert!(verify_directory_bound(&RunPaths::new(handle.run_dir()))?.current_strict_success);
+    let policy_calls = Arc::new(AtomicUsize::new(0));
+    let reader = replay_only_service_with_policy(
+        output.path(),
+        Some(Arc::new(CountingCurrentEgress(policy_calls.clone()))),
+        1_788_220_800,
+    )?;
+    let before = run_tree_bytes(handle.run_dir())?;
+    assert!(matches!(
+        reader.read_recorded_provider_output_v3(&operation),
+        Err(RuntimeServiceError::RecordedProviderOutputMalformed)
+    ));
+    assert_eq!(policy_calls.load(Ordering::Relaxed), 0);
+    assert_eq!(backend_calls.load(Ordering::Relaxed), 1);
+    assert_eq!(run_tree_bytes(handle.run_dir())?, before);
+    Ok(())
+}
+
+#[test]
+fn recorded_output_consumer_rejects_directory_replacement_during_current_policy(
+) -> Result<(), Box<dyn std::error::Error>> {
+    let output = tempfile::tempdir()?;
+    let operation = operation()?;
+    let backend_calls = Arc::new(AtomicUsize::new(0));
+    let writer = candidate_service(
+        output.path(),
+        backend_calls.clone(),
+        Arc::new(MutableClock::new(1_788_220_800)),
+        true,
+    )?;
+    let handle = writer.submit_provider_egress_v3(&operation)?;
+    let staged = output.path().join("staged-consumer-replacement");
+    copy_run_tree(handle.run_dir(), &staged)?;
+    assert_eq!(run_tree_bytes(handle.run_dir())?, run_tree_bytes(&staged)?);
+
+    let policy_calls = Arc::new(AtomicUsize::new(0));
+    let reader = replay_only_service_with_policy(
+        output.path(),
+        Some(Arc::new(ReplacingCurrentEgress {
+            original: handle.run_dir().to_path_buf(),
+            staged,
+            calls: policy_calls.clone(),
+        })),
+        1_788_220_800,
+    )?;
+    assert!(matches!(
+        reader.read_recorded_provider_output_v3(&operation),
+        Err(RuntimeServiceError::Ledger(LedgerError::RunPackInvalid(message)))
+            if message == "recorded replay run directory was replaced"
+    ));
+    assert_eq!(policy_calls.load(Ordering::Relaxed), 1);
+    assert_eq!(backend_calls.load(Ordering::Relaxed), 1);
+    assert!(verify_directory_bound(&RunPaths::new(handle.run_dir()))?.current_strict_success);
+    Ok(())
+}
+
+#[test]
+fn recorded_output_consumer_rejects_expiry_between_validation_and_policy(
+) -> Result<(), Box<dyn std::error::Error>> {
+    let output = tempfile::tempdir()?;
+    let operation = operation()?;
+    let backend_calls = Arc::new(AtomicUsize::new(0));
+    let writer = candidate_service(
+        output.path(),
+        backend_calls.clone(),
+        Arc::new(MutableClock::new(1_788_220_800)),
+        true,
+    )?;
+    let handle = writer.submit_provider_egress_v3(&operation)?;
+    let before = run_tree_bytes(handle.run_dir())?;
+    let policy_calls = Arc::new(AtomicUsize::new(0));
+    let reader = RuntimeService::new(
+        RuntimeDependencies::builder()
+            .policy(RuntimePolicyDependencyV1::Native)
+            .sandbox(RuntimeSandboxDependencyV1::Native)
+            .tool_runtime(Arc::new(llm_tool_runtime::ToolRuntime::new(
+                ToolRegistry::new(),
+            )))
+            .provider(RuntimeProviderDependencyV1::Disabled)
+            .ledger(RuntimeLedgerDependencyV1::Native)
+            .clock(Arc::new(ExpiringBetweenChecksClock(AtomicUsize::new(0))))
+            .store(RuntimeStoreDependencyV1::Native)
+            .provider_egress_verifier(Arc::new(CountingCurrentEgress(policy_calls.clone())))
+            .output_root(output.path())
+            .build()?,
+    );
+    assert!(matches!(
+        reader.read_recorded_provider_output_v3(&operation),
+        Err(RuntimeServiceError::Run(
+            recursive_agent_runner::RunError::Policy(_)
+        ))
+    ));
+    assert_eq!(policy_calls.load(Ordering::Relaxed), 0);
+    assert_eq!(backend_calls.load(Ordering::Relaxed), 1);
+    assert_eq!(run_tree_bytes(handle.run_dir())?, before);
+    Ok(())
+}
+
+#[test]
+fn replay_rejects_directory_replacement_during_current_policy(
+) -> Result<(), Box<dyn std::error::Error>> {
+    let output = tempfile::tempdir()?;
+    let operation = operation()?;
+    let backend_calls = Arc::new(AtomicUsize::new(0));
+    let writer = candidate_service(
+        output.path(),
+        backend_calls.clone(),
+        Arc::new(MutableClock::new(1_788_220_800)),
+        true,
+    )?;
+    let handle = writer.submit_provider_egress_v3(&operation)?;
+    let staged = output.path().join("staged-replacement");
+    copy_run_tree(handle.run_dir(), &staged)?;
+    assert_eq!(run_tree_bytes(handle.run_dir())?, run_tree_bytes(&staged)?);
+
+    let calls = Arc::new(AtomicUsize::new(0));
+    let replay = replay_only_service_with_policy(
+        output.path(),
+        Some(Arc::new(ReplacingCurrentEgress {
+            original: handle.run_dir().to_path_buf(),
+            staged,
+            calls: calls.clone(),
+        })),
+        1_788_220_800,
+    )?;
+    assert!(matches!(
+        replay.replay_provider_egress_v3(&operation),
+        Err(RuntimeServiceError::Ledger(LedgerError::RunPackInvalid(message)))
+            if message == "recorded replay run directory was replaced"
+    ));
+    assert_eq!(calls.load(Ordering::Relaxed), 1);
+    assert_eq!(backend_calls.load(Ordering::Relaxed), 1);
+    assert!(verify_directory_bound(&RunPaths::new(handle.run_dir()))?.current_strict_success);
     Ok(())
 }
 
@@ -423,6 +1059,61 @@ fn v3_recorded_replay_fails_closed_when_no_verified_run_exists(
         Err(RuntimeServiceError::ProviderEgressReplayUnavailable)
     ));
     assert_eq!(std::fs::read_dir(output.path())?.count(), 0);
+    Ok(())
+}
+
+#[test]
+fn invalid_recorded_evidence_does_not_invoke_current_policy(
+) -> Result<(), Box<dyn std::error::Error>> {
+    let output = tempfile::tempdir()?;
+    let operation = operation()?;
+    let checks = Arc::new(AtomicUsize::new(0));
+    let replay = replay_only_service_with_policy(
+        output.path(),
+        Some(Arc::new(CountingCurrentEgress(checks.clone()))),
+        1_788_220_800,
+    )?;
+    assert!(replay.replay_provider_egress_v3(&operation).is_err());
+    assert_eq!(checks.load(Ordering::Relaxed), 0);
+
+    let backend_calls = Arc::new(AtomicUsize::new(0));
+    let writer = candidate_service(
+        output.path(),
+        backend_calls.clone(),
+        Arc::new(MutableClock::new(1_788_220_800)),
+        true,
+    )?;
+    let handle = writer.submit_provider_egress_v3(&operation)?;
+    assert_eq!(backend_calls.load(Ordering::Relaxed), 1);
+    let log_path = handle.run_dir().join("receipts.ndjson");
+    let log = std::fs::read(&log_path)?;
+    std::fs::write(&log_path, &log[..log.len() - 1])?;
+    let before = run_tree_bytes(handle.run_dir())?;
+    assert!(replay.replay_provider_egress_v3(&operation).is_err());
+    assert_eq!(
+        checks.load(Ordering::Relaxed),
+        0,
+        "invalid tail reached policy"
+    );
+    assert_eq!(run_tree_bytes(handle.run_dir())?, before);
+
+    std::fs::write(&log_path, &log)?;
+    let meta_path = handle.run_dir().join("chain.meta");
+    let mut stale: serde_json::Value = serde_json::from_slice(&std::fs::read(&meta_path)?)?;
+    stale["length"] = serde_json::json!(0);
+    std::fs::write(
+        &meta_path,
+        recursive_agent_contracts::jcs_canonical(&stale)?,
+    )?;
+    let before = run_tree_bytes(handle.run_dir())?;
+    assert!(replay.replay_provider_egress_v3(&operation).is_err());
+    assert_eq!(
+        checks.load(Ordering::Relaxed),
+        0,
+        "stale metadata reached policy"
+    );
+    assert_eq!(run_tree_bytes(handle.run_dir())?, before);
+    assert_eq!(backend_calls.load(Ordering::Relaxed), 1);
     Ok(())
 }
 

@@ -60,6 +60,10 @@ enum Cmd {
         /// Max concurrent connections.
         #[arg(long, default_value_t = 4)]
         max_concurrent: usize,
+        /// Owned mode-0600 JSON array of one or two exact bounded V1 shell operations.
+        /// Use a dedicated socket/root; incompatible with other effect enrollments.
+        #[arg(long)]
+        closed_commands_file: Option<PathBuf>,
         /// Strictly owned JSON enrollment record containing the Electron public
         /// verifier key. When omitted, production permit issuance stays disabled.
         #[arg(long)]
@@ -330,13 +334,94 @@ fn load_context_authority(
     Ok(serde_json::from_slice(&bytes)?)
 }
 
+fn load_closed_commands(
+    path: &std::path::Path,
+) -> Result<Vec<OperationEnvelopeV1>, Box<dyn std::error::Error>> {
+    use std::os::unix::fs::OpenOptionsExt;
+    const MAX_BYTES: u64 = 128 * 1024;
+    let file = fs::OpenOptions::new()
+        .read(true)
+        .custom_flags(rustix::fs::OFlags::NOFOLLOW.bits() as i32)
+        .open(path)?;
+    let metadata = file.metadata()?;
+    if !metadata.is_file()
+        || metadata.uid() != rustix::process::getuid().as_raw()
+        || metadata.mode() & 0o777 != 0o600
+        || metadata.nlink() != 1
+        || metadata.len() > MAX_BYTES
+    {
+        return Err(
+            "closed commands must be a bounded, owned, single-link mode-0600 regular file".into(),
+        );
+    }
+    let mut bytes = Vec::new();
+    file.take(MAX_BYTES + 1).read_to_end(&mut bytes)?;
+    if bytes.len() as u64 > MAX_BYTES {
+        return Err("closed command configuration exceeds bound".into());
+    }
+    Ok(serde_json::from_slice(&bytes)?)
+}
+
+/// Runner-owned shell surface: effects only through the prepared sandbox
+/// dispatch inside RuntimeService, never a direct subprocess here.
+struct ShellDescriptorOwner {
+    descriptor: ToolDescriptor,
+}
+impl ShellDescriptorOwner {
+    fn new() -> Self {
+        Self {
+            descriptor: ToolDescriptor {
+                name: "shell".into(),
+                version: "1.0.0".into(),
+                description: Some("bounded shell effect (runner-owned dispatch)".into()),
+                backend_kind: ToolBackendKind::LocalFunction,
+                input_schema: serde_json::json!({"type": "object"}),
+                output_mode: ToolOutputMode::StructuredJson,
+                read_only: false,
+                side_effect_class: ToolSideEffectClass::Write,
+                idempotency_class: ToolIdempotencyClass::NonIdempotent,
+                approval_kind: ToolApprovalKind::PolicyRequired,
+                timeout_ms: 3_000,
+                concurrency_key: None,
+                cache_ttl_ms: None,
+                exposure_mode: ToolExposureMode::Auto,
+                mcp_surface_kind: McpSurfaceKind::None,
+                exposure_policy: ToolExposurePolicy::default(),
+                receipt_persistence: ToolReceiptPersistence::Ephemeral,
+                output_size_limit_bytes: Some(4_096),
+                provider_payload: None,
+            },
+        }
+    }
+}
+#[async_trait]
+impl Tool for ShellDescriptorOwner {
+    fn descriptor(&self) -> &ToolDescriptor {
+        &self.descriptor
+    }
+    async fn invoke(
+        &self,
+        _ctx: &ToolCtx,
+        _call: &llm_tool_runtime::ToolCall,
+    ) -> Result<ToolResult, ToolError> {
+        Err(ToolError::new(
+            ToolErrorClass::Denied,
+            "shell effects require runner-owned prepared sandbox dispatch",
+        ))
+    }
+}
+
 fn build_runtime(
     root: &std::path::Path,
     audit_root: Option<PathBuf>,
     production_verifier: Option<ProductionApprovalVerifierV1>,
+    closed_commands: Option<Vec<OperationEnvelopeV1>>,
 ) -> Result<RuntimeService, Box<dyn std::error::Error>> {
     let mut registry = ToolRegistry::new();
     registry.register(EchoDescriptorOwner::new());
+    if closed_commands.is_some() {
+        registry.register(ShellDescriptorOwner::new());
+    }
     if let Some(audit_root) = audit_root {
         registry.register(RepoAuditDescriptorOwner::new(audit_root)?);
     }
@@ -350,7 +435,10 @@ fn build_runtime(
         .store(RuntimeStoreDependencyV1::Native)
         .output_root(root)
         .build()?;
-    let runtime = RuntimeService::new(dependencies);
+    let mut runtime = RuntimeService::new(dependencies);
+    if let Some(operations) = closed_commands {
+        runtime = runtime.with_closed_commands(operations)?;
+    }
     Ok(match production_verifier {
         Some(verifier) => runtime.with_production_approval_verifier(verifier),
         None => runtime,
@@ -365,10 +453,26 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             socket,
             audit_root,
             max_concurrent,
+            closed_commands_file,
             production_verifier_file,
             production_write_root,
             context_authority_file,
         } => {
+            if closed_commands_file.is_some()
+                && (audit_root.is_some()
+                    || production_verifier_file.is_some()
+                    || production_write_root.is_some()
+                    || context_authority_file.is_some()
+                    || max_concurrent != 1)
+            {
+                return Err(
+                    "closed commands require one connection and no other effect enrollment".into(),
+                );
+            }
+            let closed_commands = closed_commands_file
+                .as_deref()
+                .map(load_closed_commands)
+                .transpose()?;
             fs::create_dir_all(&root)?;
             let production_verifier = match (production_verifier_file.as_deref(), production_write_root.as_deref()) {
                 (None, None) => None,
@@ -379,7 +483,8 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                     "production verifier file and production write root must be configured together".into(),
                 ),
             };
-            let mut runtime = build_runtime(&root, audit_root, production_verifier)?;
+            let mut runtime =
+                build_runtime(&root, audit_root, production_verifier, closed_commands)?;
             if let Some(path) = context_authority_file {
                 runtime = runtime.with_context_authority(&load_context_authority(&path)?)?;
             }

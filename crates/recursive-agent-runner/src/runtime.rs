@@ -9,9 +9,9 @@ use recursive_agent_contracts::{
     content_digest, derive_child_operation_id, derive_child_operation_proposal_digest,
     derive_operation_id, derive_provider_egress_operation_id, derive_step_id,
     parse_operation_envelope_bytes, ChildOperationEnvelopeV2, ChildOperationProposalV2,
-    ChildRunAuthorityV1, ContractError, CurrentPermitId, CurrentRunId, OperationEnvelopeV1,
-    ProviderEgressOperationEnvelopeV3, ReceiptKindV1, RunTerminalStateV1, RuntimeEventV1,
-    ToolCallSpecV1,
+    ChildRunAuthorityV1, ContentDigest, ContractError, CurrentPermitId, CurrentRunId,
+    OperationEnvelopeV1, ProviderEgressOperationEnvelopeV3, ReceiptKindV1, RunTerminalStateV1,
+    RuntimeEventV1, ToolCallSpecV1,
 };
 use recursive_agent_ledger::{
     committed_events_directory_bound, verified_snapshot_directory_bound,
@@ -26,11 +26,13 @@ use recursive_agent_policy::{
     ProductionApprovalWitnessV1, ProviderEgressAdmissionRequestV1, ReportedEffectOutcomeV1,
 };
 use recursive_agent_provider::{CompletionBackend, CompletionRequestV1, ProviderSpecV1};
+use serde::Deserialize;
 use stack_ids::{AttemptId, TraceCtx, TrialId};
 use thiserror::Error;
 
 use crate::{
-    run_child_spec_with_run_id, run_live_parent_spec_with_run_id,
+    provider_egress_step_call, run_child_spec_with_run_id, run_closed_command_with_run_id,
+    run_live_parent_spec_with_run_id,
     run_provider_egress_operation_v3_with_run_id, run_spec_internal_with_run_id,
     AutonomousBudgetV1, AutonomousCancellation, AutonomousError, AutonomousExecutor,
     AutonomousIntentV1, AutonomousPlanner, AutonomousResultV1, AutonomousTranscript,
@@ -65,6 +67,23 @@ pub struct RuntimeHandleV1 {
     run_id: CurrentRunId,
     /// Content-addressed directory containing the committed evidence chain.
     run_dir: std::path::PathBuf,
+}
+
+/// Bounded, caller-bound projection of a strictly verified recorded provider response.
+/// It contains neither a filesystem path nor the provider's raw payload.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct RecordedProviderOutputV3 {
+    pub model: String,
+    pub text: String,
+}
+
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct RecordedProviderPayloadV3 {
+    model: String,
+    text: String,
+    binding_digest: ContentDigest,
+    request_digest: ContentDigest,
 }
 
 impl RuntimeHandleV1 {
@@ -152,6 +171,9 @@ pub enum RuntimeServiceError {
         /// Missing canonical tool name.
         name: String,
     },
+    /// The operator-owned closed command profile denied this execution path.
+    #[error("operation is outside the closed command profile")]
+    ClosedCommandProfileDenied,
     /// Candidate V3 egress has no injected current policy owner.
     #[error("candidate provider egress is disabled in this runtime composition")]
     ProviderEgressDisabled,
@@ -167,6 +189,9 @@ pub enum RuntimeServiceError {
     /// Recorded replay was requested before a verified V3 run exists.
     #[error("recorded provider-egress replay is unavailable")]
     ProviderEgressReplayUnavailable,
+    /// The bound recorded response is missing, malformed, or mismatches its sealed route.
+    #[error("recorded provider output does not match the sealed request")]
+    RecordedProviderOutputMalformed,
     /// The same operation is already executing through this service instance.
     #[error("operation is already active: {operation_id}")]
     OperationAlreadyActive {
@@ -452,6 +477,7 @@ fn admitted_tool_arguments(
 /// Canonical native owner of operation admission and terminal execution evidence.
 pub struct RuntimeService {
     dependencies: RuntimeDependencies,
+    closed_commands: Option<Vec<OperationEnvelopeV1>>,
     admission: ManagedAdmissionDomain,
     /// Live-parent cancellation reaches the family authority directly; this is
     /// authority state, not a scheduler projection.
@@ -482,6 +508,7 @@ impl RuntimeService {
     ) -> Self {
         Self {
             dependencies,
+            closed_commands: None,
             admission,
             live_families: Mutex::new(BTreeMap::new()),
             scheduler: std::sync::Mutex::new(None),
@@ -489,6 +516,72 @@ impl RuntimeService {
             production_approval_verifier: None,
             context_authority: None,
         }
+    }
+
+    /// Restrict this facade to one or two operator-approved exact V1 commands.
+    /// This is an admission restriction, not a new executor. Runtime-derived
+    /// shell dispatch and receipts stay canonical. Its single-step ceilings
+    /// are threaded into native lifecycle and effect permits.
+    pub fn with_closed_commands(
+        mut self,
+        operations: Vec<OperationEnvelopeV1>,
+    ) -> Result<Self, RuntimeServiceError> {
+        if operations.is_empty() || operations.len() > 2 {
+            return Err(RuntimeServiceError::ClosedCommandProfileDenied);
+        }
+        for (index, operation) in operations.iter().enumerate() {
+            operation.validate()?;
+            let Some(step) = operation.run_spec.steps.first() else {
+                return Err(RuntimeServiceError::ClosedCommandProfileDenied);
+            };
+            let sandbox: recursive_agent_sandbox::SandboxSpec =
+                serde_json::from_value(step.call.args.clone())
+                    .map_err(|_| RuntimeServiceError::ClosedCommandProfileDenied)?;
+            if operation.run_spec.steps.len() != 1
+                || step.call.tool != "shell"
+                || operation.actor.principal != "recursive-agent"
+                || operation.budget.max_steps != 1
+                || operation.replay.intent != recursive_agent_contracts::ReplayIntentV1::ExecuteOnce
+                || operation.run_spec.frozen_clock.is_some()
+                || step.call.frozen_clock.is_some()
+                || operation.effects.network_allowed
+                || sandbox.allow_network
+                || !std::path::Path::new(&sandbox.command).is_absolute()
+                || sandbox.timeout_ms == 0
+                || sandbox.timeout_ms > 3_000
+                || operation.budget.max_wall_time_ms != sandbox.timeout_ms
+                || operation.budget.max_output_bytes != 64 * 1024
+                || operation.budget.max_artifact_bytes != 64 * 1024
+                || sandbox.max_output_bytes == 0
+                || sandbox.max_output_bytes > 16 * 1024
+                || operations[..index].contains(operation)
+            {
+                return Err(RuntimeServiceError::ClosedCommandProfileDenied);
+            }
+        }
+        self.closed_commands = Some(operations);
+        Ok(self)
+    }
+
+    fn require_closed_command(
+        &self,
+        operation: &OperationEnvelopeV1,
+    ) -> Result<(), RuntimeServiceError> {
+        if self
+            .closed_commands
+            .as_ref()
+            .is_some_and(|commands| !commands.contains(operation))
+        {
+            return Err(RuntimeServiceError::ClosedCommandProfileDenied);
+        }
+        Ok(())
+    }
+
+    fn require_open_execution(&self) -> Result<(), RuntimeServiceError> {
+        if self.closed_commands.is_some() {
+            return Err(RuntimeServiceError::ClosedCommandProfileDenied);
+        }
+        Ok(())
     }
 
     pub fn with_operator_approval_verifier(mut self, verifier: OperatorApprovalVerifierV1) -> Self {
@@ -511,6 +604,7 @@ impl RuntimeService {
         mut self,
         configuration: &recursive_agent_policy::ContextAuthorityConfigurationV1,
     ) -> Result<Self, RuntimeServiceError> {
+        self.require_open_execution()?;
         let verifier = self
             .production_approval_verifier
             .as_ref()
@@ -531,6 +625,7 @@ impl RuntimeService {
         witness: &ProductionApprovalWitnessV1,
         context: &recursive_agent_policy::ContextCallBindingV1,
     ) -> Result<recursive_agent_policy::ScopedExecutionPermitV1, RuntimeServiceError> {
+        self.require_open_execution()?;
         let verifier = self
             .production_approval_verifier
             .as_ref()
@@ -556,6 +651,7 @@ impl RuntimeService {
         permit: &recursive_agent_policy::ScopedExecutionPermitV1,
         call: &ToolCallSpecV1,
     ) -> Result<recursive_agent_policy::ScopedPermitPreflightV1, RuntimeServiceError> {
+        self.require_open_execution()?;
         let verifier = self
             .production_approval_verifier
             .as_ref()
@@ -580,6 +676,7 @@ impl RuntimeService {
         &self,
         request: &recursive_agent_policy::ContextTransitionRequestV1,
     ) -> Result<recursive_agent_policy::ContextTransitionReceiptV1, RuntimeServiceError> {
+        self.require_open_execution()?;
         let access = self
             .context_authority
             .as_ref()
@@ -627,6 +724,7 @@ impl RuntimeService {
         preflight_digest: &recursive_agent_contracts::ContentDigest,
         reported: ReportedEffectOutcomeV1,
     ) -> Result<PermitOutcomeReceiptV1, RuntimeServiceError> {
+        self.require_open_execution()?;
         let root = std::fs::File::open(self.dependencies.output_root())?;
         Ok(
             DurablePermitStore::from_dir_fd(&root)?.settle_scoped_external_permit(
@@ -642,6 +740,7 @@ impl RuntimeService {
         &self,
         witness: &ProductionApprovalWitnessV1,
     ) -> Result<recursive_agent_policy::ExecutionPermitV1, RuntimeServiceError> {
+        self.require_open_execution()?;
         let verifier = self
             .production_approval_verifier
             .as_ref()
@@ -666,6 +765,7 @@ impl RuntimeService {
         request: &PermitApprovalRequestV1,
         approval: &OperatorApprovalWitnessV1,
     ) -> Result<recursive_agent_policy::ExecutionPermitV1, RuntimeServiceError> {
+        self.require_open_execution()?;
         let verifier = self
             .operator_approval_verifier
             .as_ref()
@@ -730,6 +830,7 @@ impl RuntimeService {
         dispatch.tool = call.tool.clone();
         dispatch.action_digest = content_digest(call)?;
         dispatch.args_digest = content_digest(&call.args)?;
+        self.require_open_execution()?;
         let root = std::fs::File::open(self.dependencies.output_root())?;
         let permits = DurablePermitStore::from_dir_fd(&root)?;
         Ok(permits
@@ -756,6 +857,7 @@ impl RuntimeService {
         preflight_receipt_digest: &recursive_agent_contracts::ContentDigest,
         reported: ReportedEffectOutcomeV1,
     ) -> Result<PermitOutcomeReceiptV1, RuntimeServiceError> {
+        self.require_open_execution()?;
         let root = std::fs::File::open(self.dependencies.output_root())?;
         let permits = DurablePermitStore::from_dir_fd(&root)?;
         Ok(permits.record_reported_outcome(
@@ -798,6 +900,7 @@ impl RuntimeService {
         &self,
         operation: &OperationEnvelopeV1,
     ) -> Result<RuntimeLiveParentV2<'_>, RuntimeServiceError> {
+        self.require_open_execution()?;
         operation.validate()?;
         self.require_registered_tools(&operation.run_spec.steps)?;
         let operation_id = derive_operation_id(operation)?;
@@ -853,6 +956,7 @@ impl RuntimeService {
         &self,
         operation: &OperationEnvelopeV1,
     ) -> Result<RuntimeHandleV1, RuntimeServiceError> {
+        self.require_closed_command(operation)?;
         operation.validate()?;
         for step in &operation.run_spec.steps {
             if self
@@ -874,14 +978,24 @@ impl RuntimeService {
         let tool_executor = AdmittedToolExecutor {
             runtime: self.dependencies.tool_runtime(),
         };
-        let summary = run_spec_internal_with_run_id(
-            &operation.run_spec,
-            self.dependencies.output_root(),
-            self.dependencies.clock(),
-            &NoopRunnerHook,
-            operation_id.clone(),
-            &tool_executor,
-        )?;
+        let summary = if self.closed_commands.is_some() {
+            run_closed_command_with_run_id(
+                operation,
+                self.dependencies.output_root(),
+                self.dependencies.clock(),
+                operation_id.clone(),
+                &tool_executor,
+            )?
+        } else {
+            run_spec_internal_with_run_id(
+                &operation.run_spec,
+                self.dependencies.output_root(),
+                self.dependencies.clock(),
+                &NoopRunnerHook,
+                operation_id.clone(),
+                &tool_executor,
+            )?
+        };
 
         Ok(RuntimeHandleV1 {
             operation_id,
@@ -898,6 +1012,7 @@ impl RuntimeService {
         &self,
         operation: &ProviderEgressOperationEnvelopeV3,
     ) -> Result<RuntimeHandleV1, RuntimeServiceError> {
+        self.require_open_execution()?;
         operation.validate_structure()?;
         let operation_id = derive_provider_egress_operation_id(operation)?;
         let run_dir = self
@@ -995,13 +1110,34 @@ impl RuntimeService {
         })
     }
 
-    /// Read a previously verified V3 result without provider, tool, credential,
-    /// current-policy, or current-route access. This is recorded replay only:
-    /// absence or corruption fails closed, and no new receipt is appended.
+    /// Read strictly verified V3 evidence only after current policy authorizes
+    /// the sealed request. The provider and tool are not called and no run
+    /// receipt is appended; the injected policy verifier may have its own
+    /// side effects, so this is not a general effect-free API.
     pub fn replay_provider_egress_v3(
         &self,
         operation: &ProviderEgressOperationEnvelopeV3,
     ) -> Result<RuntimeHandleV1, RuntimeServiceError> {
+        self.verified_provider_replay_v3(operation)
+            .map(|(handle, _)| handle)
+    }
+
+    /// Consume a recorded response after fresh exact-operation and current-policy
+    /// checks. Unlike a returned path handle, the evidence and artifact are read
+    /// through the same descriptor-pinned run root. This does not call a provider
+    /// or append a run receipt; the policy callback can have its own effects.
+    pub fn read_recorded_provider_output_v3(
+        &self,
+        operation: &ProviderEgressOperationEnvelopeV3,
+    ) -> Result<RecordedProviderOutputV3, RuntimeServiceError> {
+        self.verified_provider_replay_v3(operation)
+            .map(|(_, output)| output)
+    }
+
+    fn verified_provider_replay_v3(
+        &self,
+        operation: &ProviderEgressOperationEnvelopeV3,
+    ) -> Result<(RuntimeHandleV1, RecordedProviderOutputV3), RuntimeServiceError> {
         operation.validate_structure()?;
         let operation_id = derive_provider_egress_operation_id(operation)?;
         let run_dir = self
@@ -1011,12 +1147,104 @@ impl RuntimeService {
         if !run_dir.is_dir() {
             return Err(RuntimeServiceError::ProviderEgressReplayUnavailable);
         }
-        self.verify(&operation_id)?;
-        Ok(RuntimeHandleV1 {
-            operation_id: operation_id.clone(),
-            run_id: operation_id,
-            run_dir,
-        })
+        let verifier = self
+            .dependencies
+            .provider_egress_verifier()
+            .ok_or(RuntimeServiceError::ProviderEgressDisabled)?;
+        let request: CompletionRequestV1 =
+            serde_json::from_value(operation.sealed_completion.arguments.request.clone())
+                .map_err(|_| RuntimeServiceError::ProviderRequestMalformed)?;
+        if content_digest(&request)? != operation.sealed_completion.arguments.binding.request_digest
+        {
+            return Err(RuntimeServiceError::ProviderRequestMalformed);
+        }
+        let binding = &operation.sealed_completion.arguments.binding;
+        if !request
+            .provider
+            .matches_egress_binding(&binding.provider_identity, &binding.model_ref)
+        {
+            return Err(RuntimeServiceError::ProviderBindingMismatch);
+        }
+        let trusted_now = self.dependencies.clock().now();
+        operation.validate_at(trusted_now)?;
+        let tool_arguments = serde_json::to_value(&operation.sealed_completion.arguments)
+            .map_err(|_| RuntimeServiceError::ProviderRequestMalformed)?;
+        let admission_request = ProviderEgressAdmissionRequestV1::new(
+            "sealed_completion",
+            binding.clone(),
+            content_digest(&request)?,
+            content_digest(&tool_arguments)?,
+        )
+        .map_err(RunError::Policy)?;
+        let sealed_step_digest =
+            content_digest(&provider_egress_step_call(tool_arguments.clone()))?;
+        // Evidence must be strict-valid before an injected policy callback can
+        // observe or consume a current authorization. A failed replay never
+        // invokes the verifier, even if it has external side effects.
+        let (snapshot, store) =
+            recursive_agent_ledger::verified_provider_replay_snapshot_read_only(
+                &RunPaths::new(run_dir.clone()),
+                recursive_agent_ledger::ProviderReplayExpectationV3 {
+                    run_id: &operation_id,
+                    operation_digest: &content_digest(operation)?,
+                    sealed_step_digest: &sealed_step_digest,
+                    admission: &admission_request,
+                },
+            )?;
+        if snapshot.verification().verified_run_id.as_ref() != Some(&operation_id) {
+            return Err(RuntimeServiceError::RunIdentityMismatch {
+                expected: operation_id.to_string(),
+                observed: snapshot
+                    .verification()
+                    .verified_run_id
+                    .as_ref()
+                    .map_or_else(|| "none".into(), ToString::to_string),
+            });
+        }
+        // Strict chain validity alone does not establish that the application
+        // payload is decodable or belongs to this sealed request. Validate it
+        // through the pinned store before a policy callback with possible effects.
+        let completed = snapshot
+            .receipts()
+            .iter()
+            .find(|receipt| receipt.kind == ReceiptKindV1::StepCompleted)
+            .ok_or(RuntimeServiceError::RecordedProviderOutputMalformed)?;
+        let descriptor = completed
+            .artifact_refs
+            .first()
+            .ok_or(RuntimeServiceError::RecordedProviderOutputMalformed)?;
+        let payload: RecordedProviderPayloadV3 = serde_json::from_slice(&store.get(descriptor)?)
+            .map_err(|_| RuntimeServiceError::RecordedProviderOutputMalformed)?;
+        if payload.binding_digest != binding.binding_digest
+            || payload.request_digest != binding.request_digest
+            || format!("model:{}", payload.model) != binding.model_ref
+        {
+            return Err(RuntimeServiceError::RecordedProviderOutputMalformed);
+        }
+        let output = RecordedProviderOutputV3 {
+            model: payload.model,
+            text: payload.text,
+        };
+        // Strict verification can outlast a lease. Admit against the current
+        // owner clock, not the time sampled before the filesystem read.
+        authorize_provider_egress(
+            verifier,
+            &admission_request,
+            self.dependencies.clock().now(),
+        )
+        .map_err(RunError::Policy)?;
+        recursive_agent_ledger::verify_run_root_identity_read_only(
+            &RunPaths::new(run_dir.clone()),
+            store.run_root_identity(),
+        )?;
+        Ok((
+            RuntimeHandleV1 {
+                operation_id: operation_id.clone(),
+                run_id: operation_id,
+                run_dir,
+            },
+            output,
+        ))
     }
 
     /// Run the bounded autonomous loop inside the canonical runtime owner.
@@ -1042,6 +1270,7 @@ impl RuntimeService {
         P: AutonomousPlanner,
         E: AutonomousExecutor,
     {
+        self.require_open_execution()?;
         let mut runner =
             crate::AutonomousRunner::new(memory, skills, transcript, budget, cancellation)?;
         Ok(runner.run(input, planner, executor)?)
@@ -1122,6 +1351,7 @@ impl RuntimeService {
         authorizer: &dyn ProviderEgressAuthorizer,
         max_tokens: Option<u32>,
     ) -> Result<AutonomousResultV1, RuntimeServiceError> {
+        self.require_open_execution()?;
         let planner = ModelAutonomousPlanner::new_with_egress_authorizer(
             backend, provider, authorizer, max_tokens,
         );
@@ -1152,6 +1382,7 @@ impl RuntimeService {
         operation: &OperationEnvelopeV1,
         idempotency_key: &str,
     ) -> Result<RuntimeHandleV1, RuntimeServiceError> {
+        self.require_closed_command(operation)?;
         operation.validate()?;
         for step in &operation.run_spec.steps {
             if self
@@ -1747,5 +1978,129 @@ fn map_admission_error(error: ManagedAdmissionError) -> RuntimeServiceError {
         }
         ManagedAdmissionError::StatePoisoned => RuntimeServiceError::StatePoisoned,
         other => RuntimeServiceError::ManagedAdmission(other),
+    }
+}
+
+#[cfg(test)]
+mod closed_command_tests {
+    use super::*;
+    use crate::{
+        RuntimeLedgerDependencyV1, RuntimePolicyDependencyV1, RuntimeProviderDependencyV1,
+        RuntimeSandboxDependencyV1, RuntimeStoreDependencyV1, SystemClock,
+    };
+    use llm_tool_runtime::ToolRegistry;
+    use std::sync::Arc;
+
+    fn fixture() -> Result<OperationEnvelopeV1, Box<dyn std::error::Error>> {
+        let spec = recursive_agent_contracts::RunSpecV1 {
+            name: "codex-command-canary".into(),
+            policy_version: "m0-2".into(),
+            frozen_clock: None,
+            steps: vec![recursive_agent_contracts::StepSpecV1 {
+                name: "printf".into(),
+                call: ToolCallSpecV1 {
+                    tool: "shell".into(),
+                    frozen_clock: None,
+                    args: serde_json::json!({"command":"/usr/bin/printf",
+                        "args":["%s\\n","bounded-proof"], "timeout_ms":3000,
+                        "max_output_bytes":16384, "allow_network":false,
+                        "allowed_read_paths":[], "allowed_write_paths":[]}),
+                },
+            }],
+        };
+        let mut operation = crate::operation_from_run_spec(&spec)?;
+        operation.actor.principal = "recursive-agent".into();
+        operation.budget.max_wall_time_ms = 3000;
+        operation.budget.max_steps = 1;
+        Ok(operation)
+    }
+
+    fn service(root: &std::path::Path) -> Result<RuntimeService, Box<dyn std::error::Error>> {
+        let dependencies = RuntimeDependencies::builder()
+            .policy(RuntimePolicyDependencyV1::Native)
+            .sandbox(RuntimeSandboxDependencyV1::Native)
+            .tool_runtime(Arc::new(ToolRuntime::new(ToolRegistry::new())))
+            .provider(RuntimeProviderDependencyV1::Disabled)
+            .ledger(RuntimeLedgerDependencyV1::Native)
+            .clock(Arc::new(SystemClock))
+            .store(RuntimeStoreDependencyV1::Native)
+            .output_root(root)
+            .build()?;
+        Ok(RuntimeService::new(dependencies))
+    }
+
+    #[test]
+    fn altered_envelopes_are_denied_before_any_persistence(
+    ) -> Result<(), Box<dyn std::error::Error>> {
+        let directory = tempfile::tempdir()?;
+        let root = directory.path().join("absent");
+        let approved = fixture()?;
+        let runtime = service(&root)?.with_closed_commands(vec![approved.clone()])?;
+        runtime.require_closed_command(&approved)?;
+        for field in [
+            "actor",
+            "causality",
+            "budget",
+            "effects",
+            "provenance",
+            "replay",
+            "run_spec",
+        ] {
+            let mut value = serde_json::to_value(&approved)?;
+            match field {
+                "actor" => value[field]["principal"] = serde_json::json!("changed"),
+                "causality" => {
+                    value[field]["root_operation_id"] =
+                        serde_json::to_value(derive_operation_id(&approved)?)?
+                }
+                "budget" => value[field]["max_output_bytes"] = serde_json::json!(32768),
+                "effects" => value[field]["network_allowed"] = serde_json::json!(true),
+                "provenance" => value[field] = serde_json::json!([]),
+                "replay" => value[field]["intent"] = serde_json::json!("read_recorded"),
+                _ => {
+                    value[field]["steps"][0]["call"]["args"]["args"] =
+                        serde_json::json!(["changed"])
+                }
+            }
+            let changed = serde_json::from_value(value)?;
+            assert!(matches!(
+                runtime.submit(&changed),
+                Err(RuntimeServiceError::ClosedCommandProfileDenied)
+            ));
+            assert!(matches!(
+                runtime.idempotent_submit(&changed, "key"),
+                Err(RuntimeServiceError::ClosedCommandProfileDenied)
+            ));
+        }
+        assert!(matches!(
+            runtime.begin_parent_v2(&approved),
+            Err(RuntimeServiceError::ClosedCommandProfileDenied)
+        ));
+        assert!(!root.exists());
+        Ok(())
+    }
+
+    #[test]
+    fn startup_profile_rejects_empty_duplicate_and_wrong_bounds(
+    ) -> Result<(), Box<dyn std::error::Error>> {
+        let directory = tempfile::tempdir()?;
+        let operation = fixture()?;
+        assert!(service(directory.path())?
+            .with_closed_commands(vec![])
+            .is_err());
+        assert!(service(directory.path())?
+            .with_closed_commands(vec![operation.clone(), operation.clone()])
+            .is_err());
+        let mut wrong = operation.clone();
+        wrong.budget.max_artifact_bytes = 4096;
+        assert!(service(directory.path())?
+            .with_closed_commands(vec![wrong])
+            .is_err());
+        let mut wrong = operation;
+        wrong.replay.intent = recursive_agent_contracts::ReplayIntentV1::ReadRecorded;
+        assert!(service(directory.path())?
+            .with_closed_commands(vec![wrong])
+            .is_err());
+        Ok(())
     }
 }
