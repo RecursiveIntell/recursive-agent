@@ -490,6 +490,32 @@ fn run_spec_internal_with_run_id(
     }
 }
 
+/// The closed single-step profile uses its validated operation ceilings in
+/// native permit construction. Legacy V1/V2 callers retain their existing path.
+fn run_closed_command_with_run_id(
+    operation: &OperationEnvelopeV1,
+    out_root: &Path,
+    clock: &dyn Clock,
+    run_id: CurrentRunId,
+    tool_executor: &dyn RunnerToolExecutor,
+) -> Result<RunSummary, RunError> {
+    let mut plan = ExecutionPlan::native(ExecutionMode::Finalized { family_guard: None });
+    plan.admitted_budget = Some(&operation.budget);
+    plan.bound_failure_observation = true;
+    match execute_spec_with_run_id(
+        &operation.run_spec,
+        out_root,
+        clock,
+        &NoopRunnerHook,
+        run_id,
+        tool_executor,
+        plan,
+    )? {
+        RunExecution::Finalized(summary) => Ok(summary),
+        RunExecution::Live(_) => Err(RunError::LiveParentUnavailable),
+    }
+}
+
 pub(crate) fn run_live_parent_spec_with_run_id(
     operation: &OperationEnvelopeV1,
     out_root: &Path,
@@ -589,7 +615,8 @@ pub(crate) fn run_provider_egress_operation_v3_with_run_id(
             mode: ExecutionMode::Finalized { family_guard: None },
             allowlist,
             provider_egress_admission: Some(admission),
-            provider_egress_budget: Some(&operation.budget),
+            admitted_budget: Some(&operation.budget),
+            bound_failure_observation: false,
             root_spec_digest: Some(content_digest(operation)?),
         },
     )? {
@@ -666,8 +693,9 @@ struct ExecutionPlan<'a> {
     mode: ExecutionMode<'a>,
     allowlist: Allowlist,
     provider_egress_admission: Option<&'a ValidatedProviderEgressAdmissionV1>,
-    provider_egress_budget: Option<&'a OperationBudgetV1>,
+    admitted_budget: Option<&'a OperationBudgetV1>,
     root_spec_digest: Option<ContentDigest>,
+    bound_failure_observation: bool,
 }
 
 impl<'a> ExecutionPlan<'a> {
@@ -676,8 +704,9 @@ impl<'a> ExecutionPlan<'a> {
             mode,
             allowlist: Allowlist::default(),
             provider_egress_admission: None,
-            provider_egress_budget: None,
+            admitted_budget: None,
             root_spec_digest: None,
+            bound_failure_observation: false,
         }
     }
 }
@@ -687,7 +716,8 @@ struct PermitBindingContext<'a> {
     parent_permit_id: Option<CurrentPermitId>,
     trusted_now: DateTime<Utc>,
     parent_expires_at: DateTime<Utc>,
-    provider_egress_budget: Option<&'a OperationBudgetV1>,
+    admitted_budget: Option<&'a OperationBudgetV1>,
+    provider_egress: bool,
 }
 
 fn execute_spec_with_run_id(
@@ -703,8 +733,9 @@ fn execute_spec_with_run_id(
         mode,
         allowlist,
         provider_egress_admission,
-        provider_egress_budget,
+        admitted_budget,
         root_spec_digest,
+        bound_failure_observation,
     } = plan;
     let (family_guard, leave_appendable) = match mode {
         ExecutionMode::Finalized { family_guard } => (family_guard, false),
@@ -724,7 +755,8 @@ fn execute_spec_with_run_id(
         lifecycle_issue_time,
         &prepared_dispatches,
         &spec_digest,
-        provider_egress_budget,
+        admitted_budget,
+        provider_egress_admission.is_some(),
     )?;
     let run_directory_key = content_digest(&run_id)?.to_string();
     let pinned_root = PinnedRunRoot::open(out_root, &run_directory_key)?;
@@ -851,7 +883,8 @@ fn execute_spec_with_run_id(
             step,
             allowlist: &allowlist,
             provider_egress_admission,
-            provider_egress_budget,
+            admitted_budget,
+            bound_failure_observation,
             parent_permit_id: &lifecycle_permit.permit_id,
             denial_lineage: &lifecycle_lineage,
             clock,
@@ -1175,7 +1208,8 @@ struct RunStepContext<'a> {
     step: &'a StepSpecV1,
     allowlist: &'a Allowlist,
     provider_egress_admission: Option<&'a ValidatedProviderEgressAdmissionV1>,
-    provider_egress_budget: Option<&'a OperationBudgetV1>,
+    admitted_budget: Option<&'a OperationBudgetV1>,
+    bound_failure_observation: bool,
     parent_permit_id: &'a CurrentPermitId,
     denial_lineage: &'a [recursive_agent_contracts::AuthorityLineageEntryV1],
     clock: &'a dyn Clock,
@@ -1200,7 +1234,8 @@ fn run_step(context: RunStepContext<'_>) -> Result<Option<(RunTerminalStateV1, S
         step,
         allowlist,
         provider_egress_admission,
-        provider_egress_budget,
+        admitted_budget,
+        bound_failure_observation,
         parent_permit_id,
         denial_lineage,
         clock,
@@ -1338,7 +1373,8 @@ fn run_step(context: RunStepContext<'_>) -> Result<Option<(RunTerminalStateV1, S
             parent_permit_id: Some(parent_permit_id.clone()),
             trusted_now: issue_time,
             parent_expires_at,
-            provider_egress_budget,
+            admitted_budget,
+            provider_egress: provider_egress_admission.is_some(),
         },
     )?;
     append_receipt!(
@@ -1588,7 +1624,15 @@ fn run_step(context: RunStepContext<'_>) -> Result<Option<(RunTerminalStateV1, S
             };
             let mut evidence = Vec::new();
             if let Some(observation) = error.failure_observation() {
-                let descriptor = put_string(store, &serde_json::to_string(observation)?)?;
+                let serialized = bounded_failure_observation(
+                    observation,
+                    if bound_failure_observation {
+                        admitted_budget
+                    } else {
+                        None
+                    },
+                )?;
+                let descriptor = put_string(store, &serialized)?;
                 append_receipt!(
                     chain,
                     run_id.clone(),
@@ -1626,6 +1670,26 @@ fn run_step(context: RunStepContext<'_>) -> Result<Option<(RunTerminalStateV1, S
             Ok(Some((terminal, reason)))
         }
     }
+}
+
+/// Retain a bounded digest/length record when a failed dispatch observation
+/// cannot fit an admitted payload ceiling. Legacy paths retain their output.
+fn bounded_failure_observation(
+    observation: &serde_json::Value,
+    budget: Option<&OperationBudgetV1>,
+) -> Result<String, serde_json::Error> {
+    let serialized = serde_json::to_string(observation)?;
+    if let Some(budget) = budget {
+        if serialized.len() as u64 > budget.max_output_bytes.min(budget.max_artifact_bytes) {
+            return serde_json::to_string(&serde_json::json!({
+                "kind": "failure_observation_budget_exceeded",
+                "observed_bytes": serialized.len(),
+                "observation_digest": ContentDigest::compute(serialized.as_bytes()),
+                "observation_retained": false,
+            }));
+        }
+    }
+    Ok(serialized)
 }
 
 fn enforce_tool_output_budget(
@@ -1770,6 +1834,7 @@ fn sandbox_tool_error(
     }
 }
 
+#[allow(clippy::too_many_arguments)] // Budget presence must not imply provider authority.
 fn lifecycle_authority(
     spec: &RunSpecV1,
     run_id: &CurrentRunId,
@@ -1777,9 +1842,9 @@ fn lifecycle_authority(
     trusted_now: DateTime<Utc>,
     prepared: &[Option<sandbox_engine::PreparedDispatch>],
     operation_digest: &ContentDigest,
-    provider_egress_budget: Option<&OperationBudgetV1>,
+    admitted_budget: Option<&OperationBudgetV1>,
+    provider_egress: bool,
 ) -> Result<(DelegationCeilingV1, PermitBindingV1), RunError> {
-    let provider_egress = provider_egress_budget.is_some();
     let actor = ActorPrincipalV1::try_new("recursive-agent")?;
     let mut actions = BTreeMap::new();
     let mut total = PermitBudgetV1 {
@@ -1806,14 +1871,14 @@ fn lifecycle_authority(
         } else {
             1_000
         };
-        let wall = provider_egress_budget.map_or_else(
+        let wall = admitted_budget.map_or_else(
             || {
                 optional_u64(&step.call.args, "timeout_ms")
                     .map(|value| value.unwrap_or(default_timeout).max(1))
             },
             |budget| Ok(budget.max_wall_time_ms),
         )?;
-        let budget = provider_egress_budget.map_or(
+        let budget = admitted_budget.map_or(
             PermitBudgetV1 {
                 max_wall_time_ms: wall,
                 max_output_bytes: 128 * 1024,
@@ -1938,9 +2003,9 @@ fn permit_binding(
         parent_permit_id,
         trusted_now,
         parent_expires_at,
-        provider_egress_budget,
+        admitted_budget,
+        provider_egress,
     } = context;
-    let provider_egress = provider_egress_budget.is_some();
     let read_roots = string_array(&call.args, "allowed_read_paths")?;
     let write_roots = string_array(&call.args, "allowed_write_paths")?;
     let network_allowed = if provider_egress && call.tool == "sealed_completion" {
@@ -1955,7 +2020,7 @@ fn permit_binding(
         network_allowed,
     };
     let default_timeout = if call.tool == "shell" { 120_000 } else { 1_000 };
-    let timeout = provider_egress_budget.map_or_else(
+    let timeout = admitted_budget.map_or_else(
         || {
             optional_u64(&call.args, "timeout_ms")
                 .map(|value| value.unwrap_or(default_timeout).max(1))
@@ -1973,7 +2038,7 @@ fn permit_binding(
         action_digest: content_digest(call)?,
         effect_digest: content_digest(&effect)?,
         effect,
-        budget: provider_egress_budget.map_or(
+        budget: admitted_budget.map_or(
             PermitBudgetV1 {
                 max_wall_time_ms: timeout,
                 max_output_bytes: 128 * 1024,
@@ -2416,6 +2481,92 @@ mod pinned_root_tests {
             observation["enforcement"]["reason_code"],
             "launcher_timed_out"
         );
+        Ok(())
+    }
+}
+
+#[cfg(test)]
+mod closed_command_budget_tests {
+    use super::*;
+    #[test]
+    fn oversized_failure_observation_retains_only_a_bounded_digest(
+    ) -> Result<(), Box<dyn std::error::Error>> {
+        let budget = OperationBudgetV1 {
+            max_steps: 1,
+            max_wall_time_ms: 3000,
+            max_output_bytes: 65536,
+            max_artifact_bytes: 65536,
+        };
+        let observation = serde_json::json!({"stdout": "x".repeat(70000)});
+        let retained = bounded_failure_observation(&observation, Some(&budget))?;
+        assert!(retained.len() < 1024);
+        let value: serde_json::Value = serde_json::from_str(&retained)?;
+        assert_eq!(value["observation_retained"], false);
+        assert_eq!(
+            value["observation_digest"],
+            serde_json::to_value(ContentDigest::compute(
+                serde_json::to_string(&observation)?.as_bytes()
+            ))?
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn declared_budget_is_used_without_enabling_network() -> Result<(), Box<dyn std::error::Error>>
+    {
+        let spec = RunSpecV1 {
+            name: "budget-only".into(),
+            policy_version: "m0-2".into(),
+            frozen_clock: None,
+            steps: vec![StepSpecV1 {
+                name: "shell".into(),
+                call: ToolCallSpecV1 {
+                    tool: "shell".into(),
+                    frozen_clock: None,
+                    args: serde_json::json!({"command":"/usr/bin/printf", "args":["ok"],
+                        "timeout_ms":3000,"max_output_bytes":16384,"allow_network":false,
+                        "allowed_read_paths":[],"allowed_write_paths":[]}),
+                },
+            }],
+        };
+        let budget = OperationBudgetV1 {
+            max_steps: 1,
+            max_wall_time_ms: 3000,
+            max_output_bytes: 65536,
+            max_artifact_bytes: 65536,
+        };
+        let now = chrono::Utc::now();
+        let run = derive_run_id(&spec)?;
+        let (_, lifecycle) = lifecycle_authority(
+            &spec,
+            &run,
+            "m0-2",
+            now,
+            &[None],
+            &content_digest(&spec)?,
+            Some(&budget),
+            false,
+        )?;
+        assert_eq!(lifecycle.budget.max_output_bytes, 65536);
+        assert_eq!(lifecycle.budget.max_artifact_bytes, 65536);
+        let step = derive_step_id(&run, 0, "shell", &spec.steps[0].call)?;
+        let binding = permit_binding(
+            &run,
+            &step,
+            &spec.steps[0].call,
+            PermitBindingContext {
+                policy_version: "m0-2",
+                parent_permit_id: None,
+                trusted_now: now,
+                parent_expires_at: lifecycle.expires_at,
+                admitted_budget: Some(&budget),
+                provider_egress: false,
+            },
+        )?;
+        assert_eq!(binding.budget.max_wall_time_ms, 3000);
+        assert_eq!(binding.budget.max_output_bytes, 65536);
+        assert_eq!(binding.budget.max_artifact_bytes, 65536);
+        assert!(!binding.effect.network_allowed);
         Ok(())
     }
 }
