@@ -300,6 +300,12 @@ pub fn parse_operation_envelope_bytes(
         crate::StrictJsonError::DuplicateKey => OperationIngressError::DuplicateKey,
         crate::StrictJsonError::Malformed => OperationIngressError::Malformed,
     })?;
+    parse_operation_envelope_value(parsed)
+}
+
+pub(crate) fn parse_operation_envelope_value(
+    parsed: serde_json::Value,
+) -> Result<OperationEnvelopeV1, OperationIngressError> {
     let canonical =
         crate::jcs_canonical(&parsed).map_err(|_| OperationIngressError::CanonicalBoundary)?;
     if canonical.len() > MAX_RUN_SPEC_MATERIAL_BYTES {
