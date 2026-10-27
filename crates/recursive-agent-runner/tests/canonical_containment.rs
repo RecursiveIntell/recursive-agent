@@ -1,8 +1,12 @@
 mod support;
 
-use recursive_agent_contracts::{RunSpecV1, RunTerminalStateV1, StepSpecV1, ToolCallSpecV1};
+use recursive_agent_contracts::{
+    ReceiptKindV1, RunSpecV1, RunTerminalStateV1, StepSpecV1, ToolCallSpecV1,
+};
 use recursive_agent_ledger::{open, verified_snapshot_directory_bound, RunPaths};
-use recursive_agent_sandbox::{EnforcementOutcome, SandboxResult, SandboxSpec};
+use recursive_agent_sandbox::{
+    EnforcementOutcome, EnforcementRecord, SandboxFailureReason, SandboxResult, SandboxSpec,
+};
 use std::fmt::{Display, Formatter};
 use support::run_spec;
 
@@ -33,14 +37,22 @@ fn shell_spec(script: String) -> SandboxSpec {
 
 #[derive(Debug)]
 enum CanonicalError {
-    Terminal(RunTerminalStateV1),
+    Terminal {
+        state: RunTerminalStateV1,
+        diagnostics: String,
+    },
     Other(String),
 }
 
 impl Display for CanonicalError {
     fn fmt(&self, formatter: &mut Formatter<'_>) -> std::fmt::Result {
         match self {
-            Self::Terminal(state) => write!(formatter, "canonical run terminal: {state:?}"),
+            Self::Terminal { state, diagnostics } => {
+                write!(
+                    formatter,
+                    "canonical run terminal: {state:?}; {diagnostics}"
+                )
+            }
             Self::Other(reason) => formatter.write_str(reason),
         }
     }
@@ -48,7 +60,48 @@ impl Display for CanonicalError {
 
 impl std::error::Error for CanonicalError {}
 
+// This is the existing runner failure-observation shape, not a new receipt type.
+#[derive(serde::Deserialize)]
+#[serde(deny_unknown_fields)]
+struct SandboxFailureObservation {
+    timed_out: bool,
+    enforcement: EnforcementRecord,
+}
+
+fn decode_sandbox_artifact(bytes: &[u8]) -> Result<SandboxResult, String> {
+    if let Ok(result) = serde_json::from_slice::<SandboxResult>(bytes) {
+        return Ok(result);
+    }
+    let detail = match serde_json::from_slice::<SandboxFailureObservation>(bytes) {
+        Ok(failure) => {
+            let ambiguity = if failure.enforcement.reason_code
+                == Some(SandboxFailureReason::LauncherTimedOut)
+            {
+                "; launcher_timed_out is not proof of deadline expiry: the current engine also maps supervisor/pipe-reader errors to this reason"
+            } else {
+                ""
+            };
+            format!(
+                "timed_out={}; enforcement={:?}{ambiguity}",
+                failure.timed_out, failure.enforcement
+            )
+        }
+        Err(_) => "no typed sandbox enforcement observation retained".into(),
+    };
+    // Keep the verified artifact contents even when the failure has no
+    // enforcement record (for example, a parent-authority tool_failure).
+    let raw = match std::str::from_utf8(bytes) {
+        Ok(text) => text.to_owned(),
+        Err(_) => format!("non-UTF8 artifact bytes={bytes:?}"),
+    };
+    Err(format!("{detail}; artifact_json={raw}"))
+}
+
 fn execute(spec: &SandboxSpec) -> Result<SandboxResult, CanonicalError> {
+    execute_case("canonical-containment", spec)
+}
+
+fn execute_case(case_name: &str, spec: &SandboxSpec) -> Result<SandboxResult, CanonicalError> {
     let root = tempfile::tempdir().map_err(|error| CanonicalError::Other(error.to_string()))?;
     let call = ToolCallSpecV1 {
         tool: "shell".into(),
@@ -57,7 +110,7 @@ fn execute(spec: &SandboxSpec) -> Result<SandboxResult, CanonicalError> {
         frozen_clock: None,
     };
     let run = RunSpecV1 {
-        name: "canonical-containment".into(),
+        name: case_name.into(),
         steps: vec![StepSpecV1 {
             name: "shell".into(),
             call,
@@ -73,23 +126,47 @@ fn execute(spec: &SandboxSpec) -> Result<SandboxResult, CanonicalError> {
     let store = open(&paths)
         .and_then(|chain| chain.artifact_store())
         .map_err(|error| CanonicalError::Other(error.to_string()))?;
+    let mut diagnostics = format!("case={case_name}; run_id={}", summary.run_id);
     for receipt in snapshot.receipts().iter().rev() {
         for descriptor in receipt.artifact_refs.iter().rev() {
             let bytes = store
                 .get(descriptor)
                 .map_err(|error| CanonicalError::Other(error.to_string()))?;
-            if let Ok(result) = serde_json::from_slice::<SandboxResult>(&bytes) {
-                return Ok(result);
+            match decode_sandbox_artifact(&bytes) {
+                Ok(result) => {
+                    if summary.terminal_state != RunTerminalStateV1::Succeeded {
+                        eprintln!(
+                            "{case_name}: terminal={:?}; receipt={}; outcome={:?}; artifact={}; result={result:?}; artifact_json={}",
+                            summary.terminal_state, receipt.receipt_id, receipt.outcome,
+                            descriptor.digest, std::str::from_utf8(&bytes)
+                                .map_err(|error| CanonicalError::Other(error.to_string()))?
+                        );
+                    }
+                    return Ok(result);
+                }
+                Err(detail) if receipt.kind == ReceiptKindV1::StepFailed => {
+                    diagnostics.push_str(&format!(
+                        "; receipt={}; outcome={:?}; artifact={}; bytes={}; {detail}",
+                        receipt.receipt_id,
+                        receipt.outcome,
+                        descriptor.digest,
+                        descriptor.byte_length
+                    ));
+                }
+                Err(_) => {}
             }
         }
     }
-    Err(CanonicalError::Terminal(summary.terminal_state))
+    Err(CanonicalError::Terminal {
+        state: summary.terminal_state,
+        diagnostics,
+    })
 }
 
 fn assert_fail_closed(result: Result<SandboxResult, CanonicalError>) -> TestResult {
     match result {
         Ok(result) => assert_eq!(result.enforcement.outcome, EnforcementOutcome::Enforced),
-        Err(CanonicalError::Terminal(state)) => {
+        Err(CanonicalError::Terminal { state, .. }) => {
             assert_ne!(state, RunTerminalStateV1::Succeeded);
         }
         Err(other) => return Err(format!("unexpected canonical runner error: {other:?}").into()),
@@ -100,9 +177,110 @@ fn assert_fail_closed(result: Result<SandboxResult, CanonicalError>) -> TestResu
 fn assert_rejected_before_or_during_run(result: Result<SandboxResult, CanonicalError>) {
     match result {
         Ok(result) => assert_ne!(result.exit_code, Some(0)),
-        Err(CanonicalError::Terminal(state)) => assert_ne!(state, RunTerminalStateV1::Succeeded),
+        Err(CanonicalError::Terminal { state, .. }) => {
+            assert_ne!(state, RunTerminalStateV1::Succeeded)
+        }
         Err(CanonicalError::Other(_)) => {}
     }
+}
+
+// Data-only diagnostic fixtures: these do not dispatch a native command.
+fn diagnostic_enforcement() -> EnforcementRecord {
+    EnforcementRecord {
+        mechanism: recursive_agent_sandbox::SandboxMechanism::Bubblewrap,
+        outcome: EnforcementOutcome::Failed,
+        policy_digest: "fixture-policy".into(),
+        launcher_path: "/usr/bin/bwrap".into(),
+        launcher_version: None,
+        bash_trampoline_path: None,
+        launcher_argv: Vec::new(),
+        private_pid_namespace: false,
+        parent_death_control: false,
+        network_isolated: false,
+        network_mechanism: None,
+        seccomp_policy_digest: None,
+        denied_network_syscalls: Vec::new(),
+        effective_operation_roots: Vec::new(),
+        effective_runtime_read_roots: Vec::new(),
+        trusted_executables: Vec::new(),
+        authorization: None,
+        setup_proof_digest: None,
+        setup_proof_verified: false,
+        reason_code: Some(SandboxFailureReason::LauncherTimedOut),
+    }
+}
+
+#[test]
+fn diagnostic_retains_failed_setup_timeout_classification() -> TestResult {
+    let bytes = serde_json::to_vec(&serde_json::json!({
+        "timed_out": true,
+        "enforcement": diagnostic_enforcement(),
+    }))?;
+    let diagnostic = decode_sandbox_artifact(&bytes)
+        .err()
+        .ok_or("failure evidence missing")?;
+    assert!(diagnostic.contains("timed_out=true"));
+    assert!(diagnostic.contains("setup_proof_verified: false"));
+    assert!(diagnostic.contains("LauncherTimedOut"));
+    assert!(diagnostic.contains(std::str::from_utf8(&bytes)?));
+    Ok(())
+}
+
+#[test]
+fn diagnostic_retains_enforced_descendant_timeout_with_setup_proof() -> TestResult {
+    let mut enforcement = diagnostic_enforcement();
+    enforcement.outcome = EnforcementOutcome::Enforced;
+    enforcement.setup_proof_verified = true;
+    enforcement.setup_proof_digest = Some("fixture-proof".into());
+    enforcement.reason_code = None;
+    let bytes = serde_json::to_vec(&SandboxResult {
+        exit_code: None,
+        stdout: String::new(),
+        stderr: String::new(),
+        stdout_truncated: false,
+        stderr_truncated: false,
+        stdout_dropped_bytes: 0,
+        stderr_dropped_bytes: 0,
+        timed_out: true,
+        authority_terminated: false,
+        wall_time_ms: 100,
+        enforcement,
+    })?;
+    let result = decode_sandbox_artifact(&bytes)?;
+    assert!(result.timed_out);
+    assert!(!result.authority_terminated);
+    assert!(result.enforcement.setup_proof_verified);
+    assert_eq!(result.enforcement.outcome, EnforcementOutcome::Enforced);
+    Ok(())
+}
+
+#[test]
+fn diagnostic_does_not_claim_pipe_reader_failure_is_deadline_expiry() -> TestResult {
+    // The current engine collapses supervisor/reader errors to this SAME
+    // persisted observation. Its original cause cannot be recovered here.
+    let bytes = serde_json::to_vec(&serde_json::json!({
+        "timed_out": true,
+        "enforcement": diagnostic_enforcement(),
+    }))?;
+    let diagnostic = decode_sandbox_artifact(&bytes)
+        .err()
+        .ok_or("failure evidence missing")?;
+    assert!(diagnostic.contains("not proof of deadline expiry"));
+    assert!(diagnostic.contains("supervisor/pipe-reader errors"));
+    assert!(diagnostic.contains(std::str::from_utf8(&bytes)?));
+    Ok(())
+}
+
+#[test]
+fn diagnostic_retains_parent_authority_failure_without_enforcement() -> TestResult {
+    let bytes =
+        br#"{"kind":"tool_failure","reason":"parent authority ended during effect execution"}"#;
+    let diagnostic = decode_sandbox_artifact(bytes)
+        .err()
+        .ok_or("failure evidence missing")?;
+    assert!(diagnostic.contains("no typed sandbox enforcement observation retained"));
+    assert!(diagnostic.contains(std::str::from_utf8(bytes)?));
+    Ok(())
 }
 
 #[test]
@@ -286,7 +464,7 @@ fn network_socket_creation_receives_eperm_under_enforcement() -> TestResult {
 }
 
 #[test]
-fn undeclared_read_and_descendant_are_mandatorily_bounded() -> TestResult {
+fn undeclared_read_is_mandatorily_denied() -> TestResult {
     let root = tempfile::tempdir()?;
     let sentinel = root.path().join("undeclared-sentinel");
     std::fs::write(&sentinel, b"must-not-read")?;
@@ -295,15 +473,19 @@ fn undeclared_read_and_descendant_are_mandatorily_bounded() -> TestResult {
         sentinel.display()
     ));
     read_spec.timeout_ms = 2_000;
-    let read = execute(&read_spec)?;
+    let read = execute_case("undeclared-read-2000ms", &read_spec)?;
     assert_eq!(read.enforcement.outcome, EnforcementOutcome::Enforced);
     assert_eq!(read.exit_code, Some(0));
     assert_eq!(read.stdout, "denied");
+    Ok(())
+}
 
+#[test]
+fn descendant_is_mandatorily_bounded() -> TestResult {
     let mut descendant = shell_spec("sleep 30 & wait".into());
     descendant.timeout_ms = 100;
     let started = std::time::Instant::now();
-    let result = execute(&descendant)?;
+    let result = execute_case("descendant-100ms", &descendant)?;
     assert_eq!(result.enforcement.outcome, EnforcementOutcome::Enforced);
     assert!(result.timed_out);
     assert!(started.elapsed() < std::time::Duration::from_secs(2));
@@ -347,7 +529,7 @@ fn active_mount_source_replacement_never_exposes_attacker_bytes() -> TestResult 
                 assert_eq!(result.enforcement.outcome, EnforcementOutcome::Enforced);
                 assert_eq!(result.stdout, "safe");
             }
-            Err(CanonicalError::Terminal(_)) => {}
+            Err(CanonicalError::Terminal { .. }) => {}
             Err(CanonicalError::Other(_)) => {}
         }
     }
