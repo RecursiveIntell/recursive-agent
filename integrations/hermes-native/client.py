@@ -10,13 +10,15 @@ the tool does not mislabel a real failed run as unavailable.
 
 from __future__ import annotations
 
+import base64
 import json
 import socket
 import struct
 
 SCHEMA = "recursive-agent.ipc/request/v1"
 PROTOCOL_VERSION = 1
-MAX_FRAME_PAYLOAD_BYTES = (1024 * 1024) + (64 * 1024)
+MAX_OPERATION_INPUT_BYTES = 1024 * 1024
+MAX_FRAME_PAYLOAD_BYTES = ((MAX_OPERATION_INPUT_BYTES + 2) // 3) * 4 + (64 * 1024)
 
 
 class DaemonClientError(Exception):
@@ -62,9 +64,12 @@ def _frame_len_check(length: int) -> None:
 
 
 def _read_frame(conn: socket.socket) -> dict:
-    header = conn.recv(4)
-    if len(header) != 4:
-        raise DaemonClientError("incomplete frame header")
+    header = b""
+    while len(header) < 4:
+        chunk = conn.recv(4 - len(header))
+        if not chunk:
+            raise DaemonClientError("incomplete frame header")
+        header += chunk
     (length,) = struct.unpack(">I", header)
     _frame_len_check(length)
     body = b""
@@ -155,6 +160,72 @@ def submit_provider_egress_v3(socket_path: str, envelope: dict) -> dict:
         raise DaemonClientError(f"cannot reach daemon: {error}") from error
 
 
+def _raw_request(socket_path: str, kind: str, raw: bytes) -> dict:
+    if len(raw) > MAX_OPERATION_INPUT_BYTES:
+        raise DaemonClientError("operation exceeds byte limit")
+    request_id = "plugin-" + kind + "-1"
+    try:
+        with socket.socket(socket.AF_UNIX, socket.SOCK_STREAM) as conn:
+            conn.settimeout(5.0)
+            conn.connect(socket_path)
+            response = _request(conn, request_id, {
+                "kind": kind,
+                "operation_json_b64": base64.b64encode(raw).decode("ascii"),
+            })
+    except (OSError, ConnectionError) as error:
+        raise DaemonClientError(f"cannot reach daemon: {error}") from error
+    if response.get("request_id") != request_id:
+        raise DaemonClientError("native response request id mismatch")
+    if isinstance(response.get("error"), dict):
+        raise DaemonClientError("native operation denied: " + str(response["error"].get("message", "runtime error")))
+    return response
+
+
+def submit_native_raw(socket_path: str, raw: bytes) -> dict:
+    return _raw_request(socket_path, "submit_native_raw", raw)
+
+
+def read_recorded_native_raw(socket_path: str, raw: bytes) -> dict:
+    response = _raw_request(socket_path, "read_recorded_provider_output_native_raw", raw)
+    output = response.get("output")
+    if (not isinstance(output, dict) or set(output) != {"model", "text"}
+            or not isinstance(output["model"], str) or not output["model"]
+            or not isinstance(output["text"], str)):
+        raise DaemonClientError("recorded output response malformed")
+    return output
+
+
+def read_recorded_provider_output_v3(socket_path: str, envelope: dict) -> dict:
+    """Consume owner-verified V3 output by exact sealed operation, never a path.
+
+    The daemon rechecks current policy and pins the recorded evidence root
+    while reading. Its runtime errors are not transport success.
+    """
+    request_id = "plugin-read-recorded-provider-v3-1"
+    try:
+        conn = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
+        try:
+            conn.settimeout(5.0)
+            conn.connect(socket_path)
+            response = _request(conn, request_id, {
+                "kind": "read_recorded_provider_output_v3", "operation": envelope,
+            })
+        finally:
+            conn.close()
+    except (OSError, ConnectionError) as error:
+        raise DaemonClientError(f"cannot reach daemon: {error}") from error
+    if response.get("request_id") != request_id:
+        raise DaemonClientError("recorded output response request id mismatch")
+    if isinstance(response.get("error"), dict):
+        raise DaemonClientError(f"recorded output denied: {response['error'].get('message', 'runtime error')}")
+    output = response.get("output")
+    if (not isinstance(output, dict) or set(output) != {"model", "text"}
+            or not isinstance(output["model"], str) or not output["model"]
+            or not isinstance(output["text"], str)):
+        raise DaemonClientError("recorded output response malformed")
+    return output
+
+
 def status_of_run(socket_path: str, run_id: str) -> dict:
     """Query terminal status for a submitted run over IPC."""
     try:
@@ -208,6 +279,18 @@ def submit_and_status(socket_path: str, envelope: dict) -> dict:
         submitted = submit_provider_egress_v3(socket_path, envelope)
     else:
         submitted = submit_envelope(socket_path, envelope)
+    return _follow_submission(socket_path, submitted, envelope=envelope)
+
+
+def submit_and_status_raw(socket_path: str, raw: bytes) -> dict:
+    """Only the native owner may parse or select the operation family."""
+    submitted = submit_native_raw(socket_path, raw)
+    if submitted.get("operation_family") not in ("v1", "provider_egress_v3"):
+        raise DaemonClientError("native response missing operation family")
+    return _follow_submission(socket_path, submitted, raw=raw)
+
+
+def _follow_submission(socket_path: str, submitted: dict, *, envelope=None, raw=None) -> dict:
     run_id = str(submitted.get("run_id", ""))
     run_dir = submitted.get("run_dir")
     if not run_id:
@@ -259,9 +342,30 @@ def submit_and_status(socket_path: str, envelope: dict) -> dict:
         raise DaemonClientError("verification response has invalid chain length")
     if not isinstance(verification.get("final_head"), str) or not verification["final_head"]:
         raise DaemonClientError("verification response missing final chain head")
-    return {
+    result = {
         "state": state,
         "run_id": run_id,
         "run_dir": run_dir,
         "verification": verification,
     }
+    is_v3 = (submitted.get("operation_family") == "provider_egress_v3") if raw is not None else (
+        envelope is not None and envelope.get("schema") == "recursive-agent.operation/v3"
+    )
+    if is_v3:
+        try:
+            if raw is not None:
+                result["recorded_output"] = read_recorded_native_raw(socket_path, raw)
+            elif envelope is not None:
+                result["recorded_output"] = read_recorded_provider_output_v3(socket_path, envelope)
+        except DaemonClientError as error:
+            raise DaemonRunFailure(
+                code="recorded_output_unavailable",
+                message=str(error),
+                run_id=run_id,
+                run_dir=run_dir,
+                status=status,
+                verification=verification_response,
+            ) from error
+    if raw is not None:
+        result["operation_family"] = submitted["operation_family"]
+    return result

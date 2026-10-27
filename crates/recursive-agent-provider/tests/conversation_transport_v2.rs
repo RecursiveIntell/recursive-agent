@@ -150,6 +150,146 @@ fn v2_transport_sends_prepared_body_once_and_returns_provider_content() -> TestR
 }
 
 #[test]
+fn v2_transport_does_not_report_text_success_when_provider_also_emits_tool_calls() -> TestResult {
+    let (base_url, received) = response_server(
+        "200 OK",
+        r#"{"choices":[{"message":{"content":"I checked it","tool_calls":[{"id":"call-1","type":"function","function":{"name":"lookup","arguments":"{\"query\":\"first\",\"query\":\"second\"}"}}]}}]}"#,
+    )?;
+    let request = ConversationRequestV2::try_new(
+        ProviderSpecV1::OpenAiCompatible {
+            base_url: ValidatedEndpoint::try_new(base_url)?,
+            model: "fixture-model".into(),
+            credential_ref: CredentialRef::try_new("environment:UNUSED")?,
+        },
+        vec![ConversationMessageV2::user("inspect the state")],
+        Some(64),
+    )?;
+
+    let backend = HttpCompletionBackend::new(Duration::from_secs(5))?;
+    assert!(matches!(
+        backend.complete_conversation_v2_with_resolver(&request, &FixedResolver),
+        Err(ProviderError::InvalidConversationToolCall)
+    ));
+    let request_bytes = received.recv_timeout(Duration::from_secs(5))?;
+    assert!(request_bytes.starts_with(b"POST /v1/chat/completions HTTP/1.1\r\n"));
+    Ok(())
+}
+
+#[test]
+fn v2_transport_rejects_legacy_function_call_instead_of_reporting_text_success() -> TestResult {
+    let (base_url, received) = response_server(
+        "200 OK",
+        r#"{"choices":[{"message":{"content":"I checked it","function_call":{"name":"lookup","arguments":"{\"query\":\"first\",\"query\":\"second\"}"}}}]}"#,
+    )?;
+    let request = ConversationRequestV2::try_new(
+        ProviderSpecV1::OpenAiCompatible {
+            base_url: ValidatedEndpoint::try_new(base_url)?,
+            model: "fixture-model".into(),
+            credential_ref: CredentialRef::try_new("environment:UNUSED")?,
+        },
+        vec![ConversationMessageV2::user("inspect the state")],
+        Some(64),
+    )?;
+    let backend = HttpCompletionBackend::new(Duration::from_secs(5))?;
+    assert!(matches!(
+        backend.complete_conversation_v2_with_resolver(&request, &FixedResolver),
+        Err(ProviderError::InvalidConversationToolCall)
+    ));
+    let request_bytes = received.recv_timeout(Duration::from_secs(5))?;
+    assert!(request_bytes.starts_with(b"POST /v1/chat/completions HTTP/1.1\r\n"));
+    Ok(())
+}
+
+#[test]
+fn v2_transport_rejects_unselected_choices_instead_of_dropping_tool_calls() -> TestResult {
+    let (base_url, received) = response_server(
+        "200 OK",
+        r#"{"choices":[{"message":{"content":"ok"}},{"message":{"tool_calls":[{"id":"call-2","type":"function","function":{"name":"lookup","arguments":"{\"query\":\"first\",\"query\":\"second\"}"}}]}}]}"#,
+    )?;
+    let request = ConversationRequestV2::try_new(
+        ProviderSpecV1::OpenAiCompatible {
+            base_url: ValidatedEndpoint::try_new(base_url)?,
+            model: "fixture-model".into(),
+            credential_ref: CredentialRef::try_new("environment:UNUSED")?,
+        },
+        vec![ConversationMessageV2::user("inspect the state")],
+        Some(64),
+    )?;
+    let backend = HttpCompletionBackend::new(Duration::from_secs(5))?;
+    assert!(matches!(
+        backend.complete_conversation_v2_with_resolver(&request, &FixedResolver),
+        Err(ProviderError::InvalidConversationToolCall)
+    ));
+    let request_bytes = received.recv_timeout(Duration::from_secs(5))?;
+    assert!(request_bytes.starts_with(b"POST /v1/chat/completions HTTP/1.1\r\n"));
+    Ok(())
+}
+
+#[test]
+fn v2_transport_rejects_unselected_plain_choices() -> TestResult {
+    let (base_url, received) = response_server(
+        "200 OK",
+        r#"{"choices":[{"message":{"content":"first"}},{"message":{"content":"second"}}]}"#,
+    )?;
+    let request = ConversationRequestV2::try_new(
+        ProviderSpecV1::OpenAiCompatible {
+            base_url: ValidatedEndpoint::try_new(base_url)?,
+            model: "fixture-model".into(),
+            credential_ref: CredentialRef::try_new("environment:UNUSED")?,
+        },
+        vec![ConversationMessageV2::user("inspect the state")],
+        Some(64),
+    )?;
+    let backend = HttpCompletionBackend::new(Duration::from_secs(5))?;
+    assert!(matches!(
+        backend.complete_conversation_v2_with_resolver(&request, &FixedResolver),
+        Err(ProviderError::Malformed(_))
+    ));
+    let request_bytes = received.recv_timeout(Duration::from_secs(5))?;
+    assert!(request_bytes.starts_with(b"POST /v1/chat/completions HTTP/1.1\r\n"));
+    Ok(())
+}
+
+#[test]
+fn legacy_openai_completion_does_not_discard_provider_tool_calls() -> TestResult {
+    struct RestoreEnv(Option<std::ffi::OsString>);
+    impl Drop for RestoreEnv {
+        fn drop(&mut self) {
+            const KEY: &str = "ARES_AC08_NONSECRET_PROVIDER_FIXTURE_KEY";
+            if let Some(value) = self.0.take() {
+                std::env::set_var(KEY, value);
+            } else {
+                std::env::remove_var(KEY);
+            }
+        }
+    }
+    const KEY: &str = "ARES_AC08_NONSECRET_PROVIDER_FIXTURE_KEY";
+    let _restore = RestoreEnv(std::env::var_os(KEY));
+    std::env::set_var(KEY, "fixture-token");
+    let (base_url, received) = response_server(
+        "200 OK",
+        r#"{"choices":[{"message":{"content":"I checked it","tool_calls":[{"id":"call-1","type":"function","function":{"name":"lookup","arguments":"{\"query\":\"status\"}"}}]}}]}"#,
+    )?;
+    let request = CompletionRequestV1 {
+        provider: ProviderSpecV1::OpenAiCompatible {
+            base_url: ValidatedEndpoint::try_new(base_url)?,
+            model: "fixture-model".into(),
+            credential_ref: CredentialRef::try_new(format!("environment:{KEY}"))?,
+        },
+        prompt: "inspect the state".into(),
+        max_tokens: Some(64),
+    };
+    let backend = HttpCompletionBackend::new(Duration::from_secs(5))?;
+    assert!(matches!(
+        backend.complete(&request),
+        Err(ProviderError::InvalidConversationToolCall)
+    ));
+    let request_bytes = received.recv_timeout(Duration::from_secs(5))?;
+    assert!(request_bytes.starts_with(b"POST /v1/chat/completions HTTP/1.1\r\n"));
+    Ok(())
+}
+
+#[test]
 fn legacy_completion_does_not_follow_loopback_redirects() -> TestResult {
     let (base_url, received) = response_server("302 Found", "")?;
     let request = CompletionRequestV1 {

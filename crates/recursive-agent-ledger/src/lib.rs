@@ -1967,6 +1967,123 @@ pub fn verified_snapshot_with_artifact_store_directory_bound(
     })
 }
 
+/// Exact caller-to-evidence values required before a recorded V3 replay can
+/// invoke current policy. These inputs cannot grant execution authority.
+#[derive(Debug, Clone, Copy)]
+pub struct ProviderReplayExpectationV3<'a> {
+    pub run_id: &'a CurrentRunId,
+    pub operation_digest: &'a ContentDigest,
+    pub sealed_step_digest: &'a ContentDigest,
+    pub admission: &'a recursive_agent_policy::ProviderEgressAdmissionRequestV1,
+}
+
+/// Strict, non-reconciling verification for recorded provider-egress replay.
+/// An incomplete tail or stale metadata fails closed; neither is repaired by
+/// a readback. V3 provider egress has no child runs, so reject child-link
+/// records rather than following them into the reconciling child verifier.
+pub fn verified_provider_replay_snapshot_read_only(
+    paths: &RunPaths,
+    expected: ProviderReplayExpectationV3<'_>,
+) -> Result<(VerifiedReceiptSnapshot, ArtifactStore), LedgerError> {
+    let root = open_directory_tree(&paths.root, false)?;
+    with_exclusive_lock(&root, |root| {
+        let snapshot = strict_pack_snapshot(root, paths)?;
+        if snapshot.verification().verified_run_id.as_ref() != Some(expected.run_id) {
+            return Err(LedgerError::ExpectedRunMismatch {
+                expected: expected.run_id.to_string(),
+                observed: snapshot
+                    .verification()
+                    .verified_run_id
+                    .as_ref()
+                    .map_or_else(|| "none".into(), ToString::to_string),
+            });
+        }
+        if snapshot.receipts().iter().any(|receipt| {
+            matches!(
+                receipt.kind,
+                ReceiptKindV1::ChildAdmissionPrepared
+                    | ReceiptKindV1::ChildLinked
+                    | ReceiptKindV1::ChildClosed
+            )
+        }) {
+            return Err(LedgerError::ChildLinkInvalid(
+                "provider replay cannot contain child-run records".into(),
+            ));
+        }
+        // Both evidence and the artifact capability are read through the
+        // verified root FD; a later pathname replacement cannot redirect the
+        // admission lookup to a different directory.
+        let store = ArtifactStore::from_run_root_fd(root, false)?;
+        let starts: Vec<_> = snapshot
+            .receipts()
+            .iter()
+            .filter(|receipt| receipt.kind == ReceiptKindV1::RunStarted)
+            .collect();
+        let admissions: Vec<_> = snapshot
+            .receipts()
+            .iter()
+            .filter(|receipt| receipt.kind == ReceiptKindV1::ProviderEgressAdmitted)
+            .collect();
+        if starts.len() != 1
+            || starts[0].spec_digest != *expected.operation_digest
+            || admissions.len() != 1
+            || admissions[0].spec_digest != *expected.operation_digest
+            || admissions[0].args_digest != expected.admission.tool_arguments_digest
+            || admissions[0].artifact_refs.len() != 1
+        {
+            return Err(LedgerError::RunPackInvalid(
+                "recorded provider operation identity mismatch".into(),
+            ));
+        }
+        let evidence: recursive_agent_policy::ProviderEgressAdmissionEvidenceV1 =
+            serde_json::from_slice(&store.get(&admissions[0].artifact_refs[0])?)?;
+        evidence.validate().map_err(|_| {
+            LedgerError::RunPackInvalid("invalid recorded provider admission".into())
+        })?;
+        if evidence.binding != expected.admission.binding
+            || evidence.request_digest != expected.admission.request_digest
+            || evidence.tool_arguments_digest != expected.admission.tool_arguments_digest
+        {
+            return Err(LedgerError::RunPackInvalid(
+                "recorded provider admission does not bind caller".into(),
+            ));
+        }
+        let completed: Vec<_> = snapshot
+            .receipts()
+            .iter()
+            .filter(|receipt| receipt.kind == ReceiptKindV1::StepCompleted)
+            .collect();
+        if completed.len() != 1
+            || completed[0].step_id != admissions[0].step_id
+            || completed[0].spec_digest != *expected.sealed_step_digest
+            || completed[0].args_digest != expected.admission.tool_arguments_digest
+            || completed[0].artifact_refs.len() != 1
+        {
+            return Err(LedgerError::RunPackInvalid(
+                "recorded provider step does not bind admission".into(),
+            ));
+        }
+        Ok((snapshot, store))
+    })
+}
+
+/// Check that the public run path still names the descriptor-pinned run root.
+/// This detects replacement during a policy callback; it does not protect a
+/// later consumer that reopens the path after this check. Such consumers must
+/// independently verify the directory-bound evidence before using it.
+pub fn verify_run_root_identity_read_only(
+    paths: &RunPaths,
+    expected: RunRootIdentity,
+) -> Result<(), LedgerError> {
+    let root = open_directory_tree(&paths.root, false)?;
+    if run_root_identity(&root)? != expected {
+        return Err(LedgerError::RunPackInvalid(
+            "recorded replay run directory was replaced".into(),
+        ));
+    }
+    Ok(())
+}
+
 /// Read a causally ordered event slice projected only from reconciled,
 /// authoritative receipt bytes that have passed lifecycle, artifact, permit,
 /// and run-directory validation under the ledger lock.

@@ -12,7 +12,10 @@ use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::Arc;
 use std::time::Duration;
 
-use recursive_agent_contracts::CurrentRunId;
+use base64::Engine as _;
+use recursive_agent_contracts::{
+    parse_native_operation_bytes, CurrentRunId, NativeOperation, MAX_RUN_SPEC_INPUT_BYTES,
+};
 use recursive_agent_runner::{RuntimeCancelResultV1, RuntimeService, RuntimeStatusV1};
 use thiserror::Error;
 
@@ -49,6 +52,22 @@ pub enum ServerError {
     PeerIdentity(String),
     #[error("invalid run id: {0}")]
     InvalidRunId(String),
+    #[error("native operation ingress: {0}")]
+    NativeIngress(String),
+}
+
+fn admit_native_raw(encoded: &str) -> Result<NativeOperation, ServerError> {
+    let limit = (MAX_RUN_SPEC_INPUT_BYTES as usize).div_ceil(3) * 4;
+    if encoded.len() > limit {
+        return Err(ServerError::NativeIngress(
+            "operation exceeds byte limit".into(),
+        ));
+    }
+    let raw = base64::engine::general_purpose::STANDARD
+        .decode(encoded)
+        .map_err(|_| ServerError::NativeIngress("invalid base64".into()))?;
+    parse_native_operation_bytes(&raw)
+        .map_err(|error| ServerError::NativeIngress(error.to_string()))
 }
 
 /// A response frame correlated to its request id.
@@ -487,6 +506,44 @@ fn dispatch(
                 "run_dir": handle.run_dir().display().to_string(),
                 "submitted": true,
                 "operation_family": "provider_egress_v3",
+            }))
+        }
+        IpcRequestV1::ReadRecordedProviderOutputV3 { operation } => {
+            let output = runtime.read_recorded_provider_output_v3(operation)?;
+            Ok(serde_json::json!({
+                "request_id": request.request_id,
+                "output": {"model": output.model, "text": output.text},
+            }))
+        }
+        IpcRequestV1::SubmitNativeRaw { operation_json_b64 } => {
+            let operation = admit_native_raw(operation_json_b64)?;
+            let (handle, family) = match operation {
+                NativeOperation::V1(operation) => (runtime.submit(&operation)?, "v1"),
+                NativeOperation::ProviderEgressV3(operation) => (
+                    runtime.submit_provider_egress_v3(&operation)?,
+                    "provider_egress_v3",
+                ),
+            };
+            Ok(serde_json::json!({
+                "request_id": request.request_id,
+                "run_id": handle.run_id().to_string(),
+                "run_dir": handle.run_dir().display().to_string(),
+                "submitted": true,
+                "operation_family": family,
+            }))
+        }
+        IpcRequestV1::ReadRecordedProviderOutputNativeRaw { operation_json_b64 } => {
+            let NativeOperation::ProviderEgressV3(operation) =
+                admit_native_raw(operation_json_b64)?
+            else {
+                return Err(ServerError::NativeIngress(
+                    "recorded output requires V3".into(),
+                ));
+            };
+            let output = runtime.read_recorded_provider_output_v3(&operation)?;
+            Ok(serde_json::json!({
+                "request_id": request.request_id,
+                "output": {"model": output.model, "text": output.text},
             }))
         }
     }
