@@ -1,1 +1,6 @@
 /target
+
+# Run/session residue
+.ares/
+.hermes/
+.workbench/
