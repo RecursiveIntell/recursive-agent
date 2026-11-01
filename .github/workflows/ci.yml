@@ -23,7 +23,7 @@ env:
 jobs:
   paired-root:
     name: Paired root
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     timeout-minutes: 45
     steps:
       - name: Checkout recursive-agent source
@@ -131,7 +131,7 @@ jobs:
     name: All required checks pass
     needs: paired-root
     if: always()
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     timeout-minutes: 5
     steps:
       - name: Require the paired-root gate
