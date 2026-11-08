@@ -227,8 +227,22 @@ type PostSpawnTestHook = Box<dyn FnOnce(&DispatchToken)>;
 
 #[cfg(test)]
 thread_local! {
+    static BWRAP_VERSION_TEST_OVERRIDE: std::cell::RefCell<Option<String>> =
+        const { std::cell::RefCell::new(None) };
     static POST_SPAWN_TEST_HOOK: std::cell::RefCell<Option<PostSpawnTestHook>> =
         std::cell::RefCell::new(None);
+}
+
+#[cfg(test)]
+fn install_bwrap_version_test_override(version: impl Into<String>) {
+    BWRAP_VERSION_TEST_OVERRIDE.with(|slot| {
+        slot.replace(Some(version.into()));
+    });
+}
+
+#[cfg(test)]
+fn take_bwrap_version_test_override() -> Option<String> {
+    BWRAP_VERSION_TEST_OVERRIDE.with(std::cell::RefCell::take)
 }
 
 #[cfg(test)]
@@ -833,6 +847,18 @@ fn execute_linux(
             )),
         }
     })?;
+    if !bubblewrap_version_meets_minimum(&version) {
+        return Err(SandboxError::SetupFailed {
+            enforcement: Box::new(failed_record(
+                &prepared,
+                launcher,
+                Some(version.clone()),
+                vec!["--version".into()],
+                SandboxFailureReason::LauncherSetupFailed,
+                EnforcementOutcome::Failed,
+            )),
+        });
+    }
     let seccomp = Some(
         build_network_seccomp().map_err(|_| SandboxError::SetupFailed {
             enforcement: Box::new(failed_record(
@@ -1094,11 +1120,58 @@ fn execute_linux(
 }
 
 #[cfg(target_os = "linux")]
+// This minimum is a measured fail-closed policy, not a generic Bubblewrap
+// feature check: 0.9.0-1ubuntu0.3 produced attacker bytes in the pinned-FD
+// race differential, while 0.13.1 was the tested positive launcher. Do not
+// lower this floor without rerunning the exact source-bound differential.
+const MINIMUM_SUPPORTED_BUBBLEWRAP_VERSION: (u32, u32, u32) = (0, 13, 1);
+
+#[cfg(target_os = "linux")]
+fn bubblewrap_version_meets_minimum(observed: &str) -> bool {
+    let mut fields = observed.split_whitespace();
+    if fields.next() != Some("bubblewrap") {
+        return false;
+    }
+    let Some(version) = fields.next() else {
+        return false;
+    };
+    if fields.next().is_some() {
+        return false;
+    }
+    let mut components = version.split('.');
+    let Some(major) = components.next().and_then(parse_version_component) else {
+        return false;
+    };
+    let Some(minor) = components.next().and_then(parse_version_component) else {
+        return false;
+    };
+    let Some(patch) = components.next().and_then(parse_version_component) else {
+        return false;
+    };
+    if components.next().is_some() {
+        return false;
+    }
+    (major, minor, patch) >= MINIMUM_SUPPORTED_BUBBLEWRAP_VERSION
+}
+
+#[cfg(target_os = "linux")]
+fn parse_version_component(component: &str) -> Option<u32> {
+    if component.is_empty() || !component.bytes().all(|byte| byte.is_ascii_digit()) {
+        return None;
+    }
+    component.parse().ok()
+}
+
+#[cfg(target_os = "linux")]
 fn probe_version(
     bash: &PinnedSource,
     launcher: &PinnedSource,
     deadline: Instant,
 ) -> Result<String, SandboxFailureReason> {
+    #[cfg(test)]
+    if let Some(version) = take_bwrap_version_test_override() {
+        return Ok(version);
+    }
     let child = spawn_bash_trampoline(bash, launcher, &[], &["--version".into()])
         .map_err(|_| SandboxFailureReason::DescriptorTransferFailed)?;
     let output = supervise(
@@ -1628,6 +1701,72 @@ mod tests {
         let nonce = "recursive-agent-setup-v2:nonce";
         let mut forged = format!("payload-first\n{nonce}\n").into_bytes();
         assert!(!consume_setup_proof(&mut forged, nonce));
+    }
+
+    #[test]
+    fn bubblewrap_version_gate_rejects_legacy_and_malformed_versions() {
+        for unsupported in [
+            "bubblewrap 0.9.0",
+            "bubblewrap 0.11.1",
+            "bubblewrap 0.12.0",
+            "bubblewrap 0.13.0",
+            "bubblewrap 0.13.1-ubuntu1",
+            "not-bubblewrap 0.13.1",
+            "bubblewrap unknown",
+        ] {
+            assert!(
+                !bubblewrap_version_meets_minimum(unsupported),
+                "unexpectedly admitted {unsupported:?}"
+            );
+        }
+        assert!(bubblewrap_version_meets_minimum("bubblewrap 0.13.1"));
+        assert!(bubblewrap_version_meets_minimum("bubblewrap 0.13.2"));
+        assert!(bubblewrap_version_meets_minimum("bubblewrap 1.0.0"));
+    }
+
+    #[test]
+    fn unsupported_bubblewrap_version_fails_before_payload_effect(
+    ) -> Result<(), Box<dyn std::error::Error>> {
+        let output = tempfile::tempdir()?;
+        let writable = tempfile::tempdir()?;
+        let marker = writable.path().join("unsupported-launcher-payload-ran");
+        install_bwrap_version_test_override("bubblewrap 0.9.0");
+        let run = recursive_agent_contracts::RunSpecV1 {
+            name: "unsupported-bubblewrap-version".into(),
+            steps: vec![recursive_agent_contracts::StepSpecV1 {
+                name: "must-not-run".into(),
+                call: recursive_agent_contracts::ToolCallSpecV1 {
+                    tool: "shell".into(),
+                    args: serde_json::json!({
+                        "command": "/usr/bin/bash",
+                        "args": ["-c", format!("printf ran > {}", marker.display())],
+                        "allowed_read_paths": [],
+                        "allowed_write_paths": [writable.path()],
+                        "allow_network": false,
+                        "timeout_ms": 2_000,
+                        "max_output_bytes": 1_024
+                    }),
+                    frozen_clock: None,
+                },
+            }],
+            frozen_clock: None,
+            policy_version: "m0-2".into(),
+        };
+        let summary = crate::run_spec_internal(
+            &run,
+            output.path(),
+            &crate::SystemClock,
+            &crate::NoopRunnerHook,
+        )?;
+        assert_ne!(
+            summary.terminal_state,
+            recursive_agent_contracts::RunTerminalStateV1::Succeeded
+        );
+        assert!(
+            !marker.exists(),
+            "payload ran despite unsupported Bubblewrap version"
+        );
+        Ok(())
     }
 
     #[test]
