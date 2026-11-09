@@ -280,36 +280,15 @@ fn load_production_verifier(
     // Audit L2: open without following symlinks, validate the same descriptor
     // with fstat, and read only from that descriptor. Separating a path-based
     // check from a path-based read would let the path be swapped in between.
-    let fd = rustix::fs::open(
+    // Same owner and mode rule as before (no group/other bits), 8 KiB bound, no link rule.
+    let bytes = load_bounded_enrollment(
         enrollment_path,
-        rustix::fs::OFlags::RDONLY
-            | rustix::fs::OFlags::NOFOLLOW
-            | rustix::fs::OFlags::CLOEXEC
-            | rustix::fs::OFlags::NONBLOCK,
-        rustix::fs::Mode::empty(),
+        EnrollmentPolicy {
+            max_bytes: MAX_PRODUCTION_VERIFIER_ENROLLMENT_BYTES,
+            exact_0600: false,
+            single_link: false,
+        },
     )?;
-    let file = fs::File::from(fd);
-    let metadata = file.metadata()?;
-    if !metadata.file_type().is_file()
-        || metadata.len() > MAX_PRODUCTION_VERIFIER_ENROLLMENT_BYTES
-    {
-        return Err("production verifier enrollment must be a bounded regular file".into());
-    }
-    #[cfg(unix)]
-    {
-        if metadata.uid() != rustix::process::getuid().as_raw() || metadata.mode() & 0o077 != 0 {
-            return Err(
-                "production verifier enrollment must be owned by the daemon user and mode 0600"
-                    .into(),
-            );
-        }
-    }
-    let mut bytes = Vec::new();
-    file.take(MAX_PRODUCTION_VERIFIER_ENROLLMENT_BYTES + 1)
-        .read_to_end(&mut bytes)?;
-    if bytes.len() as u64 > MAX_PRODUCTION_VERIFIER_ENROLLMENT_BYTES {
-        return Err("production verifier enrollment exceeds bound".into());
-    }
     let record: ProductionVerifierEnrollmentV1 = serde_json::from_slice(&bytes)?;
     if record.schema != PRODUCTION_VERIFIER_ENROLLMENT_SCHEMA {
         return Err("unsupported production verifier enrollment schema".into());
@@ -332,9 +311,23 @@ fn load_production_verifier(
     )
 }
 
-fn load_context_authority(
+/// Policy for one operator-owned enrollment file. Each consumer keeps its exact rule;
+/// the shared loader only centralizes the descriptor-pinned open, validate, and bounded read
+/// (audit L2 / Task 6.1), so the path cannot be swapped between a check and a read.
+#[derive(Clone, Copy)]
+struct EnrollmentPolicy {
+    max_bytes: u64,
+    /// Accept only exact 0600 (true) or any mode with no group/other bits (false).
+    exact_0600: bool,
+    /// Require a single hard link (true) or allow any link count (false).
+    single_link: bool,
+}
+
+/// Open `path` without following symlinks, validate the same descriptor, and read it bounded.
+fn load_bounded_enrollment(
     path: &std::path::Path,
-) -> Result<recursive_agent_policy::ContextAuthorityConfigurationV1, Box<dyn std::error::Error>> {
+    policy: EnrollmentPolicy,
+) -> Result<Vec<u8>, Box<dyn std::error::Error>> {
     let fd = rustix::fs::open(
         path,
         rustix::fs::OFlags::RDONLY
@@ -345,49 +338,52 @@ fn load_context_authority(
     )?;
     let file = fs::File::from(fd);
     let metadata = file.metadata()?;
-    const MAX_BYTES: u64 = 1024 * 1024;
-    if !metadata.is_file()
-        || metadata.len() > MAX_BYTES
-        || metadata.uid() != rustix::process::getuid().as_raw()
-        || metadata.mode() & 0o077 != 0
-    {
-        return Err(
-            "context authority enrollment must be a bounded, owned mode-0600 regular file".into(),
-        );
+    let mode_ok = if policy.exact_0600 {
+        metadata.mode() & 0o777 == 0o600
+    } else {
+        metadata.mode() & 0o077 == 0
+    };
+    let link_ok = !policy.single_link || metadata.nlink() == 1;
+    if !metadata.is_file() || metadata.len() > policy.max_bytes {
+        return Err("enrollment must be a bounded regular file".into());
+    }
+    if metadata.uid() != rustix::process::getuid().as_raw() || !mode_ok {
+        // Operator-actionable: name the exact mode the policy requires.
+        let required = if policy.exact_0600 {
+            "owned by the daemon user and mode 0600"
+        } else {
+            "owned by the daemon user and mode 0600 (no group or other bits)"
+        };
+        return Err(format!("enrollment must be {required}").into());
+    }
+    if !link_ok {
+        return Err("enrollment must be a single-link file".into());
     }
     let mut bytes = Vec::new();
-    file.take(MAX_BYTES + 1).read_to_end(&mut bytes)?;
-    if bytes.len() as u64 > MAX_BYTES {
-        return Err("context authority enrollment exceeds bound".into());
+    file.take(policy.max_bytes + 1).read_to_end(&mut bytes)?;
+    if bytes.len() as u64 > policy.max_bytes {
+        return Err("enrollment file exceeds its bound".into());
     }
+    Ok(bytes)
+}
+
+fn load_context_authority(
+    path: &std::path::Path,
+) -> Result<recursive_agent_policy::ContextAuthorityConfigurationV1, Box<dyn std::error::Error>> {
+    let bytes = load_bounded_enrollment(
+        path,
+        EnrollmentPolicy { max_bytes: 1024 * 1024, exact_0600: false, single_link: false },
+    )?;
     Ok(serde_json::from_slice(&bytes)?)
 }
 
 fn load_closed_commands(
     path: &std::path::Path,
 ) -> Result<Vec<OperationEnvelopeV1>, Box<dyn std::error::Error>> {
-    use std::os::unix::fs::OpenOptionsExt;
-    const MAX_BYTES: u64 = 128 * 1024;
-    let file = fs::OpenOptions::new()
-        .read(true)
-        .custom_flags(rustix::fs::OFlags::NOFOLLOW.bits() as i32)
-        .open(path)?;
-    let metadata = file.metadata()?;
-    if !metadata.is_file()
-        || metadata.uid() != rustix::process::getuid().as_raw()
-        || metadata.mode() & 0o777 != 0o600
-        || metadata.nlink() != 1
-        || metadata.len() > MAX_BYTES
-    {
-        return Err(
-            "closed commands must be a bounded, owned, single-link mode-0600 regular file".into(),
-        );
-    }
-    let mut bytes = Vec::new();
-    file.take(MAX_BYTES + 1).read_to_end(&mut bytes)?;
-    if bytes.len() as u64 > MAX_BYTES {
-        return Err("closed command configuration exceeds bound".into());
-    }
+    let bytes = load_bounded_enrollment(
+        path,
+        EnrollmentPolicy { max_bytes: 128 * 1024, exact_0600: true, single_link: true },
+    )?;
     Ok(serde_json::from_slice(&bytes)?)
 }
 
