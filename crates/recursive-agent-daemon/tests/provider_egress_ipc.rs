@@ -246,5 +246,259 @@ fn managed_v2_v3_envelope_crosses_real_native_ipc_without_v1_downgrade(
     assert_eq!(verification["verification"]["ok"], true);
     assert_eq!(verification["verification"]["current_strict_success"], true);
     assert_eq!(calls.load(Ordering::SeqCst), 1);
+
+    // A later consumer must present the exact sealed operation to the owner,
+    // not reopen the path returned by submit or verify.
+    stream.write_all(&request_frame(
+        "read-recorded-v3",
+        serde_json::json!({"kind": "read_recorded_provider_output_v3", "operation": operation}),
+    ))?;
+    let recorded = read_response(&mut stream)?;
+    assert_eq!(recorded["request_id"], "read-recorded-v3");
+    assert_eq!(recorded["output"]["model"], "fixture-model");
+    assert_eq!(recorded["output"]["text"], "native-ipc-v3-response");
+    assert!(recorded.get("run_dir").is_none());
+    assert!(recorded["output"].get("raw").is_none());
+    assert_eq!(calls.load(Ordering::SeqCst), 1);
+
+    let mut changed_operation = operation.clone();
+    changed_operation.provenance[0].source = "urn:test:different-context".into();
+    stream.write_all(&request_frame(
+        "read-other-v3",
+        serde_json::json!({"kind": "read_recorded_provider_output_v3", "operation": changed_operation}),
+    ))?;
+    let rejected = read_response(&mut stream)?;
+    assert_eq!(rejected["request_id"], "read-other-v3");
+    assert_eq!(rejected["error"]["code"], "runtime_error");
+    assert!(rejected.get("output").is_none());
+    assert_eq!(calls.load(Ordering::SeqCst), 1);
+    Ok(())
+}
+
+#[test]
+fn raw_native_ipc_rejects_hostile_bytes_before_runtime_and_preserves_v3_read(
+) -> Result<(), Box<dyn std::error::Error>> {
+    use base64::Engine as _;
+    let tmp = tempfile::tempdir()?;
+    let root = tmp.path().join("runs");
+    std::fs::create_dir(&root)?;
+    let calls = Arc::new(AtomicUsize::new(0));
+    let runtime = Arc::new(service(&root, Arc::clone(&calls))?);
+    let (listener, socket_path) = bind_private_socket(tmp.path(), "native-raw.sock")?;
+    std::thread::spawn(move || {
+        let _ = serve(listener, runtime, 4);
+    });
+    let mut stream = connect(&socket_path)?;
+    for (index, raw) in [
+        br#"{"schema":"recursive-agent.operation/v3","\u0073chema":"recursive-agent.operation/v1"}"#.as_slice(),
+        br#"{"schema":"recursive-agent.operation/v3","nested":{"x":1,"\u0078":2}}"#,
+        b"\xff",
+        b"{} {}",
+        br#"{"schema":"recursive-agent.operation/v9"}"#,
+    ].iter().enumerate() {
+        stream.write_all(&request_frame(&format!("denied-{index}"), serde_json::json!({
+            "kind": "submit_native_raw",
+            "operation_json_b64": base64::engine::general_purpose::STANDARD.encode(raw),
+        })))?;
+        let response = read_response(&mut stream)?;
+        assert_eq!(response["error"]["code"], "runtime_error");
+        assert!(response.get("run_id").is_none());
+        assert_eq!(calls.load(Ordering::SeqCst), 0);
+        assert_eq!(std::fs::read_dir(&root)?.count(), 0);
+    }
+    let raw = serde_json::to_vec(&operation()?)?;
+    let encoded = base64::engine::general_purpose::STANDARD.encode(&raw);
+    stream.write_all(&request_frame(
+        "raw-valid",
+        serde_json::json!({
+            "kind": "submit_native_raw", "operation_json_b64": encoded,
+        }),
+    ))?;
+    let submitted = read_response(&mut stream)?;
+    assert_eq!(submitted["operation_family"], "provider_egress_v3");
+    assert_eq!(calls.load(Ordering::SeqCst), 1);
+    stream.write_all(&request_frame(
+        "read-raw-valid",
+        serde_json::json!({
+            "kind": "read_recorded_provider_output_native_raw", "operation_json_b64": encoded,
+        }),
+    ))?;
+    let recorded = read_response(&mut stream)?;
+    assert_eq!(recorded["output"]["text"], "native-ipc-v3-response");
+    assert_eq!(calls.load(Ordering::SeqCst), 1);
+    Ok(())
+}
+
+/// Exercise the actual plugin registration closure over the real Rust native
+/// socket. This is an isolated candidate witness, NOT an installed Hermes
+/// plugin-loader or selected-session test.
+#[test]
+fn plugin_registration_to_real_daemon_keeps_raw_rejection_before_runtime(
+) -> Result<(), Box<dyn std::error::Error>> {
+    use std::process::Command;
+
+    let tmp = tempfile::tempdir()?;
+    let root = tmp.path().join("runs");
+    std::fs::create_dir(&root)?;
+    let calls = Arc::new(AtomicUsize::new(0));
+    let runtime = Arc::new(service(&root, Arc::clone(&calls))?);
+    let (listener, socket_path) = bind_private_socket(tmp.path(), "plugin-join.sock")?;
+    std::thread::spawn(move || {
+        let _ = serve(listener, runtime, 4);
+    });
+
+    // Use the same register(ctx) closure Hermes calls, without installing it.
+    // The Python client must carry these bytes through framed native IPC; only
+    // the contracts owner inside the daemon is permitted to interpret them.
+    let script = r#"
+import importlib.util, json, pathlib, sys
+plugin_dir = pathlib.Path(sys.argv[1])
+spec = importlib.util.spec_from_file_location('hermes_native', plugin_dir / '__init__.py', submodule_search_locations=[str(plugin_dir)])
+plugin = importlib.util.module_from_spec(spec)
+sys.modules[spec.name] = plugin
+spec.loader.exec_module(plugin)
+class Context:
+    def __init__(self, socket_path):
+        self.socket_path = socket_path
+        self.tools = []
+    def get_config(self, key, default=None):
+        assert key == 'socket_path'
+        return self.socket_path
+    def register_tool(self, **kwargs):
+        self.tools.append(kwargs)
+ctx = Context(sys.argv[2])
+plugin.register(ctx)
+assert len(ctx.tools) == 1
+assert ctx.tools[0]['name'] == 'recursive_agent_execute'
+assert ctx.tools[0]['check_fn']() is True
+print(ctx.tools[0]['handler']({'envelope_path': sys.argv[3]}))
+"#;
+    let plugin_dir =
+        std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../integrations/hermes-native");
+    let run_plugin = |input: &std::path::Path| -> Result<String, Box<dyn std::error::Error>> {
+        let output = Command::new("python3")
+            .arg("-B")
+            .arg("-c")
+            .arg(script)
+            .arg(&plugin_dir)
+            .arg(&socket_path)
+            .arg(input)
+            .output()?;
+        assert!(
+            output.status.success(),
+            "plugin subprocess failed: {}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+        Ok(String::from_utf8(output.stdout)?.trim().to_owned())
+    };
+
+    for (index, (raw, expected_reason)) in [
+        (
+            br#"{"schema":"recursive-agent.operation/v3","\u0073chema":"recursive-agent.operation/v1"}"#.as_slice(),
+            "native operation contains a duplicate object key",
+        ),
+        (
+            br#"{"schema":"recursive-agent.operation/v3","nested":{"x":1,"\u0078":2}}"#,
+            "native operation contains a duplicate object key",
+        ),
+        (b"\xff", "native operation JSON is malformed"),
+        (b"{} {}", "native operation JSON is malformed"),
+        (
+            br#"{"schema":"recursive-agent.operation/v9"}"#,
+            "unsupported native operation schema",
+        ),
+    ]
+    .iter()
+    .enumerate()
+    {
+        let input = tmp.path().join(format!("hostile-{index}.json"));
+        std::fs::write(&input, raw)?;
+        let result = run_plugin(&input)?;
+        assert!(
+            result.contains("native operation denied:") && result.contains(expected_reason),
+            "hostile input did not reach expected canonical denial: {result}"
+        );
+        assert_eq!(calls.load(Ordering::SeqCst), 0);
+        assert_eq!(std::fs::read_dir(&root)?.count(), 0);
+    }
+
+    let valid = tmp.path().join("valid-v3.json");
+    std::fs::write(&valid, serde_json::to_vec(&operation()?)?)?;
+    let result: serde_json::Value = serde_json::from_str(&run_plugin(&valid)?)?;
+    assert_eq!(result["schema"], "recursive-agent.hermes-result/v1");
+    assert_eq!(result["verified"], true);
+    assert_eq!(result["recorded_output"]["model"], "fixture-model");
+    assert_eq!(result["recorded_output"]["text"], "native-ipc-v3-response");
+    assert_eq!(
+        result["recorded_output"].as_object().map(|map| map.len()),
+        Some(2)
+    );
+    assert_eq!(calls.load(Ordering::SeqCst), 1);
+    assert_eq!(std::fs::read_dir(&root)?.count(), 1);
+    Ok(())
+}
+
+/// Explicit cross-repository candidate test, not part of the default Rust suite.
+/// The Ares source root must be supplied by the controller; the Python fixture
+/// refuses to import an installed or unrelated run_agent module.
+#[test]
+#[ignore = "requires ARES_CANDIDATE_AGENT_ROOT and a separate Ares source worktree"]
+fn disposable_full_agent_v3_turn_uses_real_native_ipc_and_fixture_provider(
+) -> Result<(), Box<dyn std::error::Error>> {
+    use std::process::Command;
+
+    let agent_root = std::path::PathBuf::from(std::env::var("ARES_CANDIDATE_AGENT_ROOT")?);
+    if !agent_root.join("run_agent.py").is_file() {
+        return Err("candidate Ares source has no run_agent.py".into());
+    }
+    let tmp = tempfile::tempdir()?;
+    let root = tmp.path().join("runs");
+    std::fs::create_dir(&root)?;
+    let calls = Arc::new(AtomicUsize::new(0));
+    let runtime = Arc::new(service(&root, Arc::clone(&calls))?);
+    let (listener, socket_path) = bind_private_socket(tmp.path(), "full-v3-turn.sock")?;
+    let server_runtime = Arc::clone(&runtime);
+    std::thread::spawn(move || {
+        let _ = serve(listener, server_runtime, 8);
+    });
+    let valid = tmp.path().join("valid-v3.json");
+    std::fs::write(&valid, serde_json::to_vec(&operation()?)?)?;
+    let plugin_root =
+        std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../integrations/hermes-native");
+    let fixture = plugin_root.join("tests/disposable_v3_agent_turn.py");
+    let output = Command::new("python3")
+        .arg("-B")
+        .arg(&fixture)
+        .arg(&socket_path)
+        .arg(&valid)
+        .arg(&root)
+        .arg(&plugin_root)
+        .arg(&agent_root)
+        .env("PYTHONPATH", &agent_root)
+        .output()?;
+    assert!(
+        output.status.success(),
+        "disposable Ares full V3 turn failed: stdout={} stderr={}",
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let stdout = String::from_utf8(output.stdout)?;
+    let summary_line = stdout
+        .lines()
+        .find_map(|line| line.strip_prefix("AC08_V3_RESULT="))
+        .ok_or_else(|| format!("fixture summary missing from stdout: {stdout}"))?;
+    let summary: serde_json::Value = serde_json::from_str(summary_line)?;
+    assert_eq!(summary["result"], "PASS");
+    assert_eq!(summary["legacy_top_level_gate"], false);
+    assert_eq!(summary["namespaced_gate"], true);
+    assert_eq!(summary["legacy_run_entries"], 0);
+    assert_eq!(summary["default_socket_exists"], false);
+    assert_eq!(summary["invalid_run_entries"], 0);
+    assert_eq!(summary["valid_run_entries"], 1);
+    assert_eq!(summary["external_provider"], false);
+    assert_eq!(summary["installed_route"], false);
+    assert_eq!(calls.load(Ordering::SeqCst), 1);
+    assert_eq!(std::fs::read_dir(&root)?.count(), 1);
+    println!("AC08_V3_VERIFIED_SUMMARY={summary}");
     Ok(())
 }

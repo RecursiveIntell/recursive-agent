@@ -159,6 +159,12 @@ pub fn parse_provider_egress_operation_v3_bytes(
         crate::StrictJsonError::DuplicateKey => ProviderEgressOperationIngressError::DuplicateKey,
         crate::StrictJsonError::Malformed => ProviderEgressOperationIngressError::Malformed,
     })?;
+    parse_provider_egress_operation_v3_value(parsed)
+}
+
+pub(crate) fn parse_provider_egress_operation_v3_value(
+    parsed: serde_json::Value,
+) -> Result<ProviderEgressOperationEnvelopeV3, ProviderEgressOperationIngressError> {
     let canonical = crate::jcs_canonical(&parsed)
         .map_err(|_| ProviderEgressOperationIngressError::CanonicalBoundary)?;
     if canonical.len() > MAX_RUN_SPEC_MATERIAL_BYTES {

@@ -23,9 +23,10 @@ pub const IPC_PROTOCOL_VERSION_V1: u16 = 1;
 /// Bytes in the fixed-width big-endian frame-length prefix.
 pub const FRAME_PREFIX_BYTES: usize = 4;
 
-/// Maximum admitted payload bytes: the 1 MiB native operation ingress ceiling
-/// plus 64 KiB for the closed IPC envelope and response/event metadata.
-pub const MAX_FRAME_PAYLOAD_BYTES: usize = (1024 * 1024) + (64 * 1024);
+/// Maximum admitted payload bytes: base64 of the 1 MiB original operation
+/// plus 64 KiB for the closed IPC envelope. Admission precedes allocation.
+pub const MAX_FRAME_PAYLOAD_BYTES: usize =
+    (recursive_agent_contracts::MAX_RUN_SPEC_INPUT_BYTES as usize).div_ceil(3) * 4 + (64 * 1024);
 
 /// Hard per-connection budget of admitted request identifiers. Exceeding this
 /// budget is a typed denial; it bounds per-client state before any dispatch.
@@ -167,6 +168,47 @@ pub enum IpcRequestV1 {
     PermitIssueProduction {
         witness: Box<ProductionApprovalWitnessV1>,
     },
+    /// Separate scoped protocol; never downgraded to legacy permit calls.
+    ScopedPermitIssue {
+        witness: Box<ProductionApprovalWitnessV1>,
+        context: Box<recursive_agent_policy::ContextCallBindingV1>,
+    },
+    ScopedPermitConsume {
+        permit: Box<recursive_agent_policy::ScopedExecutionPermitV1>,
+        call: ToolCallSpecV1,
+    },
+    ScopedPermitReadback {
+        permit: Box<recursive_agent_policy::ScopedExecutionPermitV1>,
+    },
+    ScopedPermitOutcomeRecord {
+        permit: Box<recursive_agent_policy::ScopedExecutionPermitV1>,
+        preflight_receipt_digest: recursive_agent_contracts::ContentDigest,
+        reported: ReportedEffectOutcomeV1,
+    },
+    ContextAuthorityTransition {
+        transition: Box<recursive_agent_policy::ContextTransitionRequestV1>,
+    },
+    ContextAuthorityReadback {
+        incarnation: recursive_agent_contracts::ContentDigest,
+        scope: recursive_agent_policy::ContextScopeV1,
+    },
+    ContextTransitionReadback {
+        transition: Box<recursive_agent_policy::ContextTransitionRequestV1>,
+    },
+    /// Pure canonicalization for an Ares-owned random store nonce. This does
+    /// not enroll a scope or authenticate an Ares store association.
+    ContextStoreIdentity { nonce: [u8; 32] },
+    /// Pure typed signing material. Only the enrolled controller can sign it;
+    /// the separate production effect witness is still required at issuance.
+    ContextCallPrepare {
+        authority: Box<recursive_agent_policy::ContextAuthorityBindingV1>,
+        witness: Box<ProductionApprovalWitnessV1>,
+    },
+    ContextTransitionPrepare {
+        authority: Box<recursive_agent_policy::ContextAuthorityBindingV1>,
+        transition_ref: String,
+        action: recursive_agent_policy::ContextTransitionActionV1,
+    },
     /// Record the bounded executor-reported outcome for one consumed preflight.
     PermitOutcomeRecord {
         /// Permit consumed by the paired preflight RPC.
@@ -177,12 +219,30 @@ pub enum IpcRequestV1 {
         /// local error, or an ambiguous outcome.
         reported: ReportedEffectOutcomeV1,
     },
+    /// Read-only exact-binding reconciliation. A consumed receipt is historical
+    /// evidence, never permission to execute after a lost consumption ACK.
+    PermitReadback {
+        permit_id: CurrentPermitId,
+        binding: Box<PermitBindingV1>,
+        preflight_receipt_digest: Option<recursive_agent_contracts::ContentDigest>,
+    },
     /// Submit one distinct closed V3 provider-egress operation. This variant is
     /// never decoded as or downgraded to the V1 operation family.
     SubmitProviderEgressV3 {
         /// Complete closed provider-egress operation envelope.
         operation: Box<ProviderEgressOperationEnvelopeV3>,
     },
+    /// Read a recorded provider response under fresh current authorization.
+    /// A path handle or run id alone is never sufficient read authority.
+    ReadRecordedProviderOutputV3 {
+        /// Exact sealed operation that created the recorded response.
+        operation: Box<ProviderEgressOperationEnvelopeV3>,
+    },
+    /// Opaque original operation bytes, encoded only for the JSON IPC carrier.
+    /// The contracts owner selects V1 or V3 after strict admission.
+    SubmitNativeRaw { operation_json_b64: String },
+    /// Recorded V3 read using the same contracts-owned raw family admission.
+    ReadRecordedProviderOutputNativeRaw { operation_json_b64: String },
 }
 
 /// Typed failures from exact frame and request-envelope decoding.

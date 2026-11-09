@@ -1289,6 +1289,7 @@ dependencies = [
  "base64",
  "chrono",
  "clap",
+ "ed25519-dalek",
  "llm-tool-runtime",
  "nix",
  "recursive-agent-contracts",

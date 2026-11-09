@@ -1,11 +1,14 @@
-# AGENTS.md — Recursive Agent Platform (M0)
+# AGENTS.md — Recursive Agent Platform
 
-## Mission
+## Mission and phase boundary
 
-Build the smallest runnable vertical slice of a provenance-native agent
-platform. M0 produces a tamper-evident receipt chain for a single
-deterministic run, verifies it offline, and replays it from disk without any
-provider or network call.
+M0 established a tamper-evident receipt chain for a deterministic run that
+verifies and replays offline without a provider or network call. Later phases
+add receipt-bearing, explicitly selected provider paths. M0's prohibition is
+not a blanket ban on those later paths; neither source availability nor a
+fixture grants production provider authority. The installed/default route
+must remain disabled until its own policy, transport, permit, and release
+gates are met. Recorded replay never contacts a provider.
 
 ## Doctrine (carried from RecursiveIntell)
 
@@ -21,10 +24,12 @@ provider or network call.
    rejection, not a panic.
 6. **Provider-free in M0.** No Ollama, no OpenAI-compatible call, no
    network. The product survives its own restart and verifies offline.
-   **Phase 2 deliberately lifts this** for the `llm` tool only: provider
-   calls are receipt-bearing and typed (see `recursive-agent-provider`),
-   and the receipt chain still verifies offline. All other tools remain
-   provider-free.
+   **Historical Phase 2 deliberately lifted this for the `llm` tool only**:
+   provider calls were receipt-bearing and typed (see
+   `recursive-agent-provider`); other Phase 2 tools remained provider-free.
+   Later V3 candidate paths require their own explicit selection, permits,
+   transport and release qualification. Do not read the Phase 2 scope as
+   either a prohibition on later code or proof of current installed authority.
 7. **Recorded replay only.** Do not promise "deterministic replay" of any
    LLM. Recorded replay is the only replay contract M0 offers. A
    provider-backed `llm` step records its response as a content-addressed
@@ -66,13 +71,16 @@ provider or network call.
 
 - `unwrap` / `expect` / `panic!` in lib code (enforced by `clippy`).
 - "ok" with `unwrap_or_default` in material paths.
-- Provider calls anywhere.
+- Provider or network calls in M0/replay, or in a later phase without an
+  explicitly selected, admitted, receipt-bearing provider dependency and its
+  own permit/egress/credential gates. Source-only and loopback fixtures do not
+  authorize the installed route.
 - Mocks that hide the real chain digest.
 - Disabling a check to pass CI.
 - Random UUIDs in receipt identity (must be family-qualified).
 - Two distinct digests that should agree.
 
-## Finish-line focus (M0)
+## Historical M0 finish-line (not later-phase release qualification)
 
 - `ra run`, `ra verify`, `ra replay`, `ra doctor` from a clean tree.
 - `cargo test --workspace` green.

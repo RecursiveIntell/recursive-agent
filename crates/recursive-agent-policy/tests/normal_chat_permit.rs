@@ -538,7 +538,7 @@ fn run_fixture_with_retention(
         .consume(&permit.permit_id, &effect_binding, dispatch_time)
         .is_err());
     assert!(store
-        .consume_with_preflight(&permit.permit_id, &effect_binding, dispatch_time)
+        .consume_with_preflight(&permit.permit_id, &effect_binding, || dispatch_time)
         .is_err());
     assert!(store
         .consume_with_interruption(&permit.permit_id, &effect_binding, dispatch_time, None)

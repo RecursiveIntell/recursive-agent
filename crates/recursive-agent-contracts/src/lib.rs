@@ -7,6 +7,7 @@
 
 mod egress;
 mod event;
+mod native_operation;
 mod normal_chat_operation;
 mod operation;
 mod provider_egress_operation;
@@ -19,6 +20,9 @@ pub use egress::{
 pub use event::{
     project_runtime_events, validate_runtime_event_sequence, RuntimeEventKindV1,
     RuntimeEventSchemaV1, RuntimeEventV1,
+};
+pub use native_operation::{
+    parse_native_operation_bytes, NativeOperation, NativeOperationIngressError,
 };
 pub use normal_chat_operation::{
     derive_normal_chat_attempt_id, parse_normal_chat_attempt_v1_bytes,
