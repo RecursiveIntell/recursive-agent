@@ -182,9 +182,18 @@ fn provider() -> Result<ProviderSpecV1, ProviderError> {
 }
 
 fn operation() -> Result<ProviderEgressOperationEnvelopeV3, Box<dyn std::error::Error>> {
+    operation_with_prompt("exact sealed prompt")
+}
+
+// Canonical builder. Every digest that depends on the sealed call (request,
+// binding, declared-effects action digest) is derived here from the same prompt,
+// so a different prompt yields a valid, distinct operation.
+fn operation_with_prompt(
+    prompt: &str,
+) -> Result<ProviderEgressOperationEnvelopeV3, Box<dyn std::error::Error>> {
     let request = CompletionRequestV1 {
         provider: provider()?,
-        prompt: "exact sealed prompt".into(),
+        prompt: prompt.into(),
         max_tokens: Some(8),
     };
     let request_value = serde_json::to_value(&request)?;
@@ -1361,5 +1370,77 @@ fn completed_durable_start_clears_inflight_marker() -> Result<(), Box<dyn std::e
         service.status(handle.run_id())?,
         recursive_agent_runner::RuntimeStatusV1::Terminal { .. }
     ));
+    Ok(())
+}
+
+// Task 3.1 contended-capacity gate (RED). With physical capacity 1, a durable
+// start holds the only slot. A second, distinct durable start must be refused
+// with a typed capacity error and must not invoke the provider.
+fn capacity_one_service_with_backend<B: CompletionBackend + Send + Sync + 'static>(
+    output_root: &std::path::Path,
+    backend: B,
+    clock: Arc<dyn Clock>,
+) -> Result<RuntimeService, Box<dyn std::error::Error>> {
+    let verifier: Arc<dyn ProviderEgressAdmissionVerifier> = Arc::new(AllowCurrentEgress);
+    let runtime = tool_runtime_with_sealed_completion(
+        ToolRegistry::new(),
+        backend,
+        clock.clone(),
+        verifier.clone(),
+    );
+    let deps = RuntimeDependencies::builder()
+        .policy(RuntimePolicyDependencyV1::Native)
+        .sandbox(RuntimeSandboxDependencyV1::Native)
+        .tool_runtime(Arc::new(runtime))
+        .provider(RuntimeProviderDependencyV1::Configured(provider()?))
+        .ledger(RuntimeLedgerDependencyV1::Native)
+        .clock(clock)
+        .store(RuntimeStoreDependencyV1::Native)
+        .output_root(output_root)
+        .provider_egress_verifier(verifier)
+        .build()?;
+    Ok(RuntimeService::new_with_managed_admission(
+        deps,
+        recursive_agent_runner::ManagedAdmissionDomain::from_global(1),
+    ))
+}
+
+#[test]
+fn second_durable_start_is_refused_when_physical_capacity_is_full(
+) -> Result<(), Box<dyn std::error::Error>> {
+    let output = tempfile::tempdir()?;
+    let (started_tx, started_rx) = mpsc::channel();
+    let (release_tx, release_rx) = mpsc::channel();
+    let clock: Arc<dyn Clock> = Arc::new(MutableClock::new(1_788_220_800));
+    let service = capacity_one_service_with_backend(
+        output.path(),
+        BlockingBackend {
+            started: started_tx,
+            release: Mutex::new(release_rx),
+        },
+        clock,
+    )?;
+    let first_op = operation()?;
+    let _first = service.start_provider_egress_v3(&first_op)?;
+    started_rx.recv_timeout(std::time::Duration::from_secs(2))?;
+
+    // A distinct operation (different run identity) must not get the held slot.
+    let second_op = operation_with_prompt("a different sealed prompt")?;
+    let refused = service.start_provider_egress_v3(&second_op);
+    assert!(
+        matches!(
+            refused,
+            Err(RuntimeServiceError::ManagedAdmission(
+                recursive_agent_runner::ManagedAdmissionError::QueueTimeout
+            ))
+        ),
+        "second distinct start must be refused by capacity, got {refused:?}"
+    );
+    assert!(
+        started_rx.try_recv().is_err(),
+        "refused start must not invoke provider"
+    );
+
+    release_tx.send(())?;
     Ok(())
 }
