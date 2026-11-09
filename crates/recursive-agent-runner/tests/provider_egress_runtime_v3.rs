@@ -1235,3 +1235,41 @@ fn durable_start_returns_handle_before_provider_completes() -> Result<(), Box<dy
     release_tx.send(())?;
     Ok(())
 }
+
+// Task 3.1 gate: a duplicate durable start while the first run is in flight
+// must not invoke the provider a second time. It must either return the same
+// operation identity or fail closed; it must never run twice.
+#[test]
+fn duplicate_durable_start_while_in_flight_does_not_reinvoke_provider(
+) -> Result<(), Box<dyn std::error::Error>> {
+    let output = tempfile::tempdir()?;
+    let (started_tx, started_rx) = mpsc::channel();
+    let (release_tx, release_rx) = mpsc::channel();
+    let clock: Arc<dyn Clock> = Arc::new(MutableClock::new(1_788_220_800));
+    let service = candidate_service_with_backend(
+        output.path(),
+        BlockingBackend {
+            started: started_tx,
+            release: Mutex::new(release_rx),
+        },
+        clock,
+        true,
+    )?;
+    let operation = operation()?;
+    let first = service.start_provider_egress_v3(&operation)?;
+    started_rx.recv_timeout(std::time::Duration::from_secs(2))?;
+
+    let second = service.start_provider_egress_v3(&operation);
+    match &second {
+        Ok(handle) => assert_eq!(handle.operation_id(), first.operation_id()),
+        Err(e) => panic!("second start rejected: {e:?}"),
+    }
+    // Only one backend start may have been observed.
+    assert!(
+        started_rx.try_recv().is_err(),
+        "provider was invoked a second time"
+    );
+
+    release_tx.send(())?;
+    Ok(())
+}

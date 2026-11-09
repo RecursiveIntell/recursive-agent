@@ -248,6 +248,7 @@ pub enum RuntimeServiceError {
 /// Result of the shared V3 admission preamble.
 enum ProviderEgressAdmissionV3 {
     Replayed(RuntimeHandleV1),
+    InFlight(RuntimeHandleV1),
     Admitted(Box<ProviderEgressAdmittedV3>),
 }
 
@@ -1026,7 +1027,8 @@ impl RuntimeService {
         operation: &ProviderEgressOperationEnvelopeV3,
     ) -> Result<RuntimeHandleV1, RuntimeServiceError> {
         match self.admit_provider_egress_v3(operation)? {
-            ProviderEgressAdmissionV3::Replayed(handle) => Ok(handle),
+            ProviderEgressAdmissionV3::Replayed(handle)
+            | ProviderEgressAdmissionV3::InFlight(handle) => Ok(handle),
             ProviderEgressAdmissionV3::Admitted(admitted) => {
                 let ProviderEgressAdmittedV3 {
                     operation_id,
@@ -1071,7 +1073,8 @@ impl RuntimeService {
         operation: &ProviderEgressOperationEnvelopeV3,
     ) -> Result<RuntimeHandleV1, RuntimeServiceError> {
         match self.admit_provider_egress_v3(operation)? {
-            ProviderEgressAdmissionV3::Replayed(handle) => Ok(handle),
+            ProviderEgressAdmissionV3::Replayed(handle)
+            | ProviderEgressAdmissionV3::InFlight(handle) => Ok(handle),
             ProviderEgressAdmissionV3::Admitted(admitted) => {
                 let ProviderEgressAdmittedV3 {
                     operation_id,
@@ -1131,6 +1134,19 @@ impl RuntimeService {
             .output_root()
             .join(content_digest(&operation_id)?.to_string());
         if run_dir.is_dir() {
+            // An in-flight run has an incomplete chain and must not be strictly
+            // verified (Task 3.1). Return its identity without replaying it.
+            if self
+                .admission
+                .contains_active(&operation_id.to_string())
+                .map_err(map_admission_error)?
+            {
+                return Ok(ProviderEgressAdmissionV3::InFlight(RuntimeHandleV1 {
+                    operation_id: operation_id.clone(),
+                    run_id: operation_id,
+                    run_dir,
+                }));
+            }
             return Ok(ProviderEgressAdmissionV3::Replayed(
                 self.replay_provider_egress_v3(operation)?,
             ));
