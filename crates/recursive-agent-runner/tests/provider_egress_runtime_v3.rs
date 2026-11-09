@@ -1444,3 +1444,92 @@ fn second_durable_start_is_refused_when_physical_capacity_is_full(
     release_tx.send(())?;
     Ok(())
 }
+
+// Task 3.1 caller-disconnect gate. A durable start must outlive the caller that
+// submitted it. Dropping the submitting handle while the provider is still in
+// flight must neither cancel the run nor cause a second provider invocation, and
+// the run must still finish exactly once and clear its marker.
+#[test]
+fn caller_disconnect_does_not_cancel_or_reinvoke_durable_start(
+) -> Result<(), Box<dyn std::error::Error>> {
+    let output = tempfile::tempdir()?;
+    let (started_tx, started_rx) = mpsc::channel();
+    let (release_tx, release_rx) = mpsc::channel();
+    let clock: Arc<dyn Clock> = Arc::new(MutableClock::new(1_788_220_800));
+    let calls = Arc::new(AtomicUsize::new(0));
+    let backend = CountingBlockingBackend {
+        started: started_tx,
+        release: Mutex::new(release_rx),
+        calls: calls.clone(),
+    };
+    let run_id;
+    {
+        let service = candidate_service_with_backend(output.path(), backend, clock, true)?;
+        let operation = operation()?;
+        let handle = service.start_provider_egress_v3(&operation)?;
+        run_id = handle.run_id().clone();
+        started_rx.recv_timeout(std::time::Duration::from_secs(2))?;
+        // Caller disconnects: the service and its handle are dropped here while
+        // the provider is still blocked.
+        drop(handle);
+        drop(service);
+    }
+    release_tx.send(())?;
+
+    // The worker must finish on its own, exactly once.
+    let marker_dir = output
+        .path()
+        .parent()
+        .unwrap_or(output.path())
+        .join(format!(
+            "{}.provider-v3-inflight",
+            output
+                .path()
+                .file_name()
+                .unwrap_or_default()
+                .to_string_lossy()
+        ));
+    let run_marker =
+        marker_dir.join(recursive_agent_contracts::content_digest(&run_id)?.to_string());
+    let existed_while_blocked = run_marker.exists();
+    assert!(
+        existed_while_blocked,
+        "marker must exist while the provider is blocked"
+    );
+    for _ in 0..500 {
+        if !run_marker.exists() {
+            break;
+        }
+        std::thread::sleep(std::time::Duration::from_millis(10));
+    }
+    assert!(
+        !run_marker.exists(),
+        "run did not finish after caller disconnect"
+    );
+    assert_eq!(
+        calls.load(Ordering::Relaxed),
+        1,
+        "provider must be invoked exactly once"
+    );
+    Ok(())
+}
+
+struct CountingBlockingBackend {
+    started: mpsc::Sender<()>,
+    release: Mutex<mpsc::Receiver<()>>,
+    calls: Arc<AtomicUsize>,
+}
+
+impl CompletionBackend for CountingBlockingBackend {
+    fn complete(
+        &self,
+        request: &CompletionRequestV1,
+    ) -> Result<CompletionResponseV1, ProviderError> {
+        self.calls.fetch_add(1, Ordering::Relaxed);
+        let _ = self.started.send(());
+        if let Ok(release) = self.release.lock() {
+            let _ = release.recv();
+        }
+        FixtureBackend(Arc::new(AtomicUsize::new(0))).complete(request)
+    }
+}
