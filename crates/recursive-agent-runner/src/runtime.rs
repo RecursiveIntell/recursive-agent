@@ -117,6 +117,9 @@ pub struct RuntimeLiveParentV2<'a> {
 pub enum RuntimeStatusV1 {
     /// The operation is currently owned by this service instance.
     Active,
+    /// A durable start was interrupted by a process exit. It is never resumed
+    /// or strictly verified, and no provider call is repeated (Task 3.1).
+    InterruptedNonResumable,
     /// Strict verification found authoritative terminal evidence.
     Terminal {
         /// Exact terminal state from the verified receipt chain.
@@ -1089,6 +1092,14 @@ impl RuntimeService {
                         .output_root()
                         .join(content_digest(&operation_id)?.to_string()),
                 };
+                // Durable marker before the worker exists: a crash after this
+                // point leaves the marker, and the next status reports the run
+                // as interrupted_non_resumable instead of resuming it.
+                let marker = self.inflight_marker_path(&operation_id);
+                std::fs::create_dir_all(self.inflight_marker_dir())
+                    .and_then(|()| std::fs::write(&marker, b"in-flight\n"))
+                    .map_err(|_| RuntimeServiceError::ProviderEgressDisabled)?;
+                let worker_marker = marker.clone();
                 let worker_operation = operation.clone();
                 let worker_tools = self.dependencies.tool_runtime_shared();
                 let worker_clock = self.dependencies.clock_shared();
@@ -1113,6 +1124,9 @@ impl RuntimeService {
                             );
                         }
                         let _ = guard.mark_provider_complete();
+                        // Remove the marker only after the worker has finished;
+                        // terminal evidence is then the authority.
+                        let _ = std::fs::remove_file(&worker_marker);
                     })
                     .map_err(|_| RuntimeServiceError::ProviderEgressDisabled)?;
                 Ok(handle)
@@ -1574,9 +1588,38 @@ impl RuntimeService {
     }
 
     /// Return active state or strict ledger-derived terminal state.
+    /// Durable in-flight marker location. It lives in a sibling of the output
+    /// root, never inside the content-addressed run directory: the strict
+    /// verifier rejects extra entries there, so a marker inside it would make a
+    /// terminal run fail verification.
+    fn inflight_marker_dir(&self) -> std::path::PathBuf {
+        // Keyed to this runtime's own output root, so independent runtimes that
+        // share a parent directory never see each other's in-flight markers.
+        let root = self.dependencies.output_root();
+        let name = root
+            .file_name()
+            .map(|n| format!("{}.provider-v3-inflight", n.to_string_lossy()))
+            .unwrap_or_else(|| "provider-v3-inflight".into());
+        root.parent()
+            .unwrap_or_else(|| std::path::Path::new("."))
+            .join(name)
+    }
+
+    /// Marker filename is the content digest of the run ID. Run IDs contain
+    /// `/` and `:`, so using them directly would create nested paths.
+    fn inflight_marker_path(&self, run_id: &CurrentRunId) -> std::path::PathBuf {
+        let name = content_digest(run_id)
+            .map(|digest| digest.to_string())
+            .unwrap_or_else(|_| "invalid".into());
+        self.inflight_marker_dir().join(name)
+    }
+
     pub fn status(&self, run_id: &CurrentRunId) -> Result<RuntimeStatusV1, RuntimeServiceError> {
         if self.is_active(run_id)? {
             return Ok(RuntimeStatusV1::Active);
+        }
+        if self.inflight_marker_path(run_id).is_file() {
+            return Ok(RuntimeStatusV1::InterruptedNonResumable);
         }
         let verification = self.verify(run_id)?;
         Ok(RuntimeStatusV1::Terminal {
@@ -1597,6 +1640,11 @@ impl RuntimeService {
         match self.status(run_id)? {
             RuntimeStatusV1::Terminal { state } => {
                 Ok(RuntimeCancelResultV1::AlreadyTerminal { state })
+            }
+            RuntimeStatusV1::InterruptedNonResumable => {
+                // No live owner exists to honor a cancel, and no terminal receipt
+                // was written. Do not fabricate a cancellation receipt (Task 3.1).
+                Err(RuntimeServiceError::ActiveCancellationUnavailable)
             }
             RuntimeStatusV1::Active => {
                 if let Some(family) = self

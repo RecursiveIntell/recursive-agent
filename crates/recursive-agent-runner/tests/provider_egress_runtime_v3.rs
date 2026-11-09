@@ -1259,11 +1259,10 @@ fn duplicate_durable_start_while_in_flight_does_not_reinvoke_provider(
     let first = service.start_provider_egress_v3(&operation)?;
     started_rx.recv_timeout(std::time::Duration::from_secs(2))?;
 
-    let second = service.start_provider_egress_v3(&operation);
-    match &second {
-        Ok(handle) => assert_eq!(handle.operation_id(), first.operation_id()),
-        Err(e) => panic!("second start rejected: {e:?}"),
-    }
+    // The in-flight duplicate must succeed with the same identity: it is not a
+    // new run and must not re-invoke the provider.
+    let second = service.start_provider_egress_v3(&operation)?;
+    assert_eq!(second.operation_id(), first.operation_id());
     // Only one backend start may have been observed.
     assert!(
         started_rx.try_recv().is_err(),
@@ -1271,5 +1270,96 @@ fn duplicate_durable_start_while_in_flight_does_not_reinvoke_provider(
     );
 
     release_tx.send(())?;
+    Ok(())
+}
+
+// Task 3.1 restart gate (RED). A durable start that is interrupted by a crash
+// must, on the next service over the same output root, be reported as
+// interrupted_non_resumable: never resumed, never verified, never sealed.
+// No such outcome or marker exists yet, so this cannot pass until it does.
+#[test]
+fn interrupted_durable_start_is_non_resumable_after_restart(
+) -> Result<(), Box<dyn std::error::Error>> {
+    let output = tempfile::tempdir()?;
+    let (started_tx, started_rx) = mpsc::channel();
+    let (_release_tx, release_rx) = mpsc::channel::<()>();
+    let clock: Arc<dyn Clock> = Arc::new(MutableClock::new(1_788_220_800));
+    let operation = operation()?;
+    let handle = {
+        let service = candidate_service_with_backend(
+            output.path(),
+            BlockingBackend {
+                started: started_tx,
+                release: Mutex::new(release_rx),
+            },
+            clock.clone(),
+            true,
+        )?;
+        let handle = service.start_provider_egress_v3(&operation)?;
+        started_rx.recv_timeout(std::time::Duration::from_secs(2))?;
+        // Simulate a crash: the service is dropped while the run is in flight.
+        handle
+    };
+
+    let restarted = candidate_service_with_backend(
+        output.path(),
+        FixtureBackend(Arc::new(AtomicUsize::new(0))),
+        clock,
+        true,
+    )?;
+    let status = restarted.status(handle.run_id())?;
+    assert_eq!(
+        status,
+        recursive_agent_runner::RuntimeStatusV1::InterruptedNonResumable
+    );
+    assert!(
+        restarted.verify(handle.run_id()).is_err(),
+        "interrupted run must not verify"
+    );
+    Ok(())
+}
+
+// Clean finish must clear the in-flight marker, so a completed run is never
+// reported as interrupted after restart.
+#[test]
+fn completed_durable_start_clears_inflight_marker() -> Result<(), Box<dyn std::error::Error>> {
+    let output = tempfile::tempdir()?;
+    let clock: Arc<dyn Clock> = Arc::new(MutableClock::new(1_788_220_800));
+    let calls = Arc::new(AtomicUsize::new(0));
+    let service =
+        candidate_service_with_backend(output.path(), FixtureBackend(calls.clone()), clock, true)?;
+    let operation = operation()?;
+    let handle = service.start_provider_egress_v3(&operation)?;
+    // Wait for the worker to finish and clear its marker.
+    // The marker directory is keyed to this output root's name (see
+    // inflight_marker_dir). Wait for this run's own marker to disappear.
+    let root_name = output
+        .path()
+        .file_name()
+        .unwrap_or_default()
+        .to_string_lossy()
+        .into_owned();
+    let marker_dir = output
+        .path()
+        .parent()
+        .unwrap_or(output.path())
+        .join(format!("{root_name}.provider-v3-inflight"));
+    let run_marker =
+        marker_dir.join(recursive_agent_contracts::content_digest(handle.run_id())?.to_string());
+    for _ in 0..500 {
+        if !run_marker.exists() {
+            break;
+        }
+        std::thread::sleep(std::time::Duration::from_millis(10));
+    }
+    assert!(
+        !run_marker.exists(),
+        "completed run left its in-flight marker"
+    );
+    assert_eq!(calls.load(Ordering::Relaxed), 1);
+    assert!(matches!(
+        service.status(handle.run_id())?,
+        recursive_agent_runner::RuntimeStatusV1::Terminal { .. }
+    ));
     Ok(())
 }
