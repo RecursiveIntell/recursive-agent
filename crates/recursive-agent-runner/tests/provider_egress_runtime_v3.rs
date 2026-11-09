@@ -1197,3 +1197,41 @@ fn v3_candidate_enforces_declared_output_and_artifact_budget_before_success_rece
         .any(|receipt| receipt.kind == ReceiptKindV1::StepCompleted));
     Ok(())
 }
+
+// Audit M1 / Task 3.1 RED: a durable-start submission must return a handle
+// before the provider finishes, while the run is visibly active. Today only the
+// blocking submit exists, so this test cannot compile until start_provider_egress_v3
+// is added to RuntimeService.
+#[test]
+fn durable_start_returns_handle_before_provider_completes(
+) -> Result<(), Box<dyn std::error::Error>> {
+    let output = tempfile::tempdir()?;
+    let (started_tx, started_rx) = mpsc::channel();
+    let (release_tx, release_rx) = mpsc::channel();
+    let clock: Arc<dyn Clock> = Arc::new(MutableClock::new(1_788_220_800));
+    let service = candidate_service_with_backend(
+        output.path(),
+        BlockingBackend {
+            started: started_tx,
+            release: Mutex::new(release_rx),
+        },
+        clock,
+        true,
+    )?;
+    let operation = operation()?;
+    let operation_id = derive_provider_egress_operation_id(&operation)?.to_string();
+
+    // Returns while the provider is still blocked on release_rx.
+    let handle = service.start_provider_egress_v3(&operation)?;
+    assert_eq!(handle.operation_id.to_string(), operation_id);
+    started_rx.recv_timeout(std::time::Duration::from_secs(2))?;
+    let active = service.managed_admission_snapshot()?;
+    assert_eq!(active.active, vec![operation_id]);
+    assert_eq!(active.provider_requests_in_flight, 1);
+
+    // Status before terminal evidence must not be reported as verified.
+    assert!(service.verify(&handle.run_id).is_err());
+
+    release_tx.send(())?;
+    Ok(())
+}
