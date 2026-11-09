@@ -119,3 +119,25 @@ fn daemon_requires_explicit_write_root_with_production_verifier() -> TestResult 
     ));
     Ok(())
 }
+
+/// Audit L2 guard: a symlink at the enrollment path must never be followed.
+/// The loader must open with O_NOFOLLOW and validate the same descriptor it
+/// reads, so the check and the read cannot be separated by a swapped link.
+#[test]
+fn daemon_refuses_symlinked_production_verifier_enrollment() -> TestResult {
+    let temp = tempfile::tempdir()?;
+    let real = write_enrollment(
+        temp.path(),
+        serde_json::json!({
+            "schema": "recursive-agent.desktop-production-public-key/v1",
+            "key_id": "desktop-key",
+            "public_key": base64::engine::general_purpose::STANDARD.encode([7_u8; 32]),
+        }),
+        0o600,
+    )?;
+    let link = temp.path().join("verifier-link.json");
+    std::os::unix::fs::symlink(&real, &link)?;
+    let output = serve_with_enrollment(&link)?;
+    assert!(!output.status.success(), "symlinked enrollment must be refused");
+    Ok(())
+}

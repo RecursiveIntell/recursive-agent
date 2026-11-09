@@ -277,8 +277,21 @@ fn load_production_verifier(
     enrollment_path: &std::path::Path,
     target_root: &std::path::Path,
 ) -> Result<ProductionApprovalVerifierV1, Box<dyn std::error::Error>> {
-    let metadata = fs::symlink_metadata(enrollment_path)?;
-    if !metadata.file_type().is_file() || metadata.len() > MAX_PRODUCTION_VERIFIER_ENROLLMENT_BYTES
+    // Audit L2: open without following symlinks, validate the same descriptor
+    // with fstat, and read only from that descriptor. Separating a path-based
+    // check from a path-based read would let the path be swapped in between.
+    let fd = rustix::fs::open(
+        enrollment_path,
+        rustix::fs::OFlags::RDONLY
+            | rustix::fs::OFlags::NOFOLLOW
+            | rustix::fs::OFlags::CLOEXEC
+            | rustix::fs::OFlags::NONBLOCK,
+        rustix::fs::Mode::empty(),
+    )?;
+    let file = fs::File::from(fd);
+    let metadata = file.metadata()?;
+    if !metadata.file_type().is_file()
+        || metadata.len() > MAX_PRODUCTION_VERIFIER_ENROLLMENT_BYTES
     {
         return Err("production verifier enrollment must be a bounded regular file".into());
     }
@@ -291,7 +304,12 @@ fn load_production_verifier(
             );
         }
     }
-    let bytes = fs::read(enrollment_path)?;
+    let mut bytes = Vec::new();
+    file.take(MAX_PRODUCTION_VERIFIER_ENROLLMENT_BYTES + 1)
+        .read_to_end(&mut bytes)?;
+    if bytes.len() as u64 > MAX_PRODUCTION_VERIFIER_ENROLLMENT_BYTES {
+        return Err("production verifier enrollment exceeds bound".into());
+    }
     let record: ProductionVerifierEnrollmentV1 = serde_json::from_slice(&bytes)?;
     if record.schema != PRODUCTION_VERIFIER_ENROLLMENT_SCHEMA {
         return Err("unsupported production verifier enrollment schema".into());
