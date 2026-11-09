@@ -93,3 +93,21 @@ fn peer_principal_is_reported_from_kernel() {
     assert!(principal.uid > 0, "uid must be positive");
     drop(listener);
 }
+
+/// Audit L1 regression: the daemon's default socket location must be one its
+/// own `validate_runtime_root` accepts. `/tmp` is group/other-writable and is
+/// rejected, so a daemon started with the old default could never bind.
+#[test]
+fn default_socket_location_is_bindable_under_daemon_policy() {
+    let default = recursive_agent_daemon::DEFAULT_SOCKET_PATH;
+    let path = std::path::Path::new(default);
+    let root = path.parent().expect("default socket has a parent directory");
+    std::fs::create_dir_all(root).unwrap();
+    let name = path.file_name().unwrap().to_str().unwrap();
+    let result = bind_private_socket(root, name);
+    let _ = std::fs::remove_file(path);
+    assert!(
+        result.is_ok(),
+        "default socket {default} must bind under daemon policy: {result:?}"
+    );
+}

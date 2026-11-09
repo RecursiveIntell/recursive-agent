@@ -16,7 +16,9 @@ pub use protocol::{
     MAX_REQUEST_IDS_PER_CONNECTION,
 };
 pub use server::{serve, ServerError};
-pub use socket::{bind_private_socket, peer_principal, PeerPrincipal, SocketError};
+pub use socket::{
+    bind_private_socket, peer_principal, PeerPrincipal, SocketError, DEFAULT_SOCKET_PATH,
+};
 
 use recursive_agent_contracts::{parse_run_spec_bytes, RunSpecIngressError, RunSpecV1};
 use serde::{Deserialize, Serialize};

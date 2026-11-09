@@ -51,7 +51,7 @@ enum Cmd {
         #[arg(long)]
         root: PathBuf,
         /// Private socket path (created 0600 under an owned runtime dir).
-        #[arg(long, default_value = "/tmp/ra.sock")]
+        #[arg(long, default_value = recursive_agent_daemon::DEFAULT_SOCKET_PATH)]
         socket: PathBuf,
         /// Optional canonical source root admitted to the deterministic
         /// `repo_audit` tool. No source path is accepted from an operation.
@@ -243,6 +243,17 @@ impl Tool for RepoAuditDescriptorOwner {
             )
         })?;
         Ok(ToolResult::json(output))
+    }
+}
+
+/// Expand a leading `~/` using `$HOME`; any other path is returned unchanged.
+pub fn expand_home(path: &std::path::Path) -> PathBuf {
+    match path.strip_prefix("~") {
+        Ok(rest) => match std::env::var_os("HOME") {
+            Some(home) => PathBuf::from(home).join(rest),
+            None => path.to_path_buf(),
+        },
+        Err(_) => path.to_path_buf(),
     }
 }
 
@@ -489,6 +500,9 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                 runtime = runtime.with_context_authority(&load_context_authority(&path)?)?;
             }
             // The socket parent is the directory containing the socket path.
+            // Expand the documented `~/` default here; a literal `~` would
+            // otherwise become a real directory name.
+            let socket = expand_home(&socket);
             let parent = socket
                 .parent()
                 .map(|p| p.to_path_buf())
