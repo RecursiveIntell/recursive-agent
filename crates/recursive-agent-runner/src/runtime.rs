@@ -24,6 +24,7 @@ use recursive_agent_policy::{
     OperatorApprovalWitnessV1, PermitApprovalRequestV1, PermitBudgetV1, PermitEvidenceV1,
     PermitOutcomeReceiptV1, PermitPreflightReceiptV1, PolicyError, ProductionApprovalVerifierV1,
     ProductionApprovalWitnessV1, ProviderEgressAdmissionRequestV1, ReportedEffectOutcomeV1,
+    ValidatedProviderEgressAdmissionV1,
 };
 use recursive_agent_provider::{CompletionBackend, CompletionRequestV1, ProviderSpecV1};
 use serde::Deserialize;
@@ -242,6 +243,19 @@ pub enum RuntimeServiceError {
     /// The live parent is already finalized and cannot receive another call.
     #[error("live parent lifecycle has already been finalized")]
     LiveParentFinalized,
+}
+
+/// Result of the shared V3 admission preamble.
+enum ProviderEgressAdmissionV3 {
+    Replayed(RuntimeHandleV1),
+    Admitted(Box<ProviderEgressAdmittedV3>),
+}
+
+/// Authorized, capacity-reserved V3 provider run awaiting execution.
+struct ProviderEgressAdmittedV3 {
+    operation_id: CurrentRunId,
+    admission: ValidatedProviderEgressAdmissionV1,
+    guard: ManagedReservation,
 }
 
 struct AdmittedToolExecutor<'a> {
@@ -1011,6 +1025,104 @@ impl RuntimeService {
         &self,
         operation: &ProviderEgressOperationEnvelopeV3,
     ) -> Result<RuntimeHandleV1, RuntimeServiceError> {
+        match self.admit_provider_egress_v3(operation)? {
+            ProviderEgressAdmissionV3::Replayed(handle) => Ok(handle),
+            ProviderEgressAdmissionV3::Admitted(admitted) => {
+                let ProviderEgressAdmittedV3 {
+                    operation_id,
+                    admission,
+                    guard,
+                } = *admitted;
+                guard
+                    .mark_provider_in_flight()
+                    .map_err(map_admission_error)?;
+                let tool_executor = AdmittedToolExecutor {
+                    runtime: self.dependencies.tool_runtime(),
+                };
+                let execution = run_provider_egress_operation_v3_with_run_id(
+                    operation,
+                    self.dependencies.output_root(),
+                    self.dependencies.clock(),
+                    operation_id.clone(),
+                    &tool_executor,
+                    &admission,
+                );
+                guard
+                    .mark_provider_complete()
+                    .map_err(map_admission_error)?;
+                let summary = execution?;
+                Ok(RuntimeHandleV1 {
+                    operation_id,
+                    run_id: summary.run_id,
+                    run_dir: summary.run_dir,
+                })
+            }
+        }
+    }
+
+    /// Durable-start V3 submission (audit M1, Task 3.1). Validation, policy
+    /// authorization, and managed capacity reservation happen on the caller
+    /// thread before this returns. The provider run then executes on one
+    /// worker that owns the reservation, so the handle is returned while the
+    /// provider may still be in flight. Status before terminal evidence is
+    /// reported as active or unverified, never verified.
+    pub fn start_provider_egress_v3(
+        &self,
+        operation: &ProviderEgressOperationEnvelopeV3,
+    ) -> Result<RuntimeHandleV1, RuntimeServiceError> {
+        match self.admit_provider_egress_v3(operation)? {
+            ProviderEgressAdmissionV3::Replayed(handle) => Ok(handle),
+            ProviderEgressAdmissionV3::Admitted(admitted) => {
+                let ProviderEgressAdmittedV3 {
+                    operation_id,
+                    admission,
+                    guard,
+                } = *admitted;
+                let handle = RuntimeHandleV1 {
+                    operation_id: operation_id.clone(),
+                    run_id: operation_id.clone(),
+                    run_dir: self
+                        .dependencies
+                        .output_root()
+                        .join(content_digest(&operation_id)?.to_string()),
+                };
+                let worker_operation = operation.clone();
+                let worker_tools = self.dependencies.tool_runtime_shared();
+                let worker_clock = self.dependencies.clock_shared();
+                let worker_output = self.dependencies.output_root().to_path_buf();
+                std::thread::Builder::new()
+                    .name("provider-egress-v3".into())
+                    .spawn(move || {
+                        // The worker owns the reservation; dropping it on any
+                        // path releases managed capacity exactly once.
+                        let outcome = guard.mark_provider_in_flight().map_err(map_admission_error);
+                        if outcome.is_ok() {
+                            let tool_executor = AdmittedToolExecutor {
+                                runtime: &worker_tools,
+                            };
+                            let _ = run_provider_egress_operation_v3_with_run_id(
+                                &worker_operation,
+                                &worker_output,
+                                worker_clock.as_ref(),
+                                operation_id,
+                                &tool_executor,
+                                &admission,
+                            );
+                        }
+                        let _ = guard.mark_provider_complete();
+                    })
+                    .map_err(|_| RuntimeServiceError::ProviderEgressDisabled)?;
+                Ok(handle)
+            }
+        }
+    }
+
+    /// Shared, side-effect-ordered preamble for both submission modes: replay
+    /// an already-committed run, or validate, authorize, and reserve capacity.
+    fn admit_provider_egress_v3(
+        &self,
+        operation: &ProviderEgressOperationEnvelopeV3,
+    ) -> Result<ProviderEgressAdmissionV3, RuntimeServiceError> {
         self.require_open_execution()?;
         operation.validate_structure()?;
         let operation_id = derive_provider_egress_operation_id(operation)?;
@@ -1019,7 +1131,9 @@ impl RuntimeService {
             .output_root()
             .join(content_digest(&operation_id)?.to_string());
         if run_dir.is_dir() {
-            return self.replay_provider_egress_v3(operation);
+            return Ok(ProviderEgressAdmissionV3::Replayed(
+                self.replay_provider_egress_v3(operation)?,
+            ));
         }
         if self
             .dependencies
@@ -1084,29 +1198,13 @@ impl RuntimeService {
                 u64::from(operation.sealed_completion.arguments.binding.output_reserve),
             ),
         )?;
-        guard
-            .mark_provider_in_flight()
-            .map_err(map_admission_error)?;
-        let tool_executor = AdmittedToolExecutor {
-            runtime: self.dependencies.tool_runtime(),
-        };
-        let execution = run_provider_egress_operation_v3_with_run_id(
-            operation,
-            self.dependencies.output_root(),
-            self.dependencies.clock(),
-            operation_id.clone(),
-            &tool_executor,
-            &admission,
-        );
-        guard
-            .mark_provider_complete()
-            .map_err(map_admission_error)?;
-        let summary = execution?;
-        Ok(RuntimeHandleV1 {
-            operation_id,
-            run_id: summary.run_id,
-            run_dir: summary.run_dir,
-        })
+        Ok(ProviderEgressAdmissionV3::Admitted(Box::new(
+            ProviderEgressAdmittedV3 {
+                operation_id,
+                admission,
+                guard,
+            },
+        )))
     }
 
     /// Read strictly verified V3 evidence only after current policy authorizes
