@@ -502,3 +502,35 @@ fn disposable_full_agent_v3_turn_uses_real_native_ipc_and_fixture_provider(
     println!("AC08_V3_VERIFIED_SUMMARY={summary}");
     Ok(())
 }
+
+// Task 3.2 prerequisite (RED): the durable-start operation must be reachable over
+// the real native socket as an additive IPC kind. The blocking submit kind stays
+// unchanged for old clients. Fails until StartProviderEgressV3 is wired through
+// protocol.rs and server.rs.
+#[test]
+fn durable_start_crosses_real_native_ipc_as_additive_kind() -> Result<(), Box<dyn std::error::Error>>
+{
+    let tmp = tempfile::tempdir()?;
+    let root = tmp.path().join("runs");
+    std::fs::create_dir(&root)?;
+    let calls = Arc::new(AtomicUsize::new(0));
+    let runtime = Arc::new(service(&root, Arc::clone(&calls))?);
+    let (listener, socket_path) = bind_private_socket(tmp.path(), "provider-v3-start.sock")?;
+    let server_runtime = Arc::clone(&runtime);
+    std::thread::spawn(move || {
+        let _ = serve(listener, server_runtime, 4);
+    });
+
+    let operation = operation()?;
+    let mut stream = connect(&socket_path)?;
+    stream.write_all(&request_frame(
+        "start-v3",
+        serde_json::json!({"kind": "start_provider_egress_v3", "operation": operation}),
+    ))?;
+    let started = read_response(&mut stream)?;
+    assert_eq!(started["request_id"], "start-v3");
+    assert_eq!(started["started"], true);
+    assert_eq!(started["operation_family"], "provider_egress_v3");
+    assert!(started["run_id"].as_str().is_some());
+    Ok(())
+}
