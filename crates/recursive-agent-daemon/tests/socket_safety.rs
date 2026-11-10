@@ -101,7 +101,9 @@ fn peer_principal_is_reported_from_kernel() {
 fn default_socket_location_is_bindable_under_daemon_policy() {
     let default = recursive_agent_daemon::DEFAULT_SOCKET_PATH;
     let path = std::path::Path::new(default);
-    let root = path.parent().expect("default socket has a parent directory");
+    let root = path
+        .parent()
+        .expect("default socket has a parent directory");
     std::fs::create_dir_all(root).unwrap();
     let name = path.file_name().unwrap().to_str().unwrap();
     let result = bind_private_socket(root, name);

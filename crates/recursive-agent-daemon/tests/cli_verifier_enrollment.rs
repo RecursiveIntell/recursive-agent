@@ -138,13 +138,18 @@ fn daemon_refuses_symlinked_production_verifier_enrollment() -> TestResult {
     let link = temp.path().join("verifier-link.json");
     std::os::unix::fs::symlink(&real, &link)?;
     let output = serve_with_enrollment(&link)?;
-    assert!(!output.status.success(), "symlinked enrollment must be refused");
+    assert!(
+        !output.status.success(),
+        "symlinked enrollment must be refused"
+    );
     // The refusal must be the link itself, not an unrelated startup failure. With NOFOLLOW the
     // open fails with ELOOP ('Too many levels of symbolic links' / 'symbolic link'), so the
     // assertion pins that cause and cannot pass on an incidental error.
     let stderr = String::from_utf8_lossy(&output.stderr).to_lowercase();
     assert!(
-        stderr.contains("symbolic link") || stderr.contains("too many levels") || stderr.contains("eloop"),
+        stderr.contains("symbolic link")
+            || stderr.contains("too many levels")
+            || stderr.contains("eloop"),
         "symlink refusal must come from the no-follow open, got stderr: {stderr}"
     );
     Ok(())
@@ -168,6 +173,9 @@ fn daemon_refuses_world_readable_closed_commands_file() -> TestResult {
         .arg("--closed-commands-file")
         .arg(&closed)
         .output()?;
-    assert!(!output.status.success(), "a world-readable closed-commands file must be refused");
+    assert!(
+        !output.status.success(),
+        "a world-readable closed-commands file must be refused"
+    );
     Ok(())
 }

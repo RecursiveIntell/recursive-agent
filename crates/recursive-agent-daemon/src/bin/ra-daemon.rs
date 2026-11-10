@@ -372,7 +372,11 @@ fn load_context_authority(
 ) -> Result<recursive_agent_policy::ContextAuthorityConfigurationV1, Box<dyn std::error::Error>> {
     let bytes = load_bounded_enrollment(
         path,
-        EnrollmentPolicy { max_bytes: 1024 * 1024, exact_0600: false, single_link: false },
+        EnrollmentPolicy {
+            max_bytes: 1024 * 1024,
+            exact_0600: false,
+            single_link: false,
+        },
     )?;
     Ok(serde_json::from_slice(&bytes)?)
 }
@@ -382,7 +386,11 @@ fn load_closed_commands(
 ) -> Result<Vec<OperationEnvelopeV1>, Box<dyn std::error::Error>> {
     let bytes = load_bounded_enrollment(
         path,
-        EnrollmentPolicy { max_bytes: 128 * 1024, exact_0600: true, single_link: true },
+        EnrollmentPolicy {
+            max_bytes: 128 * 1024,
+            exact_0600: true,
+            single_link: true,
+        },
     )?;
     Ok(serde_json::from_slice(&bytes)?)
 }

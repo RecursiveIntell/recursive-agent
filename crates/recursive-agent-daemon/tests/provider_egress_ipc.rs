@@ -362,8 +362,11 @@ class Context:
         self.socket_path = socket_path
         self.tools = []
     def get_config(self, key, default=None):
-        assert key == 'socket_path'
-        return self.socket_path
+        if key == 'socket_path':
+            return self.socket_path
+        if key == 'durable_start':
+            return False
+        return default
     def register_tool(self, **kwargs):
         self.tools.append(kwargs)
 ctx = Context(sys.argv[2])
