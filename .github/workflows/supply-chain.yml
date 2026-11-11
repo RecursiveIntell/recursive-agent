@@ -44,7 +44,7 @@ jobs:
           repository: RecursiveIntell/Libraries
           ref: 0b099ec416de60f6adafb182f1d1e83795d05c56
           fetch-depth: 1
-          path: Libraries
+          path: ../Libraries
 
       - name: Install pinned cargo-deny
         # Version pinned to match the header contract in deny.toml; the
