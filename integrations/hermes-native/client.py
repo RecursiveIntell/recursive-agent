@@ -268,6 +268,112 @@ def cancel_run(socket_path: str, run_id: str) -> dict:
         raise DaemonClientError(f"cannot reach daemon: {error}") from error
 
 
+def start_provider_egress_v3_durable(socket_path: str, envelope: dict) -> dict:
+    """Durably start one V3 operation; returns once the daemon accepts it.
+
+    Uses the additive ``start_provider_egress_v3`` kind (Task 3.1). The provider
+    may still be in flight when this returns. A transport failure here is
+    ordinary unavailability because no durable start is known to have happened.
+    """
+    try:
+        conn = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
+        try:
+            conn.settimeout(5.0)
+            conn.connect(socket_path)
+            return _request(
+                conn,
+                "plugin-start-provider-egress-v3-1",
+                {"kind": "start_provider_egress_v3", "operation": envelope},
+            )
+        finally:
+            conn.close()
+    except (OSError, ConnectionError) as error:
+        raise DaemonClientError(f"cannot reach daemon: {error}") from error
+
+
+def start_and_follow(
+    socket_path: str,
+    envelope: dict,
+    *,
+    poll_interval: float = 0.5,
+    deadline: float = 600.0,
+) -> dict:
+    """Durably start a V3 run, then poll status with bounded backoff to terminal.
+
+    Contract (Task 3.2):
+    - One durable start; it is never resubmitted.
+    - Poll ``status`` with bounded exponential backoff until terminal, or until
+      the monotonic ``deadline`` is reached.
+    - Only after terminal status is strict verification requested, and only
+      then is the recorded output consumed.
+    - A transport loss AFTER the durable start returns an explicit ``pending``
+      result that carries the run id and ``resumable=True``. It is not an error
+      and must not trigger a resubmission.
+    - A transport loss BEFORE the durable start raises ``DaemonClientError``
+      (ordinary unavailability).
+    """
+    import time
+
+    started = start_provider_egress_v3_durable(socket_path, envelope)
+    run_id = str(started.get("run_id", ""))
+    run_dir = started.get("run_dir")
+    if not run_id or not isinstance(run_dir, str) or not run_dir:
+        raise DaemonClientError("durable start did not return run id and run directory")
+
+    end = time.monotonic() + deadline
+    delay = poll_interval
+    while True:
+        try:
+            status = status_of_run(socket_path, run_id)
+        except DaemonClientError:
+            # The start is durable; the transport loss is ambiguous, not a failure.
+            return {
+                "state": "pending",
+                "run_id": run_id,
+                "run_dir": run_dir,
+                "resumable": True,
+                "reason": "transport_lost_after_durable_start",
+            }
+        status_payload = status.get("status")
+        if not isinstance(status_payload, dict):
+            raise DaemonClientError("status response missing status object")
+        state = status_payload.get("state", "unknown")
+        if state == "terminal":
+            break
+        if state not in ("active", "interrupted_non_resumable"):
+            raise DaemonClientError(f"unexpected status state: {state}")
+        if state == "interrupted_non_resumable":
+            raise DaemonRunFailure(
+                code="interrupted_non_resumable",
+                message="durable run was interrupted by a process exit and is not resumable",
+                run_id=run_id,
+                run_dir=run_dir,
+                status=status,
+                verification={},
+            )
+        if time.monotonic() >= end:
+            return {
+                "state": "pending",
+                "run_id": run_id,
+                "run_dir": run_dir,
+                "resumable": True,
+                "reason": "deadline_reached_while_active",
+            }
+        time.sleep(delay)
+        delay = min(delay * 2, 5.0)
+
+    # Terminal: only now ask the daemon for strict verification and output.
+    # The status just read is reused, not re-requested.
+    return _finish_terminal(
+        socket_path,
+        run_id=run_id,
+        run_dir=run_dir,
+        status=status,
+        submitted={"run_id": run_id, "run_dir": run_dir, "operation_family": "provider_egress_v3"},
+        envelope=envelope,
+    )
+
+
 def submit_and_status(socket_path: str, envelope: dict) -> dict:
     """Submit, observe terminal status, then require daemon strict verification.
 
@@ -304,6 +410,25 @@ def _follow_submission(socket_path: str, submitted: dict, *, envelope=None, raw=
     state = status_payload.get("state", "unknown")
     if state != "terminal":
         raise DaemonClientError(f"daemon did not report terminal state: {state}")
+    return _finish_terminal(
+        socket_path,
+        run_id=run_id,
+        run_dir=run_dir,
+        status=status,
+        submitted=submitted,
+        envelope=envelope,
+        raw=raw,
+    )
+
+
+def _finish_terminal(socket_path, *, run_id, run_dir, status, submitted, envelope=None, raw=None):
+    """Strict verification and recorded-output read for an already-terminal run.
+
+    Split out so a caller that has already read terminal status (the durable
+    poll loop) does not read status a second time.
+    """
+    status_payload = status.get("status")
+    state = status_payload.get("state", "unknown") if isinstance(status_payload, dict) else "unknown"
     verification_response = verify_run(socket_path, run_id)
     if verification_response.get("run_id") != run_id:
         raise DaemonClientError("verification response run id mismatch")

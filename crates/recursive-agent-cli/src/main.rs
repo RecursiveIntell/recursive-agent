@@ -605,7 +605,10 @@ fn run_embedded(parsed: &recursive_agent_contracts::RunSpecV1, out_root: &Path) 
                         chain_head: verification.final_head.clone(),
                         terminal_state: match status {
                             recursive_agent_runner::RuntimeStatusV1::Terminal { state } => state,
-                            recursive_agent_runner::RuntimeStatusV1::Active => {
+                            recursive_agent_runner::RuntimeStatusV1::Active
+                            | recursive_agent_runner::RuntimeStatusV1::InterruptedNonResumable => {
+                                // Neither active nor interrupted is a terminal outcome;
+                                // both fail closed rather than report success.
                                 eprintln!("error: run did not reach terminal state");
                                 std::process::exit(1);
                             }

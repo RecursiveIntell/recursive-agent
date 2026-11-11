@@ -17,6 +17,7 @@ try:
         DaemonRunFailure,
         MAX_OPERATION_INPUT_BYTES,
         check_socket_available,
+        start_and_follow,
         submit_and_status_raw,
     )
     from .schema import RECURSIVE_AGENT_EXECUTE_SCHEMA
@@ -32,6 +33,7 @@ except ImportError:
         DaemonRunFailure,
         MAX_OPERATION_INPUT_BYTES,
         check_socket_available,
+        start_and_follow,
         submit_and_status_raw,
     )
     from schema import RECURSIVE_AGENT_EXECUTE_SCHEMA
@@ -53,6 +55,19 @@ DEFAULT_SOCKET_PATH = str(
     / "run"
     / "ra.sock"
 )
+
+
+def _durable_start_enabled(ctx) -> bool:
+    """Opt-in durable-start path (Task 3.2 migration gate).
+
+    Default OFF. The blocking submit remains the behavior until an operator sets
+    ``durable_start`` to true in this plugin's namespaced config. Only the literal
+    boolean True enables it; any other value keeps the default. Read through
+    ``ctx.get_config`` like ``socket_path``, not an environment variable.
+    """
+    if ctx is None:
+        return False
+    return ctx.get_config("durable_start") is True
 
 
 def _resolve_socket(ctx) -> str:
@@ -103,7 +118,10 @@ def _handler(ctx, args, **kwargs) -> str:
     else:
         return "recursive_agent_execute: unavailable: envelope_path required"
     try:
-        result = submit_and_status_raw(socket_path, raw)
+        if _durable_start_enabled(ctx):
+            result = start_and_follow(socket_path, json.loads(raw.decode("utf-8")))
+        else:
+            result = submit_and_status_raw(socket_path, raw)
     except DaemonRunFailure as error:
         return json.dumps(
             {

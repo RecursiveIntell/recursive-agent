@@ -1539,6 +1539,11 @@ mod tests {
         let ca = jcs_canonical(&a)?;
         let cb = jcs_canonical(&b)?;
         assert_eq!(ca, cb);
+
+        // Cross-language production permits must match the current Rust
+        // Canonicalizer's BTreeMap/UTF-8 string ordering for these keys.
+        let unicode = serde_json::json!({"\u{E000}": 1, "\u{10000}": 2});
+        assert_eq!(jcs_canonical(&unicode)?, "{\"\":1,\"𐀀\":2}".as_bytes());
         Ok(())
     }
 

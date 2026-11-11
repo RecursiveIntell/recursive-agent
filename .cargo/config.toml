@@ -7,5 +7,11 @@ jobs = 1
 # Use scripts/guarded-cargo.sh explicitly for guarded builds or Clippy. Cargo
 # aliases cannot safely invoke repository-local shell scripts on stable Cargo.
 
-[target.x86_64-unknown-linux-gnu]
-runner = ["scripts/guarded-test-runner.sh"]
+# Audit 6.1: the guarded runner is OPT-IN, not the repo default. Forcing it here made every
+# `cargo test` fail closed on a host with no systemd user bus (measured: rc=1, "Failed to
+# connect to user scope bus"). Workstations that want the memory ceiling run the script
+# directly: scripts/guarded-cargo.sh <cargo args>. (No `cargo guarded` binary exists; cargo
+# cannot alias a repo-local script.) CI already overrides the runner to /usr/bin/env.
+#
+# [target.x86_64-unknown-linux-gnu]
+# runner = ["scripts/guarded-test-runner.sh"]

@@ -232,6 +232,13 @@ pub enum IpcRequestV1 {
         /// Complete closed provider-egress operation envelope.
         operation: Box<ProviderEgressOperationEnvelopeV3>,
     },
+    /// Durable, non-blocking start of one closed V3 provider-egress operation
+    /// (Task 3.1). Returns once the run is durably accepted; the provider may
+    /// still be in flight. Additive: the blocking submit above is unchanged.
+    StartProviderEgressV3 {
+        /// Complete closed provider-egress operation envelope.
+        operation: Box<ProviderEgressOperationEnvelopeV3>,
+    },
     /// Read a recorded provider response under fresh current authorization.
     /// A path handle or run id alone is never sufficient read authority.
     ReadRecordedProviderOutputV3 {
