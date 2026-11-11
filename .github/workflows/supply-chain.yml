@@ -47,7 +47,7 @@ jobs:
         # Policy: deny.toml [advisories] ignore = []. Unmaintained warnings
         # are reported but do not fail the gate; any exception must carry an
         # owner, reachability proof, review date, and expiry (audit Task 5.2).
-        run: cargo deny check advisories --locked
+        run: cargo deny --locked check advisories
 
       - name: Negative witness — vulnerable fixture must fail
         # Proves the gate fails closed: a lockfile carrying a known-vulnerable,
