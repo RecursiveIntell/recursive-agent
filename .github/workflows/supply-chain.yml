@@ -1,0 +1,80 @@
+name: Supply-chain advisories
+
+on:
+  pull_request:
+    paths:
+      - "Cargo.lock"
+      - "Cargo.toml"
+      - "deny.toml"
+      - ".github/workflows/supply-chain.yml"
+  push:
+    branches: [main]
+    paths:
+      - "Cargo.lock"
+      - "Cargo.toml"
+      - "deny.toml"
+  schedule:
+    # Weekly, Monday 06:20 UTC — catches advisories published after merge.
+    - cron: "20 6 * * 1"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  advisories:
+    name: cargo-deny advisories
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    steps:
+      - name: Checkout source
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          ref: ${{ github.sha }}
+          fetch-depth: 1
+
+      - name: Install pinned cargo-deny
+        # Version pinned to match the header contract in deny.toml; the
+        # action itself is pinned to an immutable commit SHA.
+        uses: taiki-e/install-action@8d9c4b8d69a5e3cfbbbe5680926a2c1c1fb25e1d
+        with:
+          tool: cargo-deny@0.19.8
+
+      - name: Advisory gate (fails on vulnerabilities, unsound, yanked)
+        # Policy: deny.toml [advisories] ignore = []. Unmaintained warnings
+        # are reported but do not fail the gate; any exception must carry an
+        # owner, reachability proof, review date, and expiry (audit Task 5.2).
+        run: cargo deny check advisories --locked
+
+      - name: Negative witness — vulnerable fixture must fail
+        # Proves the gate fails closed: a lockfile carrying a known-vulnerable,
+        # yanked crate (RUSTSEC-2021-0145, atty 0.2.14) must be rejected.
+        run: |
+          set -e
+          fixture="$(mktemp -d)"
+          cat > "$fixture/Cargo.toml" <<'TOML'
+          [package]
+          name = "vuln-fixture"
+          version = "0.0.0"
+          edition = "2021"
+          TOML
+          cat > "$fixture/Cargo.lock" <<'LOCK'
+          version = 4
+
+          [[package]]
+          name = "atty"
+          version = "0.2.14"
+          source = "registry+https://github.com/rust-lang/crates.io-index"
+          checksum = "d9b39be18770d11421cdb1b9947a45dd3f37e93021cb2b7b9aa1841dce3"
+
+          [[package]]
+          name = "vuln-fixture"
+          version = "0.0.0"
+          LOCK
+          if cargo deny --locked check advisories --manifest-path "$fixture/Cargo.toml"; then
+            echo "::error::advisory gate PASSED a known-vulnerable fixture"; exit 1
+          fi
+          echo "negative witness ok: vulnerable fixture rejected"
