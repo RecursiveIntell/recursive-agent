@@ -39,7 +39,7 @@ jobs:
       - name: Install pinned cargo-deny
         # Version pinned to match the header contract in deny.toml; the
         # action itself is pinned to an immutable commit SHA.
-        uses: taiki-e/install-action@8d9c4b8d69a5e3cfbbbe5680926a2c1c1fb25e1d
+        uses: taiki-e/install-action@cfdb7ed4ccc7c7dce37759eae89dc5674b469b39
         with:
           tool: cargo-deny@0.19.8
 
