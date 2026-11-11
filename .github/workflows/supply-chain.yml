@@ -36,6 +36,16 @@ jobs:
           ref: ${{ github.sha }}
           fetch-depth: 1
 
+      - name: Checkout the exact Libraries source owner
+        # The workspace has a path dependency into ../Libraries; cargo metadata
+        # (and therefore cargo deny) cannot resolve the graph without it.
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          repository: RecursiveIntell/Libraries
+          ref: 0b099ec416de60f6adafb182f1d1e83795d05c56
+          fetch-depth: 1
+          path: Libraries
+
       - name: Install pinned cargo-deny
         # Version pinned to match the header contract in deny.toml; the
         # action itself is pinned to an immutable commit SHA.
