@@ -15,9 +15,10 @@ try:
     from .client import (
         DaemonClientError,
         DaemonRunFailure,
+        DaemonSubmissionAmbiguous,
         MAX_OPERATION_INPUT_BYTES,
         check_socket_available,
-        start_and_follow,
+        start_and_follow_raw,
         submit_and_status_raw,
     )
     from .schema import RECURSIVE_AGENT_EXECUTE_SCHEMA
@@ -31,9 +32,10 @@ except ImportError:
     from client import (
         DaemonClientError,
         DaemonRunFailure,
+        DaemonSubmissionAmbiguous,
         MAX_OPERATION_INPUT_BYTES,
         check_socket_available,
-        start_and_follow,
+        start_and_follow_raw,
         submit_and_status_raw,
     )
     from schema import RECURSIVE_AGENT_EXECUTE_SCHEMA
@@ -119,9 +121,15 @@ def _handler(ctx, args, **kwargs) -> str:
         return "recursive_agent_execute: unavailable: envelope_path required"
     try:
         if _durable_start_enabled(ctx):
-            result = start_and_follow(socket_path, json.loads(raw.decode("utf-8")))
+            result = start_and_follow_raw(socket_path, raw)
         else:
             result = submit_and_status_raw(socket_path, raw)
+    except DaemonSubmissionAmbiguous as error:
+        return json.dumps({
+            "schema": "recursive-agent.hermes-result/v1",
+            "state": "ambiguous", "verified": False, "retry_allowed": False,
+            "resumable": False, "reason": str(error),
+        }, separators=(",", ":"), sort_keys=True)
     except DaemonRunFailure as error:
         return json.dumps(
             {
@@ -139,6 +147,20 @@ def _handler(ctx, args, **kwargs) -> str:
         )
     except DaemonClientError as error:
         return f"recursive_agent_execute: unavailable: {error}"
+    if not isinstance(result, dict):
+        return "recursive_agent_execute: unavailable: daemon verification facts missing"
+    if result.get("state") == "pending":
+        if (not isinstance(result.get("run_id"), str) or not result["run_id"]
+                or not isinstance(result.get("run_dir"), str) or not result["run_dir"]
+                or result.get("resumable") is not True
+                or not isinstance(result.get("reason"), str) or not result["reason"]):
+            return "recursive_agent_execute: unavailable: daemon pending identity missing"
+        return json.dumps({
+            "schema": "recursive-agent.hermes-result/v1", "state": "pending",
+            "run_id": result["run_id"], "run_dir": result["run_dir"],
+            "verified": False, "resumable": True, "retry_allowed": False,
+            "reason": result["reason"],
+        }, separators=(",", ":"), sort_keys=True)
     try:
         verification = result["verification"]
         state = result["state"]
@@ -186,8 +208,8 @@ def register(ctx) -> None:
         handler=handler,
         check_fn=available,
         description=(
-            "Submit one bounded recursive-agent native action and return "
-            "daemon-derived terminal status plus strict verification facts."
+            "Submit one bounded recursive-agent native action; return daemon-verified "
+            "terminal facts or an explicit pending/ambiguous outcome."
         ),
         emoji="\u2699\ufe0f",
     )

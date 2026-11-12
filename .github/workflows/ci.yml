@@ -126,6 +126,20 @@ jobs:
           fi
           bwrap --ro-bind / / -- /usr/bin/true
 
+      - name: Install pinned Python adapter test runtime
+        uses: astral-sh/setup-uv@37802adc94f370d6bfd71619e3f0bf239e1f3b78
+        with:
+          version: '0.12.24'
+
+      - name: Admit Python 3.14 and isolated adapter test dependencies
+        run: |
+          set -euo pipefail
+          uv python install 3.14
+          uv venv --python 3.14 "$RUNNER_TEMP/adapter-venv"
+          uv pip install --python "$RUNNER_TEMP/adapter-venv/bin/python" 'pytest==9.2.0'
+          "$RUNNER_TEMP/adapter-venv/bin/python" -c 'import sys; assert sys.version_info >= (3, 14), sys.version'
+          printf '%s\n' "$RUNNER_TEMP/adapter-venv/bin" >> "$GITHUB_PATH"
+
       - name: Run canonical paired-root gates
         working-directory: recursive-agent
         run: |
@@ -135,6 +149,14 @@ jobs:
           cargo check --locked --workspace
           cargo clippy --locked --workspace --all-targets -- -D warnings
           cargo test --locked --workspace --all-targets --no-fail-fast
+
+      - name: Exercise the real Hermes plugin adapter
+        working-directory: recursive-agent
+        run: |
+          set -euo pipefail
+          cargo build --locked -p recursive-agent-cli -p recursive-agent-daemon --bins
+          bash scripts/verify-hermes-native.sh
+          python3 -m pytest -q tests/test_ci_workflow_contract.py
 
       - name: Verify the same pair from a relocated root
         run: |

@@ -10,6 +10,7 @@ import importlib.util
 import json
 import os
 import subprocess
+import pytest
 import sys
 import time
 from types import SimpleNamespace
@@ -50,7 +51,8 @@ def _wait_for_socket(socket_path, timeout=10.0):
     return False
 
 
-def test_plugin_handler_submits_and_verifies_over_real_daemon(tmp_path):
+@pytest.mark.parametrize("durable", [False, True])
+def test_plugin_handler_submits_and_verifies_over_real_daemon(tmp_path, durable):
     assert os.path.exists(DAEMON_BIN), f"ra-daemon not built at {DAEMON_BIN}"
 
     # A real configured run root may contain spaces; operator-visible handler
@@ -91,7 +93,7 @@ def test_plugin_handler_submits_and_verifies_over_real_daemon(tmp_path):
         # Hermes hands plugins a PluginContext whose get_config() reads
         # plugins.entries.<id>.settings.<key>; mirror that contract here.
         ctx = SimpleNamespace(
-            get_config=lambda key, default=None: socket_path if key == "socket_path" else default
+            get_config=lambda key, default=None: {"socket_path": socket_path, "durable_start": durable}.get(key, default)
         )
         result = json.loads(plugin._handler(ctx, {"envelope_path": str(envelope_path)}))
         assert result["schema"] == "recursive-agent.hermes-result/v1"

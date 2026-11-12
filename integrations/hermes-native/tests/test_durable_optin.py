@@ -36,7 +36,7 @@ def _route(monkeypatch, config, envelope_bytes_path):
         plugin, "submit_and_status_raw", lambda sock, raw: calls.append("blocking") or {"state": "terminal"}
     )
     monkeypatch.setattr(
-        plugin, "start_and_follow", lambda sock, env: calls.append("durable") or {"state": "terminal"}
+        plugin, "start_and_follow_raw", lambda sock, raw: calls.append("durable") or {"state": "terminal"}
     )
     plugin._handler(Ctx(config), {"envelope_path": str(envelope_bytes_path)})
     return calls

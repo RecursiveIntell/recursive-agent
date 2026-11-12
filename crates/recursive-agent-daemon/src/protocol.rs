@@ -248,6 +248,10 @@ pub enum IpcRequestV1 {
     /// Opaque original operation bytes, encoded only for the JSON IPC carrier.
     /// The contracts owner selects V1 or V3 after strict admission.
     SubmitNativeRaw { operation_json_b64: String },
+    /// Opt-in raw carrier: contracts select the operation family from original
+    /// bytes. V1 retains synchronous submission; V3 uses the existing bounded
+    /// provider-start owner. This carrier grants no additional authority.
+    StartNativeRaw { operation_json_b64: String },
     /// Recorded V3 read using the same contracts-owned raw family admission.
     ReadRecordedProviderOutputNativeRaw { operation_json_b64: String },
 }

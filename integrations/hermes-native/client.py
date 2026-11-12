@@ -25,6 +25,14 @@ class DaemonClientError(Exception):
     """Any failure to reach, authenticate, or parse the daemon response."""
 
 
+class DaemonSubmissionAmbiguous(DaemonClientError):
+    """A start may have reached the owner but no correlated handle was read.
+
+    No run identity or durable acceptance is invented. Callers must reconcile
+    with the native owner; automatically retrying this submission is forbidden.
+    """
+
+
 class DaemonRunFailure(DaemonClientError):
     """A daemon-confirmed terminal run or strict-verification failure.
 
@@ -160,7 +168,7 @@ def submit_provider_egress_v3(socket_path: str, envelope: dict) -> dict:
         raise DaemonClientError(f"cannot reach daemon: {error}") from error
 
 
-def _raw_request(socket_path: str, kind: str, raw: bytes) -> dict:
+def _raw_request(socket_path: str, kind: str, raw: bytes, *, ambiguous_start=False) -> dict:
     if len(raw) > MAX_OPERATION_INPUT_BYTES:
         raise DaemonClientError("operation exceeds byte limit")
     request_id = "plugin-" + kind + "-1"
@@ -168,14 +176,20 @@ def _raw_request(socket_path: str, kind: str, raw: bytes) -> dict:
         with socket.socket(socket.AF_UNIX, socket.SOCK_STREAM) as conn:
             conn.settimeout(5.0)
             conn.connect(socket_path)
-            response = _request(conn, request_id, {
-                "kind": kind,
-                "operation_json_b64": base64.b64encode(raw).decode("ascii"),
-            })
+            try:
+                response = _request(conn, request_id, {
+                    "kind": kind,
+                    "operation_json_b64": base64.b64encode(raw).decode("ascii"),
+                })
+            except (OSError, ConnectionError, DaemonClientError) as error:
+                if ambiguous_start:
+                    raise DaemonSubmissionAmbiguous("start acknowledgement unavailable") from error
+                raise
     except (OSError, ConnectionError) as error:
         raise DaemonClientError(f"cannot reach daemon: {error}") from error
     if response.get("request_id") != request_id:
-        raise DaemonClientError("native response request id mismatch")
+        error_type = DaemonSubmissionAmbiguous if ambiguous_start else DaemonClientError
+        raise error_type("native response request id mismatch")
     if isinstance(response.get("error"), dict):
         raise DaemonClientError("native operation denied: " + str(response["error"].get("message", "runtime error")))
     return response
@@ -312,13 +326,53 @@ def start_and_follow(
     - A transport loss BEFORE the durable start raises ``DaemonClientError``
       (ordinary unavailability).
     """
+    _validate_poll_bounds(poll_interval, deadline)
+    started = start_provider_egress_v3_durable(socket_path, envelope)
+    return _poll_started(socket_path, started, poll_interval=poll_interval,
+                         deadline=deadline, envelope=envelope)
+
+
+def start_and_follow_raw(
+    socket_path: str, raw: bytes, *, poll_interval: float = 0.5, deadline: float = 600.0,
+) -> dict:
+    """Preserve original bytes; only the native owner chooses V1 or V3.
+
+    V1 remains synchronous. V3 uses the existing owner start/poll lifecycle.
+    No acknowledgement means ambiguity, not evidence of a failed submission.
+    """
+    _validate_poll_bounds(poll_interval, deadline)
+    started = _raw_request(socket_path, "start_native_raw", raw, ambiguous_start=True)
+    if (started.get("started") is not True
+            or started.get("operation_family") not in ("v1", "provider_egress_v3")):
+        raise DaemonSubmissionAmbiguous("start acknowledgement malformed")
+    return _poll_started(socket_path, started, poll_interval=poll_interval,
+                         deadline=deadline, raw=raw)
+
+
+def _validate_poll_bounds(poll_interval, deadline):
+    import math
+
+    if (isinstance(poll_interval, bool) or isinstance(deadline, bool)
+            or not isinstance(poll_interval, (int, float))
+            or not isinstance(deadline, (int, float))
+            or not math.isfinite(poll_interval) or not math.isfinite(deadline)
+            or poll_interval <= 0 or deadline < 0):
+        raise DaemonClientError("invalid polling bounds")
+
+
+def _poll_started(socket_path, started, *, poll_interval, deadline, envelope=None, raw=None):
     import time
 
-    started = start_provider_egress_v3_durable(socket_path, envelope)
-    run_id = str(started.get("run_id", ""))
+    _validate_poll_bounds(poll_interval, deadline)
+    run_id = started.get("run_id")
     run_dir = started.get("run_dir")
-    if not run_id or not isinstance(run_dir, str) or not run_dir:
-        raise DaemonClientError("durable start did not return run id and run directory")
+    if not isinstance(run_id, str) or not run_id or not isinstance(run_dir, str) or not run_dir:
+        raise DaemonSubmissionAmbiguous("durable start did not return run id and run directory")
+    family = started.get("operation_family", "provider_egress_v3")
+
+    def pending(reason):
+        return {"state": "pending", "run_id": run_id, "run_dir": run_dir,
+                "resumable": True, "reason": reason, "operation_family": family}
 
     end = time.monotonic() + deadline
     delay = poll_interval
@@ -326,14 +380,15 @@ def start_and_follow(
         try:
             status = status_of_run(socket_path, run_id)
         except DaemonClientError:
-            # The start is durable; the transport loss is ambiguous, not a failure.
-            return {
-                "state": "pending",
-                "run_id": run_id,
-                "run_dir": run_dir,
-                "resumable": True,
-                "reason": "transport_lost_after_durable_start",
-            }
+            # The admitted start may still be running. Never resubmit it.
+            return pending("transport_lost_after_durable_start")
+        if raw is not None:
+            if status.get("request_id") != "plugin-status-1":
+                raise DaemonClientError("status response request id mismatch")
+            if status.get("run_id") != run_id:
+                raise DaemonClientError("status response run id mismatch")
+        if isinstance(status.get("error"), dict):
+            raise DaemonClientError("native status denied")
         status_payload = status.get("status")
         if not isinstance(status_payload, dict):
             raise DaemonClientError("status response missing status object")
@@ -351,15 +406,11 @@ def start_and_follow(
                 status=status,
                 verification={},
             )
+        if state != "active" or family != "provider_egress_v3":
+            raise DaemonClientError(f"unexpected nonterminal state: {state}")
         if time.monotonic() >= end:
-            return {
-                "state": "pending",
-                "run_id": run_id,
-                "run_dir": run_dir,
-                "resumable": True,
-                "reason": "deadline_reached_while_active",
-            }
-        time.sleep(delay)
+            return pending("deadline_reached_while_active")
+        time.sleep(min(delay, max(0.0, end - time.monotonic())))
         delay = min(delay * 2, 5.0)
 
     # Terminal: only now ask the daemon for strict verification and output.
@@ -369,8 +420,10 @@ def start_and_follow(
         run_id=run_id,
         run_dir=run_dir,
         status=status,
-        submitted={"run_id": run_id, "run_dir": run_dir, "operation_family": "provider_egress_v3"},
+        submitted={"run_id": run_id, "run_dir": run_dir, "operation_family": family},
         envelope=envelope,
+        raw=raw,
+        strict_correlation=raw is not None,
     )
 
 
@@ -421,7 +474,7 @@ def _follow_submission(socket_path: str, submitted: dict, *, envelope=None, raw=
     )
 
 
-def _finish_terminal(socket_path, *, run_id, run_dir, status, submitted, envelope=None, raw=None):
+def _finish_terminal(socket_path, *, run_id, run_dir, status, submitted, envelope=None, raw=None, strict_correlation=False):
     """Strict verification and recorded-output read for an already-terminal run.
 
     Split out so a caller that has already read terminal status (the durable
@@ -430,6 +483,8 @@ def _finish_terminal(socket_path, *, run_id, run_dir, status, submitted, envelop
     status_payload = status.get("status")
     state = status_payload.get("state", "unknown") if isinstance(status_payload, dict) else "unknown"
     verification_response = verify_run(socket_path, run_id)
+    if strict_correlation and verification_response.get("request_id") != "plugin-verify-1":
+        raise DaemonClientError("verification response request id mismatch")
     if verification_response.get("run_id") != run_id:
         raise DaemonClientError("verification response run id mismatch")
     response_error = verification_response.get("error")
