@@ -13,8 +13,8 @@ from __future__ import annotations
 RECURSIVE_AGENT_EXECUTE_SCHEMA = {
     "name": "recursive_agent_execute",
     "description": (
-        "Submit one bounded recursive-agent native action and return "
-        "daemon-derived terminal status plus strict verification facts."
+        "Submit one bounded recursive-agent native action; return daemon-verified "
+        "terminal facts or an explicit pending/ambiguous outcome."
     ),
     "parameters": {
         "type": "object",

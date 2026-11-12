@@ -537,3 +537,206 @@ fn durable_start_crosses_real_native_ipc_as_additive_kind() -> Result<(), Box<dy
     assert!(started["run_id"].as_str().is_some());
     Ok(())
 }
+
+#[test]
+fn raw_durable_start_uses_native_family_and_sealed_output_read(
+) -> Result<(), Box<dyn std::error::Error>> {
+    use base64::Engine as _;
+    let tmp = tempfile::tempdir()?;
+    let root = tmp.path().join("runs");
+    std::fs::create_dir(&root)?;
+    let calls = Arc::new(AtomicUsize::new(0));
+    let runtime = Arc::new(service(&root, Arc::clone(&calls))?);
+    let (listener, socket_path) = bind_private_socket(tmp.path(), "raw-start.sock")?;
+    let server_runtime = Arc::clone(&runtime);
+    std::thread::spawn(move || {
+        let _ = serve(listener, server_runtime, 4);
+    });
+    let encoded =
+        base64::engine::general_purpose::STANDARD.encode(serde_json::to_vec(&operation()?)?);
+    let mut stream = connect(&socket_path)?;
+    stream.set_read_timeout(Some(Duration::from_secs(3)))?;
+    stream.write_all(&request_frame(
+        "raw-start",
+        serde_json::json!({
+            "kind": "start_native_raw", "operation_json_b64": encoded,
+        }),
+    ))?;
+    let started = read_response(&mut stream)?;
+    assert_eq!(started["request_id"], "raw-start");
+    assert_eq!(started["started"], true);
+    assert_eq!(started["operation_family"], "provider_egress_v3");
+    let run_id = started["run_id"].as_str().ok_or("missing run identity")?;
+    let deadline = Instant::now() + Duration::from_secs(3);
+    let mut i = 0;
+    loop {
+        i += 1;
+        stream.write_all(&request_frame(
+            &format!("raw-status-{i}"),
+            serde_json::json!({"kind":"status", "run_id":run_id}),
+        ))?;
+        let status = read_response(&mut stream)?;
+        assert_eq!(status["run_id"], run_id);
+        if status["status"]["state"] == "terminal" {
+            assert_eq!(status["status"]["terminal_state"], "succeeded");
+            break;
+        }
+        assert!(
+            Instant::now() < deadline,
+            "native fixture did not reach terminal"
+        );
+        std::thread::sleep(Duration::from_millis(5));
+    }
+    stream.write_all(&request_frame(
+        "raw-verify",
+        serde_json::json!({"kind":"verify", "run_id":run_id}),
+    ))?;
+    assert_eq!(
+        read_response(&mut stream)?["verification"]["current_strict_success"],
+        true
+    );
+    stream.write_all(&request_frame(
+        "raw-output",
+        serde_json::json!({
+            "kind":"read_recorded_provider_output_native_raw", "operation_json_b64":encoded,
+        }),
+    ))?;
+    assert_eq!(
+        read_response(&mut stream)?["output"]["text"],
+        "native-ipc-v3-response"
+    );
+    assert_eq!(calls.load(Ordering::SeqCst), 1);
+    Ok(())
+}
+
+#[test]
+fn raw_durable_start_rejects_original_duplicate_bytes_before_dispatch(
+) -> Result<(), Box<dyn std::error::Error>> {
+    use base64::Engine as _;
+    let tmp = tempfile::tempdir()?;
+    let root = tmp.path().join("runs");
+    std::fs::create_dir(&root)?;
+    let calls = Arc::new(AtomicUsize::new(0));
+    let runtime = Arc::new(service(&root, Arc::clone(&calls))?);
+    let (listener, socket_path) = bind_private_socket(tmp.path(), "raw-reject.sock")?;
+    std::thread::spawn(move || {
+        let _ = serve(listener, runtime, 4);
+    });
+    let mut stream = connect(&socket_path)?;
+    stream.set_read_timeout(Some(Duration::from_secs(3)))?;
+    stream.write_all(&request_frame("raw-duplicate", serde_json::json!({
+        "kind":"start_native_raw",
+        "operation_json_b64":base64::engine::general_purpose::STANDARD.encode(br#"{"x":1,"\u0078":2}"#),
+    })))?;
+    let denied = read_response(&mut stream)?;
+    assert_eq!(denied["request_id"], "raw-duplicate");
+    let message = denied["error"]["message"]
+        .as_str()
+        .ok_or("missing native denial")?;
+    assert!(message.contains("duplicate"), "wrong rejection: {denied}");
+    assert_eq!(calls.load(Ordering::SeqCst), 0);
+    assert_eq!(std::fs::read_dir(&root)?.count(), 0);
+    Ok(())
+}
+
+struct DelayedFixtureBackend(Arc<AtomicUsize>);
+
+impl CompletionBackend for DelayedFixtureBackend {
+    fn complete(
+        &self,
+        _request: &CompletionRequestV1,
+    ) -> Result<CompletionResponseV1, ProviderError> {
+        self.0.fetch_add(1, Ordering::SeqCst);
+        // Longer than the plugin's per-request socket timeout; no network is used.
+        std::thread::sleep(Duration::from_millis(5_500));
+        Ok(CompletionResponseV1 {
+            model: "fixture-model".into(),
+            text: "delayed-native-result".into(),
+            raw: serde_json::json!({"fixture": true}),
+        })
+    }
+}
+
+#[test]
+fn registered_python_plugin_follows_real_native_delayed_provider_once(
+) -> Result<(), Box<dyn std::error::Error>> {
+    let tmp = tempfile::tempdir()?;
+    let root = tmp.path().join("runs");
+    std::fs::create_dir(&root)?;
+    let calls = Arc::new(AtomicUsize::new(0));
+    let clock: Arc<dyn Clock> = Arc::new(FixedClock);
+    let verifier: Arc<dyn ProviderEgressAdmissionVerifier> = Arc::new(AllowCurrentEgress);
+    let tools = tool_runtime_with_sealed_completion(
+        ToolRegistry::new(),
+        DelayedFixtureBackend(Arc::clone(&calls)),
+        Arc::clone(&clock),
+        Arc::clone(&verifier),
+    );
+    let dependencies = RuntimeDependencies::builder()
+        .policy(RuntimePolicyDependencyV1::Native)
+        .sandbox(RuntimeSandboxDependencyV1::Native)
+        .tool_runtime(Arc::new(tools))
+        .provider(RuntimeProviderDependencyV1::Configured(provider()?))
+        .provider_egress_verifier(verifier)
+        .ledger(RuntimeLedgerDependencyV1::Native)
+        .clock(clock)
+        .store(RuntimeStoreDependencyV1::Native)
+        .output_root(&root)
+        .build()?;
+    let runtime = Arc::new(RuntimeService::new(dependencies));
+    let (listener, socket_path) = bind_private_socket(tmp.path(), "py-raw.sock")?;
+    std::thread::spawn(move || {
+        let _ = serve(listener, runtime, 4);
+    });
+    let mut operation = operation()?;
+    operation.budget.max_wall_time_ms = 20_000;
+    let envelope_path = tmp.path().join("operation.json");
+    std::fs::write(&envelope_path, serde_json::to_vec(&operation)?)?;
+    let plugin_path =
+        std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../integrations/hermes-native");
+    let script = r#"
+import importlib.util, pathlib, signal, sys
+assert sys.version_info >= (3, 14), sys.version
+signal.alarm(25)
+root, envelope, sock = sys.argv[1:]
+spec = importlib.util.spec_from_file_location('real_delayed_plugin', pathlib.Path(root)/'__init__.py', submodule_search_locations=[root])
+plugin = importlib.util.module_from_spec(spec)
+sys.modules[spec.name] = plugin
+spec.loader.exec_module(plugin)
+class Context:
+    def get_config(self, key): return {'socket_path': sock, 'durable_start': True}.get(key)
+    def register_tool(self, **tool): self.tool = tool
+ctx = Context()
+plugin.register(ctx)
+print(ctx.tool['handler']({'envelope_path': envelope}))
+"#;
+    let output = std::process::Command::new("python3")
+        .args(["-c", script])
+        .arg(plugin_path)
+        .arg(envelope_path)
+        .arg(socket_path)
+        .env_clear()
+        .env("PATH", std::env::var("PATH")?)
+        .env("HOME", tmp.path())
+        .env("LANG", "C.UTF-8")
+        .output()?;
+    assert!(
+        output.status.success(),
+        "Python failed: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let result: serde_json::Value = serde_json::from_slice(&output.stdout)?;
+    assert_eq!(result["state"], "terminal");
+    assert_eq!(result["verified"], true);
+    assert_eq!(result["recorded_output"]["text"], "delayed-native-result");
+    assert_eq!(calls.load(Ordering::SeqCst), 1);
+    assert_eq!(
+        std::fs::read_dir(&root)?
+            .filter_map(Result::ok)
+            .filter(|entry| entry.file_type().is_ok_and(|kind| kind.is_dir())
+                && !entry.file_name().to_string_lossy().starts_with('.'))
+            .count(),
+        1
+    );
+    Ok(())
+}

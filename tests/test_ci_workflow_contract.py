@@ -32,7 +32,12 @@ def test_workflow_runs_canonical_locked_workspace_gates() -> None:
     assert "cargo check --locked --workspace" in text
     assert "cargo clippy --locked --workspace --all-targets -- -D warnings" in text
     assert "cargo test --locked --workspace --all-targets --no-fail-fast" in text
-    assert "bubblewrap libseccomp-dev strace" in text
+    # CI builds its reviewed Bubblewrap instead of accepting the distro's older
+    # launcher. Keep native prerequisites and archive verification mandatory.
+    assert "libseccomp-dev meson ninja-build strace" in text
+    assert "Build and install pinned Bubblewrap" in text
+    assert "version=0.13.1" in text
+    assert "sha256sum --check --strict" in text
     assert "kernel.apparmor_restrict_unprivileged_userns=0" in text
     assert "kernel.unprivileged_userns_clone=1" in text
     assert "bwrap --ro-bind / / -- /usr/bin/true" in text
@@ -62,3 +67,12 @@ def test_terminal_check_fails_closed_unless_paired_root_succeeds() -> None:
     assert "if: always()" in text
     assert "PAIRED_ROOT_RESULT: ${{ needs.paired-root.result }}" in text
     assert 'if [ "$PAIRED_ROOT_RESULT" != success ]; then' in text
+
+
+def test_python_adapter_ci_uses_314_and_actual_binaries() -> None:
+    text = workflow_text()
+    assert "uv venv --python 3.14" in text
+    assert "sys.version_info >= (3, 14)" in text
+    assert "cargo build --locked -p recursive-agent-cli -p recursive-agent-daemon --bins" in text
+    assert "bash scripts/verify-hermes-native.sh" in text
+    assert "python3 -m pytest -q tests/test_ci_workflow_contract.py" in text

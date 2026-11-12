@@ -548,6 +548,23 @@ fn dispatch(
                 "operation_family": family,
             }))
         }
+        IpcRequestV1::StartNativeRaw { operation_json_b64 } => {
+            let operation = admit_native_raw(operation_json_b64)?;
+            let (handle, family) = match operation {
+                NativeOperation::V1(operation) => (runtime.submit(&operation)?, "v1"),
+                NativeOperation::ProviderEgressV3(operation) => (
+                    runtime.start_provider_egress_v3(&operation)?,
+                    "provider_egress_v3",
+                ),
+            };
+            Ok(serde_json::json!({
+                "request_id": request.request_id,
+                "run_id": handle.run_id().to_string(),
+                "run_dir": handle.run_dir().display().to_string(),
+                "started": true,
+                "operation_family": family,
+            }))
+        }
         IpcRequestV1::ReadRecordedProviderOutputNativeRaw { operation_json_b64 } => {
             let NativeOperation::ProviderEgressV3(operation) =
                 admit_native_raw(operation_json_b64)?
