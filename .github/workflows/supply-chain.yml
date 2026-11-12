@@ -7,12 +7,15 @@ on:
       - "Cargo.toml"
       - "deny.toml"
       - ".github/workflows/supply-chain.yml"
+      - ".github/fixtures/advisory-witness/**"
   push:
     branches: [main]
     paths:
       - "Cargo.lock"
       - "Cargo.toml"
       - "deny.toml"
+      - ".github/workflows/supply-chain.yml"
+      - ".github/fixtures/advisory-witness/**"
   schedule:
     # Weekly, Monday 06:20 UTC — catches advisories published after merge.
     - cron: "20 6 * * 1"
@@ -63,32 +66,22 @@ jobs:
         # owner, reachability proof, review date, and expiry (audit Task 5.2).
         run: cargo deny --locked check advisories
 
-      - name: Negative witness — vulnerable fixture must fail
-        # Proves the gate fails closed: a lockfile carrying a known-vulnerable,
-        # yanked crate (RUSTSEC-2021-0145, atty 0.2.14) must be rejected.
+      - name: Negative witness — require the known atty advisory
         run: |
-          set -e
-          fixture="$(mktemp -d)"
-          cat > "$fixture/Cargo.toml" <<'TOML'
-          [package]
-          name = "vuln-fixture"
-          version = "0.0.0"
-          edition = "2021"
-          TOML
-          cat > "$fixture/Cargo.lock" <<'LOCK'
-          version = 4
+          set -euo pipefail
+          fixture=".github/fixtures/advisory-witness/Cargo.toml"
+          cargo metadata --locked --manifest-path "$fixture" --format-version 1 >/dev/null
 
-          [[package]]
-          name = "atty"
-          version = "0.2.14"
-          source = "registry+https://github.com/rust-lang/crates.io-index"
-          checksum = "d9b39be18770d11421cdb1b9947a45dd3f37e93021cb2b7b9aa1841dce3"
-
-          [[package]]
-          name = "vuln-fixture"
-          version = "0.0.0"
-          LOCK
-          if cargo deny --locked check advisories --manifest-path "$fixture/Cargo.toml"; then
-            echo "::error::advisory gate PASSED a known-vulnerable fixture"; exit 1
+          report="$(mktemp)"
+          trap 'rm -f "$report"' EXIT
+          if cargo deny --manifest-path "$fixture" --locked --format json check advisories 2>"$report"; then
+            echo "::error::advisory gate accepted the vulnerable fixture"
+            exit 1
           fi
-          echo "negative witness ok: vulnerable fixture rejected"
+          cat "$report"
+          jq -es 'any(.[];
+            .type == "diagnostic"
+            and .fields.severity == "error"
+            and .fields.advisory.id == "RUSTSEC-2021-0145"
+            and any(.fields.graphs[]?; .Krate.name == "atty" and .Krate.version == "0.2.14")
+          )' "$report" >/dev/null
