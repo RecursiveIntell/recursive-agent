@@ -1,17 +1,63 @@
 use std::collections::BTreeMap;
 use std::sync::Mutex;
 
+mod normal_chat_attempt;
+mod normal_chat_family_history;
+mod normal_chat_parent_close;
+mod normal_chat_parent_recovery;
+pub use normal_chat_parent_recovery::{
+    NormalChatParentRecoveryInterruptionV1, RuntimeNormalChatRecoveredSessionV1,
+};
+mod normal_chat_interrupted_recovery;
+mod normal_chat_prechild_recovery;
+mod normal_chat_prepared_recovery;
+mod normal_chat_recovery_composition;
+mod normal_chat_unconsumed_recovery;
+pub use normal_chat_recovery_composition::RuntimeNormalChatRecoveryCompositionV1;
+pub use normal_chat_unconsumed_recovery::{
+    NormalChatUnconsumedRuntimeRecoveryInterruptionV1, RuntimeNormalChatUnconsumedRecoveredV1,
+};
+mod normal_chat_readback;
+mod normal_chat_recovery;
+pub use normal_chat_interrupted_recovery::{
+    NormalChatInterruptedRuntimeRecoveryInterruptionV2, RuntimeNormalChatInterruptedRecoveredV2,
+};
+pub use normal_chat_prechild_recovery::{
+    NormalChatPrechildRuntimeRecoveryInterruptionV1, RuntimeNormalChatPrechildRecoveredV1,
+};
+pub use normal_chat_prepared_recovery::{
+    NormalChatPreparedRuntimeRecoveryInterruptionV1, RuntimeNormalChatPreparedRecoveredV1,
+};
+mod normal_chat_recovery_inspection;
+pub use normal_chat_attempt::{
+    NormalChatAttemptInterruptionV2, RuntimeNormalChatBeginV2, RuntimeNormalChatDispatchV2,
+    RuntimeNormalChatExistingV2, RuntimeNormalChatFreshV2,
+};
+pub use normal_chat_parent_close::{
+    NormalChatParentCloseInterruptionV2, RuntimeNormalChatClosedSessionV2,
+};
+pub use normal_chat_readback::RuntimeNormalChatReadbackV2;
+pub use normal_chat_recovery::{
+    NormalChatRuntimeRecoveryInterruptionV1, RuntimeNormalChatRecoveredV1,
+};
+pub use normal_chat_recovery_inspection::RuntimeNormalChatRecoveryInspectionV1;
+mod normal_chat_terminal;
+pub use normal_chat_terminal::{NormalChatTerminalInterruptionV2, RuntimeNormalChatSettlementV2};
+mod normal_chat_session;
+pub use normal_chat_session::{
+    NormalChatSessionBootstrapInterruptionV1, RuntimeNormalChatSessionV1,
+};
+
 use llm_tool_runtime::{
     ToolBudgetContext, ToolCall, ToolCtx, ToolExecutionPermit, ToolOriginKind, ToolPlannerStage,
     ToolRetryOwner, ToolRuntime,
 };
 use recursive_agent_contracts::{
     content_digest, derive_child_operation_id, derive_child_operation_proposal_digest,
-    derive_operation_id, derive_provider_egress_operation_id, derive_step_id,
-    parse_operation_envelope_bytes, ChildOperationEnvelopeV2, ChildOperationProposalV2,
-    ChildRunAuthorityV1, ContractError, CurrentPermitId, CurrentRunId, OperationEnvelopeV1,
-    ProviderEgressOperationEnvelopeV3, ReceiptKindV1, RunTerminalStateV1, RuntimeEventV1,
-    ToolCallSpecV1,
+    derive_operation_id, derive_provider_egress_operation_id, parse_operation_envelope_bytes,
+    ChildOperationEnvelopeV2, ChildOperationProposalV2, ChildRunAuthorityV1, ContractError,
+    CurrentPermitId, CurrentRunId, OperationEnvelopeV1, ProviderEgressOperationEnvelopeV3,
+    ReceiptKindV1, RunTerminalStateV1, RuntimeEventV1, ToolCallSpecV1,
 };
 use recursive_agent_ledger::{
     committed_events_directory_bound, verified_snapshot_directory_bound,
@@ -132,6 +178,18 @@ pub enum RuntimeServiceError {
     Policy(#[from] PolicyError),
     #[error("test-only permit issuance is disabled without a verifier")]
     PermitIssuanceDisabled,
+    #[error("normal-chat governance requires an explicitly injected operator grant")]
+    NormalChatGovernanceDisabled,
+    #[error("normal-chat expired recovery requires explicit startup opt-in")]
+    NormalChatRecoveryDisabled,
+    #[error("normal-chat parent recovery requires explicit startup opt-in")]
+    NormalChatParentRecoveryDisabled,
+    #[error("normal-chat session bootstrap requires recovery: {reason}")]
+    NormalChatSessionRecoveryRequired { reason: &'static str },
+    #[error("normal-chat session lifecycle is busy")]
+    NormalChatSessionBusy,
+    #[error("normal-chat session bootstrap interrupted before response release")]
+    NormalChatSessionBootstrapInterrupted,
     /// Native operation validation or identity derivation failed before effects.
     #[error("operation contract: {0}")]
     Contract(#[from] ContractError),
@@ -462,6 +520,10 @@ pub struct RuntimeService {
     operator_approval_verifier: Option<OperatorApprovalVerifierV1>,
     production_approval_verifier: Option<ProductionApprovalVerifierV1>,
     context_authority: Option<recursive_agent_policy::ContextAuthorityAccess>,
+    normal_chat_grant: Option<recursive_agent_policy::NormalChatGrantAuthorityV1>,
+    normal_chat_expired_recovery_enabled: bool,
+    normal_chat_interrupted_recovery_enabled: bool,
+    normal_chat_parent_recovery_enabled: bool,
 }
 
 impl RuntimeService {
@@ -488,6 +550,10 @@ impl RuntimeService {
             operator_approval_verifier: None,
             production_approval_verifier: None,
             context_authority: None,
+            normal_chat_grant: None,
+            normal_chat_expired_recovery_enabled: false,
+            normal_chat_interrupted_recovery_enabled: false,
+            normal_chat_parent_recovery_enabled: false,
         }
     }
 
@@ -1723,18 +1789,7 @@ fn permit_budget(budget: &recursive_agent_contracts::OperationBudgetV1) -> Permi
     }
 }
 
-fn child_receipt_step_id(
-    parent_run_id: &CurrentRunId,
-    proposal_digest: &recursive_agent_contracts::ContentDigest,
-    phase: &str,
-) -> Result<recursive_agent_contracts::CurrentStepId, ContractError> {
-    let call = ToolCallSpecV1 {
-        tool: format!("runner.child.{phase}"),
-        args: serde_json::json!({"proposal_digest": proposal_digest}),
-        frozen_clock: None,
-    };
-    derive_step_id(parent_run_id, usize::MAX, &format!("child-{phase}"), &call)
-}
+use recursive_agent_contracts::derive_child_receipt_step_id as child_receipt_step_id;
 
 fn map_admission_error(error: ManagedAdmissionError) -> RuntimeServiceError {
     match error {

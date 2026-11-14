@@ -54,18 +54,13 @@ DEFAULT_SOCKET_PATH = str(
 
 
 def _resolve_socket(ctx) -> str:
-    """Resolve the daemon socket path from plugin config, falling back safely."""
-    try:
-        cfg = getattr(ctx, "config", None) or {}
-        plugins_cfg = cfg.get("plugins", {}).get("entries", {}).get(
-            "recursive-agent-native", {}
-        )
-        sock = plugins_cfg.get("socket_path")
-        if sock:
-            return str(sock)
-    except Exception:
-        pass
-    return DEFAULT_SOCKET_PATH
+    """Read the plugin-owned setting; invalid intent must not reroute IPC."""
+    sock = ctx.get_config("socket_path") if ctx is not None else None
+    if sock is None:
+        return DEFAULT_SOCKET_PATH
+    if not isinstance(sock, str) or not sock.strip() or "\x00" in sock:
+        raise ValueError("recursive-agent-native socket_path must be a nonempty path string")
+    return sock
 
 
 def check_recursive_agent_available(ctx=None) -> bool:
@@ -85,6 +80,44 @@ def check_recursive_agent_available_stub(socket_path: str) -> bool:
         return False
 
 
+_MAX_ENVELOPE_INPUT_BYTES = 1024 * 1024
+
+
+def _closed_envelope_pairs(pairs):
+    value = {}
+    for key, member in pairs:
+        if key in value:
+            raise ValueError("duplicate operation-envelope member")
+        value[key] = member
+    return value
+
+
+def _reject_envelope_constant(_value):
+    raise ValueError("non-finite JSON is not an operation envelope")
+
+
+def _read_envelope_file(path: str) -> dict:
+    """Bound the original UTF-8 regular-file ingress before normalizing JSON."""
+    import stat
+
+    descriptor = os.open(path, os.O_RDONLY | os.O_CLOEXEC | os.O_NONBLOCK)
+    try:
+        metadata = os.fstat(descriptor)
+        if not stat.S_ISREG(metadata.st_mode) or metadata.st_size > _MAX_ENVELOPE_INPUT_BYTES:
+            raise ValueError("operation envelope must be a bounded regular file")
+        with os.fdopen(descriptor, "rb", closefd=False) as handle:
+            raw = handle.read(_MAX_ENVELOPE_INPUT_BYTES + 1)
+        if len(raw) > _MAX_ENVELOPE_INPUT_BYTES:
+            raise ValueError("operation envelope exceeds its byte bound")
+    finally:
+        os.close(descriptor)
+    value = json.loads(raw.decode("utf-8"), object_pairs_hook=_closed_envelope_pairs,
+                       parse_constant=_reject_envelope_constant)
+    if type(value) is not dict:
+        raise ValueError("operation envelope must be a JSON object")
+    return value
+
+
 def _handler(ctx, args, **kwargs) -> str:
     """Submit a canonical envelope and return daemon-derived terminal facts.
 
@@ -94,18 +127,18 @@ def _handler(ctx, args, **kwargs) -> str:
     plus raw daemon status/verification mappings; transport failures remain
     ``unavailable``. Presentation text is not an interchange format.
     """
-    socket_path = _resolve_socket(ctx) if ctx is not None else DEFAULT_SOCKET_PATH
-    envelope_path = str((args or {}).get("envelope_path", ""))
-    if envelope_path:
-        try:
-            import json as _json
-
-            with open(envelope_path, encoding="utf-8") as _f:
-                envelope = _json.load(_f)
-        except (OSError, ValueError) as error:
-            return f"recursive_agent_execute: unavailable: cannot read envelope: {error}"
-    else:
+    if type(args) is not dict or not args.get("envelope_path"):
         return "recursive_agent_execute: unavailable: envelope_path required"
+    if set(args) != {"envelope_path"} or type(args["envelope_path"]) is not str:
+        return "recursive_agent_execute: unavailable: invalid arguments (envelope_path only)"
+    envelope_path = args["envelope_path"]
+    try:
+        if len(envelope_path.encode("utf-8")) > 4096 or "\x00" in envelope_path:
+            raise ValueError("invalid envelope_path")
+        envelope = _read_envelope_file(envelope_path)
+    except (OSError, ValueError, RecursionError) as error:
+        return f"recursive_agent_execute: unavailable: cannot read envelope: {error}"
+    socket_path = _resolve_socket(ctx) if ctx is not None else DEFAULT_SOCKET_PATH
     try:
         result = submit_and_status(socket_path, envelope)
     except DaemonRunFailure as error:
@@ -163,10 +196,16 @@ def register(ctx) -> None:
         toolset=TOOLSET,
         schema=RECURSIVE_AGENT_EXECUTE_SCHEMA,
         handler=handler,
-        check_fn=check_recursive_agent_available,
+        check_fn=lambda: check_recursive_agent_available(ctx),
         description=(
             "Submit one bounded recursive-agent native action and return "
             "daemon-derived terminal status plus strict verification facts."
         ),
         emoji="\u2699\ufe0f",
     )
+    # Default/off adds no governor or lifecycle hook and remains loadable by
+    # existing standalone-tool hosts without the new core dispatch seam.
+    mode = ctx.get_config("governance_mode")
+    if mode is not None and mode != "off":
+        from .governor import register_governor
+        register_governor(ctx)

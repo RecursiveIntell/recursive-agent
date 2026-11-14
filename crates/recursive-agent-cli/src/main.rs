@@ -1,3 +1,5 @@
+mod native_verification;
+
 use std::io::{Read, Write};
 use std::os::unix::net::UnixStream;
 use std::path::{Path, PathBuf};
@@ -94,6 +96,10 @@ enum Cmd {
         /// Path to the run directory.
         #[arg(long)]
         run: PathBuf,
+        /// Explicit native source-family scope for a degraded normal-chat session.
+        /// Requires existing private stores; never inferred by ordinary verify.
+        #[arg(long)]
+        normal_chat_runtime_root: Option<PathBuf>,
     },
     /// Replay a run from disk. Reads receipts and artifacts, never
     /// re-executes tools, never calls any provider.
@@ -404,7 +410,31 @@ fn main() {
             },
             max_tokens,
         ),
-        Cmd::Verify { run } => verify_cmd(&run),
+        Cmd::Verify {
+            run,
+            normal_chat_runtime_root,
+        } => {
+            if let Some(root) = normal_chat_runtime_root {
+                match native_verification::verify_native_family(&run, &root) {
+                    Ok(summary) => {
+                        println!("verify: ok");
+                        println!("scope: native-normal-chat-family/v1");
+                        println!("length: {}", summary.verification.length);
+                        println!("final_head: {}", summary.verification.final_head);
+                        println!("terminal_state: {:?}", summary.verification.terminal_state);
+                        println!("attempts_verified: {}", summary.attempts);
+                        println!("unknown_attempts: {}", summary.unknown_attempts);
+                        println!("provider_confirmation: not_claimed");
+                    }
+                    Err(error) => {
+                        eprintln!("verify: native normal-chat verification ERROR: {error}");
+                        std::process::exit(2);
+                    }
+                }
+            } else {
+                verify_cmd(&run);
+            }
+        }
         Cmd::Replay { run } => replay_cmd(&run),
         Cmd::Pack { cmd } => match cmd {
             PackCmd::Export { run, out } => pack_export_cmd(&run, &out),

@@ -202,6 +202,39 @@ fn handle_connection(stream: UnixStream, runtime: Arc<RuntimeService>) -> Result
         // reconstruct the complete wire frame from the admitted prefix.
         let mut full_frame = header.to_vec();
         full_frame.extend_from_slice(&payload);
+        let discriminator =
+            recursive_agent_contracts::parse_strict_json_value(&payload).map_err(|error| {
+                ServerError::Frame(match error {
+                    recursive_agent_contracts::StrictJsonError::DuplicateKey => {
+                        IpcDecodeError::DuplicateKey
+                    }
+                    recursive_agent_contracts::StrictJsonError::Malformed => {
+                        IpcDecodeError::Malformed
+                    }
+                })
+            })?;
+        if discriminator.get("schema").and_then(|s| s.as_str())
+            == Some(crate::protocol_v2::IPC_REQUEST_SCHEMA_V2)
+        {
+            let request = crate::protocol_v2::decode_governed_request_frame(&full_frame)
+                .map_err(ServerError::Frame)?;
+            ids.admit_id(&request.request_id)
+                .map_err(ServerError::Frame)?;
+            if let Some(response) = crate::governed::dispatch_begin(&request, &runtime, &mut out)? {
+                let bytes = serde_json::to_vec(&response)?;
+                if bytes.len() > crate::MAX_FRAME_PAYLOAD_BYTES {
+                    return Err(std::io::Error::from(std::io::ErrorKind::InvalidData).into());
+                }
+                out.write_all(
+                    &u32::try_from(bytes.len())
+                        .map_err(|_| std::io::Error::from(std::io::ErrorKind::InvalidData))?
+                        .to_be_bytes(),
+                )?;
+                out.write_all(&bytes)?;
+                out.flush()?;
+            }
+            continue;
+        }
         let request = decode_request_frame(&full_frame).map_err(ServerError::Frame)?;
         ids.admit(&request).map_err(ServerError::Frame)?;
 

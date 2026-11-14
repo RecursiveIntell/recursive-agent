@@ -43,6 +43,9 @@ class StubCtx:
     def register_tool(self, **kwargs):
         self.registrations.append(kwargs)
 
+    def get_config(self, key, default=None):
+        return default
+
 
 def test_register_exposes_one_non_overriding_tool_in_recursive_agent_toolset():
     ctx = StubCtx()

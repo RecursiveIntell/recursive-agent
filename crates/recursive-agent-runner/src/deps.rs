@@ -2,7 +2,10 @@ use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
 use llm_tool_runtime::ToolRuntime;
-use recursive_agent_policy::ProviderEgressAdmissionVerifier;
+use recursive_agent_policy::{
+    CampaignFundingAuthorityV1, CampaignFundingGrantV1, InferenceBudgetTermsV1,
+    NormalChatEgressGrantStore, ProviderEgressAdmissionVerifier,
+};
 use recursive_agent_provider::ProviderSpecV1;
 
 use crate::{Clock, RuntimeDependencyError};
@@ -80,6 +83,13 @@ pub struct RuntimeDependencies {
     pub(crate) store: RuntimeStoreDependencyV1,
     pub(crate) active_leaf_config: ActiveLeafConfigV1,
     pub(crate) output_root: PathBuf,
+    /// Campaign funding authority and grant for monetary egress control.
+    /// When present, physical provider egress must reserve and consume
+    /// from the campaign bank instead of using max_cost_microunits fallback.
+    pub(crate) campaign_funding_authority: Option<CampaignFundingAuthorityV1>,
+    pub(crate) campaign_funding_grant: Option<CampaignFundingGrantV1>,
+    pub(crate) campaign_inference_terms: Option<InferenceBudgetTermsV1>,
+    pub(crate) campaign_grant_store: Option<NormalChatEgressGrantStore>,
 }
 
 impl RuntimeDependencies {
@@ -138,6 +148,35 @@ impl RuntimeDependencies {
     pub fn output_root(&self) -> &Path {
         &self.output_root
     }
+
+    /// Borrow the campaign funding authority if configured.
+    /// When present, physical egress must consume from the campaign bank.
+    pub fn campaign_funding_authority(&self) -> Option<&CampaignFundingAuthorityV1> {
+        self.campaign_funding_authority.as_ref()
+    }
+
+    /// Borrow the campaign funding grant if configured.
+    pub fn campaign_funding_grant(&self) -> Option<&CampaignFundingGrantV1> {
+        self.campaign_funding_grant.as_ref()
+    }
+
+    /// Borrow the campaign inference terms if configured.
+    pub fn campaign_inference_terms(&self) -> Option<&InferenceBudgetTermsV1> {
+        self.campaign_inference_terms.as_ref()
+    }
+
+    /// Borrow the campaign grant store if configured.
+    pub fn campaign_grant_store(&self) -> Option<&NormalChatEgressGrantStore> {
+        self.campaign_grant_store.as_ref()
+    }
+
+    /// Return true if campaign funding is configured and must be used for egress.
+    pub fn has_campaign_funding(&self) -> bool {
+        self.campaign_funding_authority.is_some()
+            && self.campaign_funding_grant.is_some()
+            && self.campaign_inference_terms.is_some()
+            && self.campaign_grant_store.is_some()
+    }
 }
 
 /// Explicit builder; every owner must be named by the caller.
@@ -153,6 +192,10 @@ pub struct RuntimeDependenciesBuilder {
     store: Option<RuntimeStoreDependencyV1>,
     active_leaf_config: ActiveLeafConfigV1,
     output_root: Option<PathBuf>,
+    campaign_funding_authority: Option<CampaignFundingAuthorityV1>,
+    campaign_funding_grant: Option<CampaignFundingGrantV1>,
+    campaign_inference_terms: Option<InferenceBudgetTermsV1>,
+    campaign_grant_store: Option<NormalChatEgressGrantStore>,
 }
 
 impl RuntimeDependenciesBuilder {
@@ -183,6 +226,43 @@ impl RuntimeDependenciesBuilder {
         verifier: Arc<dyn ProviderEgressAdmissionVerifier>,
     ) -> Self {
         self.provider_egress_verifier = Some(verifier);
+        self
+    }
+
+    /// Install campaign funding authority for monetary egress control.
+    /// When set, physical egress must reserve and consume from the campaign bank.
+    pub fn campaign_funding_authority(
+        mut self,
+        authority: CampaignFundingAuthorityV1,
+    ) -> Self {
+        self.campaign_funding_authority = Some(authority);
+        self
+    }
+
+    /// Install campaign funding grant for monetary egress control.
+    pub fn campaign_funding_grant(
+        mut self,
+        grant: CampaignFundingGrantV1,
+    ) -> Self {
+        self.campaign_funding_grant = Some(grant);
+        self
+    }
+
+    /// Install campaign inference terms for monetary egress control.
+    pub fn campaign_inference_terms(
+        mut self,
+        terms: InferenceBudgetTermsV1,
+    ) -> Self {
+        self.campaign_inference_terms = Some(terms);
+        self
+    }
+
+    /// Install campaign grant store for monetary egress control.
+    pub fn campaign_grant_store(
+        mut self,
+        store: NormalChatEgressGrantStore,
+    ) -> Self {
+        self.campaign_grant_store = Some(store);
         self
     }
 
@@ -254,6 +334,10 @@ impl RuntimeDependenciesBuilder {
             self.store,
             Some(active_leaf_config),
             self.output_root,
+            self.campaign_funding_authority,
+            self.campaign_funding_grant,
+            self.campaign_inference_terms,
+            self.campaign_grant_store,
         ) {
             (
                 Some(policy),
@@ -266,6 +350,10 @@ impl RuntimeDependenciesBuilder {
                 Some(store),
                 Some(active_leaf_config),
                 Some(output_root),
+                campaign_funding_authority,
+                campaign_funding_grant,
+                campaign_inference_terms,
+                campaign_grant_store,
             ) => Ok(RuntimeDependencies {
                 policy,
                 sandbox,
@@ -277,6 +365,10 @@ impl RuntimeDependenciesBuilder {
                 store,
                 active_leaf_config,
                 output_root,
+                campaign_funding_authority,
+                campaign_funding_grant,
+                campaign_inference_terms,
+                campaign_grant_store,
             }),
             _ => Err(RuntimeDependencyError::Missing { names: Vec::new() }),
         }

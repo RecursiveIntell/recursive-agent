@@ -7,7 +7,11 @@
 
 mod egress;
 mod event;
+mod normal_chat_call_v2;
 mod normal_chat_operation;
+mod normal_chat_operation_v2;
+mod normal_chat_session;
+mod normal_chat_session_degraded;
 mod operation;
 mod provider_egress_operation;
 mod run_pack_projection;
@@ -20,12 +24,34 @@ pub use event::{
     project_runtime_events, validate_runtime_event_sequence, RuntimeEventKindV1,
     RuntimeEventSchemaV1, RuntimeEventV1,
 };
+pub use normal_chat_call_v2::{
+    parse_normal_chat_call_request_v2_bytes, NormalChatCallRequestSchemaV2, NormalChatCallRequestV2,
+};
 pub use normal_chat_operation::{
     derive_normal_chat_attempt_id, parse_normal_chat_attempt_v1_bytes,
     parse_normal_chat_operation_v1_bytes, NormalChatAttemptId, NormalChatAttemptIngressError,
     NormalChatAttemptSchemaV1, NormalChatAttemptV1, NormalChatBudgetV1,
     NormalChatOperationIngressError, NormalChatOperationSchemaV1, NormalChatOperationV1,
     NormalChatReplayV1,
+};
+pub use normal_chat_operation_v2::{
+    derive_normal_chat_attempt_id_v2, parse_normal_chat_attempt_v2_bytes,
+    parse_normal_chat_operation_v2_bytes, NormalChatAttemptIdV2, NormalChatAttemptSchemaV2,
+    NormalChatAttemptV2, NormalChatAttemptV2IngressError, NormalChatBudgetV2,
+    NormalChatOperationSchemaV2, NormalChatOperationV2, NormalChatOperationV2IngressError,
+    NormalChatReplayV2, NormalChatRequestProjectionSchemaV2, MAX_NORMAL_CHAT_REQUEST_BYTES_V2,
+};
+pub use normal_chat_session::{
+    parse_normal_chat_session_v1_bytes, NormalChatSessionIngressErrorV1, NormalChatSessionSchemaV1,
+    NormalChatSessionV1,
+};
+pub use normal_chat_session_degraded::{
+    parse_normal_chat_session_degradation_v1_bytes, NormalChatDegradedChildRefV1,
+    NormalChatSessionDegradationIngressErrorV1, NormalChatSessionDegradationSchemaV1,
+    NormalChatSessionDegradationV1, NormalChatUnknownSourceRefV1,
+    MAX_NORMAL_CHAT_SESSION_DEGRADATION_BYTES_V1,
+    NORMAL_CHAT_CHILD_ADMISSION_INTERRUPTED_REASON_V1, NORMAL_CHAT_CHILD_OUTCOME_UNKNOWN_REASON_V1,
+    NORMAL_CHAT_SESSION_CANCELLED_REASON_V1,
 };
 pub use operation::{
     derive_child_operation_id, derive_child_operation_material_digest,
@@ -228,6 +254,22 @@ pub fn derive_step_id(
     let owner =
         EffectIntentId::deterministic(STEP_ID_DOMAIN, digest.hex()).map_err(owner_id_error)?;
     CurrentStepId::from_owner(owner)
+}
+
+/// Canonical orchestration phase identity for child admission/link/closure.
+/// This is the existing runner preimage, shared with offline family verification;
+/// it does not issue authority or change previously derived identities.
+pub fn derive_child_receipt_step_id(
+    parent_run_id: &CurrentRunId,
+    proposal_digest: &ContentDigest,
+    phase: &str,
+) -> Result<CurrentStepId, ContractError> {
+    let call = ToolCallSpecV1 {
+        tool: format!("runner.child.{phase}"),
+        args: serde_json::json!({"proposal_digest": proposal_digest}),
+        frozen_clock: None,
+    };
+    derive_step_id(parent_run_id, usize::MAX, &format!("child-{phase}"), &call)
 }
 
 /// The one admitted permit-identity boundary. The binding digest covers all
@@ -582,6 +624,7 @@ struct RepoAuditArgsIngressV1 {
 
 #[derive(Debug, Deserialize)]
 #[serde(deny_unknown_fields)]
+#[expect(dead_code)]
 struct ShellArgsIngressV1 {
     command: String,
     #[serde(default)]
@@ -595,6 +638,24 @@ struct ShellArgsIngressV1 {
     timeout_ms: u64,
     #[serde(default = "default_ingress_output_limit")]
     max_output_bytes: u64,
+    #[serde(default)]
+    cgroup_limits: Option<CgroupLimitsIngress>,
+}
+
+/// Ingress-side cgroup limits mirroring the sandbox's CgroupLimits.
+/// Defined here to avoid circular dependency with recursive-agent-sandbox.
+#[derive(Debug, Deserialize, Default)]
+#[serde(deny_unknown_fields)]
+#[expect(dead_code)]
+struct CgroupLimitsIngress {
+    /// Maximum memory in bytes (maps to memory.max)
+    max_memory_bytes: Option<u64>,
+    /// Maximum number of processes/threads (maps to pids.max)
+    max_pids: Option<u64>,
+    /// CPU quota as microseconds per period (maps to cpu.max)
+    cpu_quota_us: Option<u64>,
+    /// CPU period in microseconds (maps to cpu.max period)
+    cpu_period_us: Option<u64>,
 }
 
 fn default_ingress_output_limit() -> u64 {
@@ -978,6 +1039,20 @@ pub enum ReceiptKindV1 {
     /// Current policy admitted one exact V3 provider-egress binding. The sole
     /// referenced artifact is a non-authorizing decision-evidence projection.
     ProviderEgressAdmitted,
+    /// Historical native V2 normal-chat consumption evidence, after StepStarted
+    /// and before its exact issue/consume projections. Not send authority.
+    NormalChatAttemptAdmittedV2,
+    /// Terminal local report for a consumed V2 effect, not a new effect or send.
+    NormalChatAttemptSettledV2,
+    /// Owner-observed expiry with no executor report. Distinct from SDK
+    /// settlement; never establishes send, provider failure, or new authority.
+    NormalChatAttemptRecoveredV1,
+    NormalChatAttemptInterruptedV2,
+    NormalChatPreparedAttemptRecoveredV1,
+    NormalChatUnconsumedAttemptRecoveredV1,
+    NormalChatPrechildAdmissionRecoveredV1,
+    /// Session metadata cause, requiring complete native-family proof in ledger.
+    NormalChatSessionDegradedV1,
     StepStarted,
     PermitIssued,
     PermitConsumed,
@@ -999,6 +1074,11 @@ pub enum ReceiptKindV1 {
     ChildClosed,
     RunFinalized,
 }
+
+/// Stable generic failed-run reason for the distinct missing-executor-outcome
+/// recovery lane. This is not a claim that provider execution failed.
+pub const NORMAL_CHAT_MISSING_EXECUTOR_OUTCOME_REASON_V1: &str =
+    "normal_chat_degraded:EXECUTOR_OUTCOME_MISSING_AFTER_EXPIRY";
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
@@ -1118,6 +1198,9 @@ enum StepLifecycle {
 
 /// Canonical lifecycle validator shared by live append, recovery, strict
 /// verification, replay, and existing-run status.
+pub const NORMAL_CHAT_INTERRUPTED_ADMISSION_REASON_V2: &str =
+    "normal_chat_admission:INTERRUPTED_BEFORE_RELEASE";
+
 pub fn validate_receipt_sequence(
     receipts: &[ReceiptV1],
     mode: LifecycleValidationMode,
@@ -1143,12 +1226,19 @@ pub fn validate_receipt_sequence(
     let mut linked_children = std::collections::BTreeSet::new();
     let mut closed_children = std::collections::BTreeSet::new();
     let mut provider_egress_admissions = std::collections::BTreeSet::new();
+    let mut normal_chat_admissions = std::collections::BTreeSet::new();
+    let mut session_degraded: Option<&ReceiptV1> = None;
     for (index, receipt) in receipts.iter().enumerate() {
         receipt.validate_material()?;
         if finalized {
             return Err(ContractError::Malformed(format!(
                 "receipt {index} occurs after terminal finalization"
             )));
+        }
+        if session_degraded.is_some() && receipt.kind != ReceiptKindV1::RunFinalized {
+            return Err(ContractError::Malformed(
+                "only exact finalization may follow the session cause".into(),
+            ));
         }
         match &run_id {
             Some(expected) if expected != &receipt.run_id => {
@@ -1174,6 +1264,7 @@ pub fn validate_receipt_sequence(
             }
             ReceiptKindV1::ProviderEgressAdmitted => {
                 if terminal.is_some()
+                    || normal_chat_admissions.contains(&receipt.step_id)
                     || !matches!(receipt.outcome, ReceiptOutcomeV1::Ok)
                     || receipt.artifact_refs.len() != 1
                     || steps.contains_key(&receipt.step_id)
@@ -1184,6 +1275,185 @@ pub fn validate_receipt_sequence(
                             .into(),
                     ));
                 }
+            }
+            ReceiptKindV1::NormalChatAttemptAdmittedV2 => {
+                if terminal.is_some()
+                    || !matches!(receipt.outcome, ReceiptOutcomeV1::Ok)
+                    || receipt.artifact_refs.len() != 1
+                    || provider_egress_admissions.contains(&receipt.step_id)
+                    || !normal_chat_admissions.insert(receipt.step_id.clone())
+                {
+                    return Err(ContractError::Malformed(
+                        "invalid V2 normal-chat admission metadata".into(),
+                    ));
+                }
+                require_step_state(
+                    &steps,
+                    &receipt.step_id,
+                    StepLifecycle::Started,
+                    "NormalChatAttemptAdmittedV2",
+                )?;
+            }
+            ReceiptKindV1::NormalChatAttemptSettledV2 => {
+                if terminal.is_some()
+                    || !normal_chat_admissions.contains(&receipt.step_id)
+                    || !(1..=2).contains(&receipt.artifact_refs.len())
+                    || !matches!(
+                        receipt.outcome,
+                        ReceiptOutcomeV1::Ok | ReceiptOutcomeV1::Failed { .. }
+                    )
+                {
+                    return Err(ContractError::Malformed(
+                        "invalid V2 settlement metadata transition".into(),
+                    ));
+                }
+                require_step_state(
+                    &steps,
+                    &receipt.step_id,
+                    StepLifecycle::PermitConsumed,
+                    "NormalChatAttemptSettledV2",
+                )?;
+                if matches!(receipt.outcome, ReceiptOutcomeV1::Failed { .. }) {
+                    set_terminal(&mut terminal, RunTerminalStateV1::Failed)?;
+                }
+                steps.insert(receipt.step_id.clone(), StepLifecycle::Complete);
+            }
+            ReceiptKindV1::NormalChatAttemptRecoveredV1 => {
+                if terminal.is_some()
+                    || !normal_chat_admissions.contains(&receipt.step_id)
+                    || receipt.artifact_refs.len() != 1
+                    || !matches!(&receipt.outcome, ReceiptOutcomeV1::Failed { reason }
+                        if reason == NORMAL_CHAT_MISSING_EXECUTOR_OUTCOME_REASON_V1)
+                {
+                    return Err(ContractError::Malformed(
+                        "invalid V1 expired normal-chat recovery transition".into(),
+                    ));
+                }
+                require_step_state(
+                    &steps,
+                    &receipt.step_id,
+                    StepLifecycle::PermitConsumed,
+                    "NormalChatAttemptRecoveredV1",
+                )?;
+                set_terminal(&mut terminal, RunTerminalStateV1::Failed)?;
+                steps.insert(receipt.step_id.clone(), StepLifecycle::Complete);
+            }
+            ReceiptKindV1::NormalChatAttemptInterruptedV2 => {
+                if terminal.is_some()
+                    || !normal_chat_admissions.contains(&receipt.step_id)
+                    || receipt.artifact_refs.len() != 1
+                    || !matches!(&receipt.outcome, ReceiptOutcomeV1::Failed { reason }
+                        if reason == NORMAL_CHAT_INTERRUPTED_ADMISSION_REASON_V2)
+                {
+                    return Err(ContractError::Malformed(
+                        "invalid V2 interrupted normal-chat recovery transition".into(),
+                    ));
+                }
+                require_step_state(
+                    &steps,
+                    &receipt.step_id,
+                    StepLifecycle::PermitConsumed,
+                    "NormalChatAttemptInterruptedV2",
+                )?;
+                set_terminal(&mut terminal, RunTerminalStateV1::Failed)?;
+                steps.insert(receipt.step_id.clone(), StepLifecycle::Complete);
+            }
+            ReceiptKindV1::NormalChatUnconsumedAttemptRecoveredV1 => {
+                if index != 1
+                    || receipts[0].kind != ReceiptKindV1::RunStarted
+                    || !steps.is_empty()
+                    || terminal.is_some()
+                    || receipt.artifact_refs.len() != 1
+                    || receipt.run_id != receipts[0].run_id
+                    || receipt.step_id != receipts[0].step_id
+                    || receipt.lineage != receipts[0].lineage
+                    || receipt.spec_digest != receipts[0].spec_digest
+                    || receipt.args_digest != receipts[0].args_digest
+                    || receipt.valid_time < receipts[0].valid_time
+                    || !matches!(&receipt.outcome,ReceiptOutcomeV1::Failed{reason} if reason==NORMAL_CHAT_INTERRUPTED_ADMISSION_REASON_V2)
+                {
+                    return Err(ContractError::Malformed(
+                        "invalid unconsumed interruption lifecycle".into(),
+                    ));
+                }
+                set_terminal(&mut terminal, RunTerminalStateV1::Failed)?;
+                session_degraded = Some(receipt);
+            }
+            ReceiptKindV1::NormalChatPreparedAttemptRecoveredV1 => {
+                if terminal.is_some()
+                    || steps.len() != 1
+                    || !normal_chat_admissions.is_empty()
+                    || !provider_egress_admissions.is_empty()
+                    || receipt.artifact_refs.len() != 1
+                    || !matches!(&receipt.outcome, ReceiptOutcomeV1::Failed { reason } if reason == NORMAL_CHAT_INTERRUPTED_ADMISSION_REASON_V2)
+                {
+                    return Err(ContractError::Malformed(
+                        "invalid prepared-only recovery".into(),
+                    ));
+                }
+                require_step_state(
+                    &steps,
+                    &receipt.step_id,
+                    StepLifecycle::PermitIssued,
+                    "NormalChatPreparedAttemptRecoveredV1",
+                )?;
+                steps.insert(receipt.step_id.clone(), StepLifecycle::Complete);
+                set_terminal(&mut terminal, RunTerminalStateV1::Failed)?;
+            }
+            ReceiptKindV1::NormalChatPrechildAdmissionRecoveredV1 => {
+                if terminal.is_some()
+                    || steps.len() != 1
+                    || receipt.artifact_refs.len() != 1
+                    || !normal_chat_admissions.is_empty()
+                    || !provider_egress_admissions.is_empty()
+                    || !matches!(&receipt.outcome, ReceiptOutcomeV1::Failed { reason } if reason == NORMAL_CHAT_INTERRUPTED_ADMISSION_REASON_V2)
+                    || closed_children.contains(&receipt.args_digest)
+                {
+                    return Err(ContractError::Malformed(
+                        "invalid pre-child terminal recovery".into(),
+                    ));
+                }
+                require_step_state(
+                    &steps,
+                    &receipt.step_id,
+                    StepLifecycle::Complete,
+                    "NormalChatPrechildAdmissionRecoveredV1",
+                )?;
+                prepared_children.remove(&receipt.args_digest);
+                linked_children.remove(&receipt.args_digest);
+                if prepared_children != linked_children || prepared_children != closed_children {
+                    return Err(ContractError::Malformed(
+                        "pre-child recovery leaves unrelated open admissions".into(),
+                    ));
+                }
+                set_terminal(&mut terminal, RunTerminalStateV1::Failed)?;
+                session_degraded = Some(receipt); // Shared exact-cause finalization fence, not an UNKNOWN assertion.
+            }
+            ReceiptKindV1::NormalChatSessionDegradedV1 => {
+                normal_chat_session_degraded::validate_session_degraded_marker(receipts, index)?;
+                if terminal.is_some()
+                    || steps.len() != 1
+                    || prepared_children.is_empty()
+                    || prepared_children != linked_children
+                    || prepared_children != closed_children
+                    || !provider_egress_admissions.is_empty()
+                    || !normal_chat_admissions.is_empty()
+                {
+                    return Err(ContractError::Malformed(
+                        "session cause requires exclusive complete root/child lifecycle".into(),
+                    ));
+                }
+                require_step_state(
+                    &steps,
+                    &receipt.step_id,
+                    StepLifecycle::Complete,
+                    "NormalChatSessionDegradedV1",
+                )?;
+                let state = receipt.outcome.terminal_state().ok_or_else(|| {
+                    ContractError::Malformed("session cause needs a terminal outcome".into())
+                })?;
+                set_terminal(&mut terminal, state)?;
+                session_degraded = Some(receipt);
             }
             ReceiptKindV1::StepStarted => {
                 if !matches!(receipt.outcome, ReceiptOutcomeV1::Ok)
@@ -1267,6 +1537,11 @@ pub fn validate_receipt_sequence(
                 }
             },
             ReceiptKindV1::ArtifactStored => {
+                if normal_chat_admissions.contains(&receipt.step_id) {
+                    return Err(ContractError::Malformed(
+                        "V2 effects require their typed settlement transition".into(),
+                    ));
+                }
                 if !matches!(
                     steps.get(&receipt.step_id),
                     Some(StepLifecycle::PermitConsumed | StepLifecycle::ArtifactStored)
@@ -1294,6 +1569,11 @@ pub fn validate_receipt_sequence(
                 steps.insert(receipt.step_id.clone(), StepLifecycle::ArtifactStored);
             }
             ReceiptKindV1::StepCompleted => {
+                if normal_chat_admissions.contains(&receipt.step_id) {
+                    return Err(ContractError::Malformed(
+                        "V2 effects require their typed settlement transition".into(),
+                    ));
+                }
                 require_step_state(
                     &steps,
                     &receipt.step_id,
@@ -1325,6 +1605,11 @@ pub fn validate_receipt_sequence(
                 steps.insert(receipt.step_id.clone(), StepLifecycle::Complete);
             }
             ReceiptKindV1::StepFailed => {
+                if normal_chat_admissions.contains(&receipt.step_id) {
+                    return Err(ContractError::Malformed(
+                        "V2 effects require their typed settlement transition".into(),
+                    ));
+                }
                 let state = receipt.outcome.terminal_state().ok_or_else(|| {
                     ContractError::Malformed("StepFailed must carry a terminal failure".into())
                 })?;
@@ -1407,6 +1692,21 @@ pub fn validate_receipt_sequence(
                     return Err(ContractError::Malformed(
                         "finalization without start".into(),
                     ));
+                }
+                if let Some(cause) = session_degraded {
+                    if receipt.run_id != cause.run_id
+                        || receipt.step_id != cause.step_id
+                        || receipt.spec_digest != cause.spec_digest
+                        || receipt.args_digest != cause.args_digest
+                        || receipt.lineage != cause.lineage
+                        || receipt.outcome != cause.outcome
+                        || receipt.valid_time != cause.valid_time
+                        || !receipt.artifact_refs.is_empty()
+                    {
+                        return Err(ContractError::Malformed(
+                            "finalization changes exact degraded session cause/binding/time".into(),
+                        ));
+                    }
                 }
                 let observed = receipt.outcome.terminal_state().ok_or_else(|| {
                     ContractError::Malformed("RunFinalized needs a terminal outcome".into())

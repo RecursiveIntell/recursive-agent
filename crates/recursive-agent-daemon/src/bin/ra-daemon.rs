@@ -72,6 +72,12 @@ enum Cmd {
         /// supplied through IPC. The native authority must be initialized first.
         #[arg(long)]
         context_authority_file: Option<PathBuf>,
+        /// Separate operator-owned normal-chat grant. IPC cannot enroll it.
+        #[arg(long, requires = "ares_home")]
+        egress_grant_file: Option<PathBuf>,
+        /// Exact home whose resolved path bytes are bound by the grant.
+        #[arg(long, requires = "egress_grant_file")]
+        ares_home: Option<PathBuf>,
     },
     /// Permanently fence a native external namespace and print its enrollment
     /// challenge. Does not enroll a controller or authorize any effect.
@@ -85,6 +91,14 @@ enum Cmd {
         production_verifier_file: PathBuf,
         #[arg(long)]
         production_write_root: PathBuf,
+    },
+    /// Print an observe-only grant proposal. This does not write/load a grant,
+    /// enroll authority, start a service, or execute a provider request.
+    EmitObserveEgressGrant {
+        #[arg(long)]
+        ares_home: PathBuf,
+        #[arg(long)]
+        expires_at: chrono::DateTime<chrono::Utc>,
     },
     /// Emit one canonical native operation envelope as JSON (for the Hermes
     /// integration and tests to submit over IPC).
@@ -330,6 +344,32 @@ fn load_context_authority(
     Ok(serde_json::from_slice(&bytes)?)
 }
 
+fn load_normal_chat_grant(
+    root: &std::path::Path,
+    grant_file: &std::path::Path,
+    ares_home: &std::path::Path,
+) -> Result<recursive_agent_policy::NormalChatGrantAuthorityV1, Box<dyn std::error::Error>> {
+    use std::os::unix::fs::DirBuilderExt;
+    let authority_root = root.join(".normal-chat-grants");
+    match fs::DirBuilder::new().mode(0o700).create(&authority_root) {
+        Ok(()) => fs::File::open(root)?.sync_all()?,
+        Err(error) if error.kind() == std::io::ErrorKind::AlreadyExists => {}
+        Err(error) => return Err(error.into()),
+    }
+    let fd = rustix::fs::open(
+        &authority_root,
+        rustix::fs::OFlags::RDONLY
+            | rustix::fs::OFlags::DIRECTORY
+            | rustix::fs::OFlags::NOFOLLOW
+            | rustix::fs::OFlags::CLOEXEC,
+        rustix::fs::Mode::empty(),
+    )?;
+    let store =
+        recursive_agent_policy::NormalChatEgressGrantStore::from_dir_fd(&fs::File::from(fd))?;
+    let digest = recursive_agent_policy::normal_chat_ares_home_digest(ares_home)?;
+    Ok(store.load_from_path(grant_file, &digest, chrono::Utc::now())?)
+}
+
 fn build_runtime(
     root: &std::path::Path,
     audit_root: Option<PathBuf>,
@@ -368,6 +408,8 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             production_verifier_file,
             production_write_root,
             context_authority_file,
+            egress_grant_file,
+            ares_home,
         } => {
             fs::create_dir_all(&root)?;
             let production_verifier = match (production_verifier_file.as_deref(), production_write_root.as_deref()) {
@@ -382,6 +424,13 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             let mut runtime = build_runtime(&root, audit_root, production_verifier)?;
             if let Some(path) = context_authority_file {
                 runtime = runtime.with_context_authority(&load_context_authority(&path)?)?;
+            }
+            if let (Some(grant_file), Some(home)) = (egress_grant_file, ares_home) {
+                runtime = runtime.with_normal_chat_egress_grant(load_normal_chat_grant(
+                    &root,
+                    &grant_file,
+                    &home,
+                )?);
             }
             // The socket parent is the directory containing the socket path.
             let parent = socket
@@ -411,6 +460,37 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             let verifier =
                 load_production_verifier(&production_verifier_file, &production_write_root)?;
             println!("{}", verifier.context_authority_digest()?);
+            Ok(())
+        }
+        Cmd::EmitObserveEgressGrant {
+            ares_home,
+            expires_at,
+        } => {
+            use recursive_agent_policy::{
+                NormalChatContentRetentionV1, NormalChatEgressCapsV1, NormalChatEgressGrantV1,
+                NormalChatEgressModeV1,
+            };
+            let home_digest = recursive_agent_policy::normal_chat_ares_home_digest(&ares_home)?;
+            let mut grant = NormalChatEgressGrantV1 {
+                schema: "recursive-agent.normal-chat-egress-grant/v1".into(),
+                revision: 1,
+                ares_home_digest: home_digest.clone(),
+                mode: NormalChatEgressModeV1::Observe,
+                any_route: true,
+                routes: Vec::new(),
+                caps: NormalChatEgressCapsV1 {
+                    max_attempts: 100,
+                    max_output_tokens: 100_000,
+                    max_wall_time_ms: 300_000,
+                    max_request_bytes: 1_048_576,
+                },
+                expires_at,
+                content_retention: NormalChatContentRetentionV1::DigestOnly,
+                policy_digest: String::new(),
+            };
+            grant.policy_digest = grant.computed_policy_digest()?;
+            grant.validate_at(&home_digest, chrono::Utc::now())?;
+            println!("{}", serde_json::to_string(&grant)?);
             Ok(())
         }
         Cmd::EmitEnvelope { text } => {

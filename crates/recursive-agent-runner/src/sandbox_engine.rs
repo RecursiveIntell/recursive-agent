@@ -27,6 +27,88 @@ use std::process::{Child, Command, Stdio};
 use std::sync::mpsc;
 use std::time::{Duration, Instant};
 
+#[cfg(target_os = "linux")]
+mod cgroup {
+    use std::fs;
+    use std::path::PathBuf;
+    use recursive_agent_sandbox::{CgroupLimits, SandboxError};
+
+    /// Create a dedicated cgroup for sandbox execution and write resource limits.
+    /// Returns the cgroup path if successful, or an error.
+    pub fn setup_cgroup(
+        limits: &CgroupLimits,
+    ) -> Result<Option<PathBuf>, SandboxError> {
+        let cgroup_base = PathBuf::from("/sys/fs/cgroup");
+        if !cgroup_base.exists() {
+            return Err(SandboxError::Io(
+                "cgroup v2 filesystem not mounted at /sys/fs/cgroup".into(),
+            ));
+        }
+
+        // Create a unique cgroup name for this sandbox execution
+        let cgroup_name = format!("recursive-agent-sandbox-{}", std::process::id());
+        let cgroup_path = cgroup_base.join(&cgroup_name);
+
+        // Create the cgroup directory
+        let create_result = fs::create_dir(&cgroup_path);
+        if let Err(e) = create_result {
+            // If we can't create cgroup (e.g., no permission), return None to indicate
+            // cgroup limits are not enforced rather than failing the entire sandbox
+            if e.kind() == std::io::ErrorKind::PermissionDenied {
+                return Ok(None);
+            }
+            return Err(SandboxError::Io(format!(
+                "failed to create cgroup directory: {e}"
+            )));
+        }
+
+        // Write memory limit if specified
+        if let Some(max_memory) = limits.max_memory_bytes {
+            if let Err(e) = fs::write(cgroup_path.join("memory.max"), max_memory.to_string()) {
+                let _ = fs::remove_dir(&cgroup_path);
+                return Err(SandboxError::Io(format!("failed to write memory.max: {e}")));
+            }
+        }
+
+        // Write pids limit if specified
+        if let Some(max_pids) = limits.max_pids {
+            if let Err(e) = fs::write(cgroup_path.join("pids.max"), max_pids.to_string()) {
+                let _ = fs::remove_dir(&cgroup_path);
+                return Err(SandboxError::Io(format!("failed to write pids.max: {e}")));
+            }
+        }
+
+        // Write CPU limits if specified
+        if let (Some(quota), Some(period)) = (limits.cpu_quota_us, limits.cpu_period_us) {
+            if let Err(e) = fs::write(cgroup_path.join("cpu.max"), format!("{quota} {period}")) {
+                let _ = fs::remove_dir(&cgroup_path);
+                return Err(SandboxError::Io(format!("failed to write cpu.max: {e}")));
+            }
+        } else if let Some(quota) = limits.cpu_quota_us {
+            // Default period is 100000us (100ms) if only quota is specified
+            if let Err(e) = fs::write(cgroup_path.join("cpu.max"), format!("{quota} 100000")) {
+                let _ = fs::remove_dir(&cgroup_path);
+                return Err(SandboxError::Io(format!("failed to write cpu.max: {e}")));
+            }
+        }
+
+        Ok(Some(cgroup_path))
+    }
+
+    /// Add the current process to the cgroup by writing its PID to cgroup.procs
+    #[expect(dead_code)]
+    pub fn attach_to_cgroup(cgroup_path: &std::path::Path) -> Result<(), SandboxError> {
+        let pid = std::process::id().to_string();
+        std::fs::write(cgroup_path.join("cgroup.procs"), pid)
+            .map_err(|e| SandboxError::Io(format!("failed to attach to cgroup: {e}")))
+    }
+
+    /// Clean up the cgroup after execution
+    pub fn cleanup_cgroup(cgroup_path: &PathBuf) {
+        let _ = std::fs::remove_dir(cgroup_path);
+    }
+}
+
 const DEFAULT_LAUNCHER: &str = "/usr/bin/bwrap";
 const BASH_TRAMPOLINE: &str = "/usr/bin/bash";
 const FD_HYGIENE_SCRIPT: &str = r#"set -eu
@@ -845,6 +927,30 @@ fn execute_linux(
             )),
         })?,
     );
+
+    // Set up cgroup limits if specified
+    let cgroup_path = if let Some(ref limits) = spec.cgroup_limits {
+        #[cfg(target_os = "linux")]
+        {
+            cgroup::setup_cgroup(limits)?
+        }
+        #[cfg(not(target_os = "linux"))]
+        {
+            return Err(SandboxError::UnsupportedPlatform {
+                enforcement: Box::new(failed_record(
+                    &prepared,
+                    launcher,
+                    None,
+                    Vec::new(),
+                    SandboxFailureReason::UnsupportedPlatform,
+                    EnforcementOutcome::Unavailable,
+                )),
+            });
+        }
+    } else {
+        None
+    };
+
     let nonce = setup_nonce()?;
     let argv = build_argv(spec, &prepared, &init, seccomp.as_ref(), &nonce)?;
     #[derive(Serialize)]
@@ -1026,58 +1132,66 @@ fn execute_linux(
     }
     enforce_retained_limit(&mut output.stderr, output_limit);
     let enforcement = EnforcementRecord {
-        mechanism: SandboxMechanism::Bubblewrap,
-        outcome: EnforcementOutcome::Enforced,
-        policy_digest: prepared.policy_digest,
-        launcher_path: DEFAULT_LAUNCHER.into(),
-        launcher_version: Some(version),
-        bash_trampoline_path: Some(BASH_TRAMPOLINE.into()),
-        launcher_argv: argv,
-        private_pid_namespace: true,
-        parent_death_control: true,
-        network_isolated: seccomp.is_some(),
-        network_mechanism: Some("shared_host_network_seccomp_socket_denial".into()),
-        seccomp_policy_digest: seccomp.as_ref().map(|policy| policy.digest.clone()),
-        denied_network_syscalls: seccomp
-            .as_ref()
-            .map_or_else(Vec::new, |policy| policy.denied_syscalls.clone()),
-        effective_operation_roots: prepared
-            .read_roots
-            .iter()
-            .map(|root| OperationRootEvidence {
-                path: root.destination.display().to_string(),
-                descriptor_identity: root.identity.clone(),
-                access_mode: "read".into(),
-            })
-            .chain(
-                prepared
-                    .write_roots
-                    .iter()
-                    .map(|root| OperationRootEvidence {
-                        path: root.destination.display().to_string(),
-                        descriptor_identity: root.identity.clone(),
-                        access_mode: "write".into(),
-                    }),
-            )
-            .collect(),
-        effective_runtime_read_roots: prepared
-            .runtime_roots
-            .iter()
-            .map(|root| root.destination.display().to_string())
-            .collect(),
-        trusted_executables: [&bwrap, &init, &prepared.command]
-            .into_iter()
-            .filter_map(|source| source.executable_authority.clone())
-            .collect(),
-        authorization: Some(authorization),
-        setup_proof_digest: Some(
-            recursive_agent_contracts::ContentDigest::compute(nonce.as_bytes()).to_string(),
-        ),
-        setup_proof_verified: true,
-        reason_code: None,
-    };
+            mechanism: SandboxMechanism::Bubblewrap,
+            outcome: EnforcementOutcome::Enforced,
+            policy_digest: prepared.policy_digest,
+            launcher_path: DEFAULT_LAUNCHER.into(),
+            launcher_version: Some(version),
+            bash_trampoline_path: Some(BASH_TRAMPOLINE.into()),
+            launcher_argv: argv,
+            private_pid_namespace: true,
+            parent_death_control: true,
+            network_isolated: seccomp.is_some(),
+            network_mechanism: Some("shared_host_network_seccomp_socket_denial".into()),
+            seccomp_policy_digest: seccomp.as_ref().map(|policy| policy.digest.clone()),
+            denied_network_syscalls: seccomp
+                .as_ref()
+                .map_or_else(Vec::new, |policy| policy.denied_syscalls.clone()),
+            effective_operation_roots: prepared
+                .read_roots
+                .iter()
+                .map(|root| OperationRootEvidence {
+                    path: root.destination.display().to_string(),
+                    descriptor_identity: root.identity.clone(),
+                    access_mode: "read".into(),
+                })
+                .chain(
+                    prepared
+                        .write_roots
+                        .iter()
+                        .map(|root| OperationRootEvidence {
+                            path: root.destination.display().to_string(),
+                            descriptor_identity: root.identity.clone(),
+                            access_mode: "write".into(),
+                        }),
+                )
+                .collect(),
+            effective_runtime_read_roots: prepared
+                .runtime_roots
+                .iter()
+                .map(|root| root.destination.display().to_string())
+                .collect(),
+            trusted_executables: [&bwrap, &init, &prepared.command]
+                        .into_iter()
+                        .filter_map(|source| source.executable_authority.clone())
+                        .collect(),
+                    authorization: Some(authorization),
+                    setup_proof_digest: Some(
+                        recursive_agent_contracts::ContentDigest::compute(nonce.as_bytes()).to_string(),
+                    ),
+                    setup_proof_verified: true,
+                    reason_code: None,
+                    cgroup_enforced: cgroup_path.is_some(),
+                };
     let wall_time_ms = u64::try_from(start.elapsed().as_millis())
         .map_err(|_| SandboxError::Wait("wall-time observation overflow".into()))?;
+
+    // Clean up cgroup if it was created
+    if let Some(cgroup_path) = cgroup_path {
+        #[cfg(target_os = "linux")]
+        cgroup::cleanup_cgroup(&cgroup_path);
+    }
+
     Ok(SandboxResult {
         exit_code: output.status.code(),
         stdout: String::from_utf8_lossy(&output.stdout.bytes).into_owned(),
@@ -1496,6 +1610,7 @@ fn failed_record(
         setup_proof_digest: None,
         setup_proof_verified: false,
         reason_code: Some(reason),
+        cgroup_enforced: false,
     }
 }
 

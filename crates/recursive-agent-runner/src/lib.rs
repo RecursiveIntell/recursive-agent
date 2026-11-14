@@ -31,8 +31,18 @@ pub use managed_admission::{
     ManagedReservation, ManagedUsageV1, PROVIDER_LANE, SANDBOX_PROCESS_LANE, TOOL_LANE,
 };
 pub use runtime::{
-    NativeOperationExecutor, RuntimeCancelResultV1, RuntimeHandleV1, RuntimeLiveParentV2,
-    RuntimeService, RuntimeServiceError, RuntimeStatusV1,
+    NativeOperationExecutor, NormalChatAttemptInterruptionV2,
+    NormalChatInterruptedRuntimeRecoveryInterruptionV2, NormalChatParentCloseInterruptionV2,
+    NormalChatParentRecoveryInterruptionV1, NormalChatPrechildRuntimeRecoveryInterruptionV1,
+    NormalChatPreparedRuntimeRecoveryInterruptionV1, NormalChatRuntimeRecoveryInterruptionV1,
+    NormalChatSessionBootstrapInterruptionV1, NormalChatTerminalInterruptionV2,
+    RuntimeCancelResultV1, RuntimeHandleV1, RuntimeLiveParentV2, RuntimeNormalChatBeginV2,
+    RuntimeNormalChatClosedSessionV2, RuntimeNormalChatDispatchV2, RuntimeNormalChatExistingV2,
+    RuntimeNormalChatFreshV2, RuntimeNormalChatInterruptedRecoveredV2,
+    RuntimeNormalChatPrechildRecoveredV1, RuntimeNormalChatPreparedRecoveredV1,
+    RuntimeNormalChatReadbackV2, RuntimeNormalChatRecoveredSessionV1, RuntimeNormalChatRecoveredV1,
+    RuntimeNormalChatRecoveryInspectionV1, RuntimeNormalChatSessionV1,
+    RuntimeNormalChatSettlementV2, RuntimeService, RuntimeServiceError, RuntimeStatusV1,
 };
 pub use scheduler::{
     LeaseGrantV1, OperationRow, ProjectedState, SchedulerStore, SchedulerStoreError,
@@ -67,6 +77,12 @@ use recursive_agent_policy::{
     ValidatedProviderEgressAdmissionV1,
 };
 use thiserror::Error;
+
+pub use runtime::{
+    NormalChatUnconsumedRuntimeRecoveryInterruptionV1, RuntimeNormalChatUnconsumedRecoveredV1,
+};
+
+pub use runtime::RuntimeNormalChatRecoveryCompositionV1;
 
 #[cfg(test)]
 use recursive_agent_contracts::derive_run_id;
@@ -245,8 +261,14 @@ struct PinnedRunRoot {
 
 impl PinnedRunRoot {
     fn open(out_root: &Path, child_name: &str) -> Result<Self, RunError> {
-        let parent = open_directory_tree(out_root, true)?;
-        let root = open_named_directory(&parent, std::ffi::OsStr::new(child_name), true)?;
+        Self::open_mode(out_root, child_name, true)
+    }
+    fn open_existing(out_root: &Path, child_name: &str) -> Result<Self, RunError> {
+        Self::open_mode(out_root, child_name, false)
+    }
+    fn open_mode(out_root: &Path, child_name: &str, create: bool) -> Result<Self, RunError> {
+        let parent = open_directory_tree(out_root, create)?;
+        let root = open_named_directory(&parent, std::ffi::OsStr::new(child_name), create)?;
         let parent_metadata = parent.metadata()?;
         let metadata = root.metadata()?;
         if !metadata.is_dir()
@@ -2287,6 +2309,7 @@ mod pinned_root_tests {
             allow_network: false,
             timeout_ms: 2_000,
             max_output_bytes: 1_024,
+            cgroup_limits: None,
         };
         Ok(RunSpecV1 {
             name: "pinned-root-race".into(),

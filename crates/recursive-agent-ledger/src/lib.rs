@@ -1,5 +1,43 @@
 //! Locked, crash-recoverable receipt chain and descriptor-relative artifact store.
 
+#[cfg(test)]
+mod snapshot_validation_tests;
+
+mod normal_chat_interrupted_recovery_v2;
+mod normal_chat_native_family_v1;
+mod normal_chat_prechild_recovery_v1;
+mod normal_chat_prepared_recovery_v1;
+mod normal_chat_unconsumed_recovery_v1;
+pub use normal_chat_unconsumed_recovery_v1::{
+    publish_unconsumed_normal_chat_child_recovery_from_dir_fd,
+    verify_closed_unconsumed_normal_chat_child_from_dir_fd, VerifiedNormalChatUnconsumedChildV1,
+};
+mod normal_chat_recovery_v1;
+pub use normal_chat_prechild_recovery_v1::normal_chat_prechild_recovery_plan_v1;
+pub use normal_chat_prepared_recovery_v1::{
+    publish_prepared_normal_chat_child_recovery_from_dir_fd,
+    verify_closed_prepared_normal_chat_child_from_dir_fd, VerifiedNormalChatPreparedChildV1,
+};
+mod normal_chat_session_gate;
+pub use normal_chat_session_gate::{NormalChatSessionGateErrorV1, NormalChatSessionGateV1};
+mod normal_chat_v2;
+pub use normal_chat_native_family_v1::{
+    prepare_normal_chat_session_degradation_from_runtime_root_fd,
+    prepare_normal_chat_session_degradation_from_runtime_root_fd_with_observer,
+    recover_normal_chat_session_degradation_from_runtime_root_fd,
+    recover_normal_chat_session_degradation_from_runtime_root_fd_with_observer,
+    recover_normal_chat_session_degradation_from_runtime_root_fd_with_observers,
+    verify_closed_normal_chat_child_from_dir_fd,
+    verify_closed_normal_chat_family_from_runtime_root_fd,
+    verify_closed_normal_chat_family_from_runtime_root_fd_with_observer,
+    verify_degraded_normal_chat_session_from_runtime_root_fd,
+    verify_degraded_normal_chat_session_from_runtime_root_fd_with_observer,
+    NormalChatSessionDegradationPreparationErrorV1, NormalChatSessionPublicationInterruptionV1,
+    PreparedNormalChatSessionDegradationV1, VerifiedNormalChatClosedChildV1,
+    VerifiedNormalChatClosedFamilyV1, VerifiedNormalChatDegradedSessionV1,
+    VerifiedNormalChatDispositionV1, VerifiedNormalChatFamilyChildV1,
+};
+
 use std::collections::{BTreeMap, BTreeSet};
 use std::fs::File;
 use std::io::{Read, Seek, SeekFrom, Write};
@@ -463,6 +501,8 @@ pub enum LedgerError {
     InjectedRunPackExportInterruption(RunPackExportStage),
     #[error("child link verification failed: {0}")]
     ChildLinkInvalid(String),
+    #[error("normal-chat session marker requires scoped native-family proof")]
+    NormalChatFamilyScopeRequired,
     #[error("run pack is invalid: {0}")]
     RunPackInvalid(String),
 }
@@ -750,9 +790,23 @@ pub fn open(paths: &RunPaths) -> Result<ChainHandle, LedgerError> {
 }
 
 pub fn open_from_dir_fd(paths: &RunPaths, root: &File) -> Result<ChainHandle, LedgerError> {
+    open_chain_from_fd(paths, root, true)
+}
+/// Open retained history without reconstructing a missing artifact directory.
+pub fn open_existing_from_dir_fd(
+    paths: &RunPaths,
+    root: &File,
+) -> Result<ChainHandle, LedgerError> {
+    open_chain_from_fd(paths, root, false)
+}
+fn open_chain_from_fd(
+    paths: &RunPaths,
+    root: &File,
+    create: bool,
+) -> Result<ChainHandle, LedgerError> {
     let root_identity = run_root_identity(root)?;
     let root_handle = Arc::new(root.try_clone()?);
-    let _artifacts = open_child_directory(&root_handle, "artifacts", true)?;
+    let _artifacts = open_child_directory(&root_handle, "artifacts", create)?;
     with_exclusive_lock(&root_handle, |root| {
         let (scan, created_at) = reconcile_locked(root)?;
         Ok(ChainHandle {
@@ -775,8 +829,23 @@ fn existing_creation_time(root: &File) -> Option<DateTime<Utc>> {
 }
 
 fn reconcile_locked(root: &File) -> Result<(LogScan, DateTime<Utc>), LedgerError> {
+    let (validated, created_at) = reconcile_validated_locked(root)?;
+    Ok((validated.scan, created_at))
+}
+
+// Private, ephemeral result for one immutable scan inside one ledger flock.
+// Never retained across unlock, mutation, observers or publication boundaries.
+struct ValidatedLogScan {
+    scan: LogScan,
+    lifecycle: recursive_agent_contracts::LifecycleValidation,
+    verified_artifacts: u64,
+}
+
+fn reconcile_validated_locked(
+    root: &File,
+) -> Result<(ValidatedLogScan, DateTime<Utc>), LedgerError> {
     let scan = recover_and_scan(root)?;
-    validate_authoritative_sequence(
+    let (lifecycle, verified_artifacts) = validate_authoritative_sequence(
         root,
         &scan.receipts,
         LifecycleValidationMode::AppendInProgress,
@@ -789,7 +858,14 @@ fn reconcile_locked(root: &File) -> Result<(LogScan, DateTime<Utc>), LedgerError
     if current.as_ref() != Some(&expected) {
         write_metadata_atomic(root, &expected, None)?;
     }
-    Ok((scan, created_at))
+    Ok((
+        ValidatedLogScan {
+            scan,
+            lifecycle,
+            verified_artifacts,
+        },
+        created_at,
+    ))
 }
 
 fn metadata_for(scan: &LogScan, created_at: DateTime<Utc>) -> ChainMeta {
@@ -836,6 +912,26 @@ fn write_metadata_atomic(
     Ok(())
 }
 
+// The caller owns the ledger flock and has already verified its exact retained
+// prefix. This confirms durability only; it grants no semantic or send authority.
+fn sync_retained_receipt_log_locked(root: &File) -> Result<(), LedgerError> {
+    let fd = secure_open_at(
+        root,
+        "receipts.ndjson",
+        OFlags::RDONLY | OFlags::NOFOLLOW | OFlags::CLOEXEC | OFlags::NONBLOCK,
+        Mode::empty(),
+    )?;
+    let log = File::from(fd);
+    if !log.metadata()?.is_file() {
+        return Err(LedgerError::MetadataMismatch(
+            "sync receipt log is not regular".into(),
+        ));
+    }
+    log.sync_all()?;
+    root.sync_all()?;
+    Ok(())
+}
+
 #[derive(Debug)]
 pub struct ChainHandle {
     paths: RunPaths,
@@ -868,6 +964,66 @@ impl ChainHandle {
         ArtifactStore::from_run_root_fd(&self.root, true)
     }
 
+    /// Reconcile and durably sync the exact retained prefix without appending
+    /// a receipt. Used when an append ACK was lost after a complete record write.
+    /// A changed/truncated cached prefix is rejected, never promoted to closure.
+    /// Fresh bootstrap only: persist an explicit empty receipt file before the
+    /// family captures its storage checkpoint. Never used by historical readers.
+    pub fn initialize_empty_receipt_log(&self) -> Result<(), LedgerError> {
+        if self.length != 0 {
+            return Err(LedgerError::MetadataMismatch("nonempty bootstrap".into()));
+        }
+        with_exclusive_lock(&self.root, |root| {
+            let (scan, _) = reconcile_locked(root)?;
+            if !scan.receipts.is_empty() {
+                return Err(LedgerError::MetadataMismatch(
+                    "nonempty bootstrap source".into(),
+                ));
+            }
+            let fd = secure_open_at(
+                root,
+                "receipts.ndjson",
+                OFlags::WRONLY | OFlags::CREATE | OFlags::EXCL | OFlags::NOFOLLOW | OFlags::CLOEXEC,
+                Mode::RUSR | Mode::WUSR,
+            )?;
+            File::from(fd).sync_all()?;
+            root.sync_all()?;
+            Ok(())
+        })
+    }
+    pub fn sync_all(&mut self) -> Result<(), LedgerError> {
+        let (scan, created_at) = with_exclusive_lock(&self.root, |root| {
+            let (scan, created_at) = reconcile_locked(root)?;
+            let retained_head = if self.length == 0 {
+                genesis_digest()
+            } else {
+                let last = scan
+                    .receipts
+                    .get((self.length - 1) as usize)
+                    .ok_or_else(|| {
+                        LedgerError::MetadataMismatch("sync lost retained chain prefix".into())
+                    })?;
+                chain_digest_from_raw(&last.prev_chain_digest, &last.canonical_bytes()?)?
+            };
+            if retained_head != self.head {
+                return Err(LedgerError::MetadataMismatch(
+                    "sync changed retained chain prefix".into(),
+                ));
+            }
+            if scan.length > 0 {
+                sync_retained_receipt_log_locked(root)?;
+            } else {
+                root.sync_all()?;
+            }
+            Ok((scan, created_at))
+        })?;
+        self.head = scan.head;
+        self.length = scan.length;
+        self.receipt_ids = scan.receipt_ids;
+        self.created_at = created_at;
+        Ok(())
+    }
+
     pub fn append(&mut self, receipt: ReceiptV1) -> Result<ContentDigest, LedgerError> {
         self.append_with_interruption(receipt, None)
     }
@@ -878,7 +1034,7 @@ impl ChainHandle {
         interrupt_after: Option<AppendStage>,
     ) -> Result<ContentDigest, LedgerError> {
         let result = with_exclusive_lock(&self.root, |root| {
-            let (mut scan, _) = reconcile_locked(root)?;
+            let (scan, _) = reconcile_locked(root)?;
             validate_append(&scan, &receipt)?;
             let mut proposed = scan.receipts.clone();
             proposed.push(receipt.clone());
@@ -887,50 +1043,7 @@ impl ChainHandle {
                 &proposed,
                 LifecycleValidationMode::AppendInProgress,
             )?;
-            let canonical = receipt.canonical_bytes()?;
-            let mut line = canonical.clone();
-            line.push(b'\n');
-            let log_fd = secure_open_at(
-                root,
-                "receipts.ndjson",
-                OFlags::WRONLY
-                    | OFlags::CREATE
-                    | OFlags::APPEND
-                    | OFlags::NOFOLLOW
-                    | OFlags::CLOEXEC
-                    | OFlags::NONBLOCK,
-                Mode::RUSR | Mode::WUSR,
-            )?;
-            let mut log = File::from(log_fd);
-            if !log.metadata()?.is_file() {
-                return Err(LedgerError::MetadataMismatch(
-                    "receipt log must be a regular file".into(),
-                ));
-            }
-            if interrupt_after == Some(AppendStage::PartialRecord) {
-                let split = line.len() / 2;
-                log.write_all(&line[..split])?;
-                log.sync_all()?;
-                return Err(LedgerError::InjectedInterruption(
-                    AppendStage::PartialRecord,
-                ));
-            }
-            log.write_all(&line)?;
-            if interrupt_after == Some(AppendStage::FullReceiptAppend) {
-                return Err(LedgerError::InjectedInterruption(
-                    AppendStage::FullReceiptAppend,
-                ));
-            }
-            log.sync_all()?;
-            if interrupt_after == Some(AppendStage::LogFsync) {
-                return Err(LedgerError::InjectedInterruption(AppendStage::LogFsync));
-            }
-            scan.head = chain_digest_from_raw(&scan.head, &canonical)?;
-            scan.length += 1;
-            scan.receipt_ids.insert(receipt.receipt_id.to_string());
-            scan.receipts.push(receipt);
-            write_metadata_atomic(root, &metadata_for(&scan, self.created_at), interrupt_after)?;
-            Ok(scan)
+            persist_validated_receipt_locked(root, scan, receipt, self.created_at, interrupt_after)
         });
         match result {
             Ok(scan) => {
@@ -942,6 +1055,61 @@ impl ChainHandle {
             Err(error) => Err(error),
         }
     }
+}
+
+// Private persistence only. Both callers must validate their complete proposal
+// under the parent flock first; this is not an authoritative validation API.
+fn persist_validated_receipt_locked(
+    root: &File,
+    mut scan: LogScan,
+    receipt: ReceiptV1,
+    created_at: DateTime<Utc>,
+    interrupt_after: Option<AppendStage>,
+) -> Result<LogScan, LedgerError> {
+    validate_append(&scan, &receipt)?;
+    let canonical = receipt.canonical_bytes()?;
+    let mut line = canonical.clone();
+    line.push(b'\n');
+    let log_fd = secure_open_at(
+        root,
+        "receipts.ndjson",
+        OFlags::WRONLY
+            | OFlags::CREATE
+            | OFlags::APPEND
+            | OFlags::NOFOLLOW
+            | OFlags::CLOEXEC
+            | OFlags::NONBLOCK,
+        Mode::RUSR | Mode::WUSR,
+    )?;
+    let mut log = File::from(log_fd);
+    if !log.metadata()?.is_file() {
+        return Err(LedgerError::MetadataMismatch(
+            "receipt log must be a regular file".into(),
+        ));
+    }
+    if interrupt_after == Some(AppendStage::PartialRecord) {
+        log.write_all(&line[..line.len() / 2])?;
+        log.sync_all()?;
+        return Err(LedgerError::InjectedInterruption(
+            AppendStage::PartialRecord,
+        ));
+    }
+    log.write_all(&line)?;
+    if interrupt_after == Some(AppendStage::FullReceiptAppend) {
+        return Err(LedgerError::InjectedInterruption(
+            AppendStage::FullReceiptAppend,
+        ));
+    }
+    log.sync_all()?;
+    if interrupt_after == Some(AppendStage::LogFsync) {
+        return Err(LedgerError::InjectedInterruption(AppendStage::LogFsync));
+    }
+    scan.head = chain_digest_from_raw(&scan.head, &canonical)?;
+    scan.length += 1;
+    scan.receipt_ids.insert(receipt.receipt_id.to_string());
+    scan.receipts.push(receipt);
+    write_metadata_atomic(root, &metadata_for(&scan, created_at), interrupt_after)?;
+    Ok(scan)
 }
 
 fn validate_append(scan: &LogScan, receipt: &ReceiptV1) -> Result<(), LedgerError> {
@@ -1006,36 +1174,127 @@ pub fn appendable_snapshot_expected_run_from_dir_fd(
     expected_run_id: &CurrentRunId,
 ) -> Result<VerifiedReceiptSnapshot, LedgerError> {
     with_exclusive_lock(root, |root| {
+        let (validated, _) = reconcile_validated_locked(root)?;
+        appendable_snapshot_from_validation(expected_run_id, validated)
+    })
+}
+
+/// Verify retained nonterminal evidence without creating, reconciling or
+/// repairing receipt logs/metadata. Malformed or missing projections refuse.
+/// This is evidence only; it grants no send or recovery authority.
+pub fn read_only_appendable_snapshot_expected_run_from_dir_fd(
+    root: &File,
+    expected_run_id: &CurrentRunId,
+) -> Result<VerifiedReceiptSnapshot, LedgerError> {
+    with_exclusive_lock(root, |root| {
+        let scan = scan_existing_read_only(root)?;
+        validate_chain_metadata_read_only(root, &scan)?;
+        appendable_snapshot_for_scan(root, expected_run_id, scan)
+    })
+}
+
+/// Existing admission-prefix reader. Empty logs have no verified run identity;
+/// this never labels an empty directory as an admitted run. Missing/malformed
+/// metadata refuses before existing owner tail/projection reconciliation.
+pub fn recoverable_normal_chat_preflight_snapshot_from_dir_fd(
+    root: &File,
+    expected_run_id: &CurrentRunId,
+) -> Result<VerifiedReceiptSnapshot, LedgerError> {
+    with_exclusive_lock(root, |root| {
+        let bytes = read_bounded_regular_at(root, "chain.meta", MAX_CHAIN_META_BYTES)?;
+        let metadata: ChainMeta = serde_json::from_slice(&bytes)?;
+        if recursive_agent_contracts::jcs_canonical(&metadata)? != bytes {
+            return Err(LedgerError::MetadataMismatch(
+                "noncanonical admission metadata".into(),
+            ));
+        }
+        let scan = recover_and_scan(root)?;
+        let mut checkpoint = genesis_digest();
+        for row in scan.receipts.iter().take(metadata.length as usize) {
+            checkpoint = chain_digest_from_raw(&checkpoint, &row.canonical_bytes()?)?;
+        }
+        if metadata.length > scan.length
+            || metadata.genesis != genesis_digest().to_string()
+            || metadata.head != checkpoint.to_string()
+        {
+            return Err(LedgerError::MetadataMismatch(
+                "admission metadata conflicts with retained prefix".into(),
+            ));
+        }
         let (scan, _) = reconcile_locked(root)?;
-        let (lifecycle, verified_artifacts) = validate_authoritative_sequence(
-            root,
-            &scan.receipts,
-            LifecycleValidationMode::AppendInProgress,
-        )?;
-        if lifecycle.run_id.as_ref() != Some(expected_run_id) {
-            return Err(LedgerError::ExpectedRunMismatch {
-                expected: expected_run_id.to_string(),
-                observed: lifecycle
-                    .run_id
-                    .as_ref()
-                    .map_or_else(|| "none".into(), ToString::to_string),
-            });
+        if !scan.receipts.is_empty() {
+            return appendable_snapshot_for_scan(root, expected_run_id, scan);
         }
         Ok(VerifiedReceiptSnapshot {
             verification: ChainVerification {
                 ok: true,
                 current_strict_success: false,
-                length: scan.length,
+                length: 0,
                 final_head: scan.head.to_string(),
-                verified_artifacts,
-                terminal_state: lifecycle
-                    .terminal_state
-                    .unwrap_or(RunTerminalStateV1::LegacyUnknown),
-                verified_run_id: lifecycle.run_id,
+                verified_artifacts: 0,
+                terminal_state: RunTerminalStateV1::LegacyUnknown,
+                verified_run_id: None,
                 first_divergence: None,
             },
             receipts: Arc::from(scan.receipts),
         })
+    })
+}
+
+fn appendable_snapshot_for_scan(
+    root: &File,
+    expected_run_id: &CurrentRunId,
+    scan: LogScan,
+) -> Result<VerifiedReceiptSnapshot, LedgerError> {
+    let (lifecycle, verified_artifacts) = validate_authoritative_sequence(
+        root,
+        &scan.receipts,
+        LifecycleValidationMode::AppendInProgress,
+    )?;
+    appendable_snapshot_from_validation(
+        expected_run_id,
+        ValidatedLogScan {
+            scan,
+            lifecycle,
+            verified_artifacts,
+        },
+    )
+}
+
+// Consumed inside the same flock that proved this exact immutable scan. No
+// public constructor, persisted cache, or later publication check is removed.
+fn appendable_snapshot_from_validation(
+    expected_run_id: &CurrentRunId,
+    validated: ValidatedLogScan,
+) -> Result<VerifiedReceiptSnapshot, LedgerError> {
+    let ValidatedLogScan {
+        scan,
+        lifecycle,
+        verified_artifacts,
+    } = validated;
+    if lifecycle.run_id.as_ref() != Some(expected_run_id) {
+        return Err(LedgerError::ExpectedRunMismatch {
+            expected: expected_run_id.to_string(),
+            observed: lifecycle
+                .run_id
+                .as_ref()
+                .map_or_else(|| "none".into(), ToString::to_string),
+        });
+    }
+    Ok(VerifiedReceiptSnapshot {
+        verification: ChainVerification {
+            ok: true,
+            current_strict_success: false,
+            length: scan.length,
+            final_head: scan.head.to_string(),
+            verified_artifacts,
+            terminal_state: lifecycle
+                .terminal_state
+                .unwrap_or(RunTerminalStateV1::LegacyUnknown),
+            verified_run_id: lifecycle.run_id,
+            first_divergence: None,
+        },
+        receipts: Arc::from(scan.receipts),
     })
 }
 
@@ -1214,6 +1473,18 @@ pub fn verify_child_links_in_runtime_root(
                 if closed.insert(proposal, link).is_some() {
                     return Err(LedgerError::ChildLinkInvalid(
                         "duplicate child closure".into(),
+                    ));
+                }
+            }
+            ReceiptKindV1::NormalChatPrechildAdmissionRecoveredV1 => {
+                // The authoritative sequence validator checked the closed typed
+                // parent-only disposition and exact immutable prefix. This is
+                // not a fabricated child closure or an ordinary close bypass.
+                prepared.remove(&proposal);
+                linked.remove(&proposal);
+                if closed.contains_key(&proposal) {
+                    return Err(LedgerError::ChildLinkInvalid(
+                        "pre-child recovery conflicts with a child terminal".into(),
                     ));
                 }
             }
@@ -1414,6 +1685,10 @@ fn scan_existing_read_only(root: &File) -> Result<LogScan, LedgerError> {
 }
 
 fn validate_chain_metadata_read_only(root: &File, scan: &LogScan) -> Result<(), LedgerError> {
+    read_chain_metadata_read_only(root, scan).map(|_| ())
+}
+
+fn read_chain_metadata_read_only(root: &File, scan: &LogScan) -> Result<Vec<u8>, LedgerError> {
     let bytes =
         read_bounded_regular_at(root, "chain.meta", MAX_CHAIN_META_BYTES).map_err(|error| {
             if error.kind() == std::io::ErrorKind::NotFound {
@@ -1433,7 +1708,7 @@ fn validate_chain_metadata_read_only(root: &File, scan: &LogScan) -> Result<(), 
             "chain metadata does not bind the receipt chain".into(),
         ));
     }
-    Ok(())
+    Ok(bytes)
 }
 
 fn strict_pack_snapshot(
@@ -2112,6 +2387,26 @@ fn validate_authoritative_sequence(
     receipts: &[ReceiptV1],
     mode: LifecycleValidationMode,
 ) -> Result<(recursive_agent_contracts::LifecycleValidation, u64), LedgerError> {
+    #[cfg(test)]
+    snapshot_validation_tests::VALIDATION_CALLS.with(|count| count.set(count.get() + 1));
+    // Shape-valid session metadata is NOT native-family proof. No generic
+    // snapshot/append/replay/pack route can claim scoped verification. The
+    // future scoped owner must establish that join before exposing a result.
+    if receipts
+        .iter()
+        .any(|r| r.kind == ReceiptKindV1::NormalChatSessionDegradedV1)
+    {
+        return Err(LedgerError::NormalChatFamilyScopeRequired);
+    }
+    validate_local_authoritative_sequence(root, receipts, mode)
+}
+// Private local body; never an adapter/public skip-marker surface. Scoped
+// terminal owner calls it only after complete native source/suffix equality.
+fn validate_local_authoritative_sequence(
+    root: &File,
+    receipts: &[ReceiptV1],
+    mode: LifecycleValidationMode,
+) -> Result<(recursive_agent_contracts::LifecycleValidation, u64), LedgerError> {
     let lifecycle = validate_receipt_sequence(receipts, mode)?;
     let store = ArtifactStore::open_existing_from_root(root)?;
     let mut verified = BTreeSet::new();
@@ -2175,6 +2470,17 @@ fn validate_permit_continuity(
         CurrentStepId,
         (usize, ProviderEgressAdmissionEvidenceV1),
     >::new();
+    let normal_chat_admissions = normal_chat_v2::read_admissions(receipts, store)?;
+    normal_chat_v2::validate_settlements(receipts, store, &normal_chat_admissions)?;
+    normal_chat_recovery_v1::validate_recoveries(receipts, store, &normal_chat_admissions)?;
+    normal_chat_interrupted_recovery_v2::validate_recoveries(
+        receipts,
+        store,
+        &normal_chat_admissions,
+    )?;
+    normal_chat_unconsumed_recovery_v1::validate_unconsumed_recoveries(receipts, store)?;
+    normal_chat_prepared_recovery_v1::validate_prepared_recoveries(receipts, store)?;
+    normal_chat_prechild_recovery_v1::validate_prechild_recoveries(receipts, store)?;
     for (index, receipt) in receipts.iter().enumerate() {
         if receipt.kind != ReceiptKindV1::ProviderEgressAdmitted {
             continue;
@@ -2301,6 +2607,13 @@ fn validate_permit_continuity(
                 &format!("permit evidence validation failed: {error}"),
             )
         })?;
+        normal_chat_v2::validate_transition(
+            receipt,
+            &evidence,
+            &bytes,
+            index,
+            &normal_chat_admissions,
+        )?;
         let state_matches = matches!(
             (&receipt.kind, &evidence.state),
             (ReceiptKindV1::PermitIssued, PermitEvidenceStateV1::Issued)
@@ -2360,7 +2673,10 @@ fn validate_permit_continuity(
                     control_states
                         .insert(evidence.permit_id.clone(), PermitEvidenceStateV1::Issued);
                 } else {
-                    if evidence.binding.effect.network_allowed {
+                    if evidence.binding.tool == recursive_agent_policy::NORMAL_CHAT_EFFECT_TOOL_V2 {
+                        // Exact V2 schema, scope, lineage and historical projection
+                        // were required above, independent of the network bit.
+                    } else if evidence.binding.effect.network_allowed {
                         let (admission_index, admission) = provider_admissions
                             .get(&receipt.step_id)
                             .ok_or_else(|| {
@@ -2544,6 +2860,124 @@ impl ArtifactStore {
 
     pub fn artifact_root_identity(&self) -> RunRootIdentity {
         self.artifact_root_identity
+    }
+
+    /// Prove this retained store still names the artifacts child of this pinned
+    /// run root. Missing/replaced directories reject; no rebinding or creation.
+    pub fn require_locator_matches(&self, root: &File) -> Result<(), LedgerError> {
+        let current = Self::from_run_root_fd(root, false)?;
+        if current.run_root_identity != self.run_root_identity
+            || current.artifact_root_identity != self.artifact_root_identity
+        {
+            return Err(LedgerError::MetadataMismatch(
+                "artifact store locator changed".into(),
+            ));
+        }
+        Ok(())
+    }
+
+    /// Require exactly the referenced content-addressed payload/descriptor set.
+    /// Unreferenced interrupted artifacts are recovery-required, not proof that
+    /// admission never began. No files are removed or silently ignored.
+    pub fn require_exact_inventory(
+        &self,
+        descriptors: &[ArtifactDescriptorV1],
+    ) -> Result<(), LedgerError> {
+        self.check_inventory(descriptors, true)
+    }
+    /// Recovery may retain only a subset of exact policy-derived future
+    /// artifacts. Any present payload must have its complete matching sidecar;
+    /// unknown, partial or conflicting material is not silently repaired.
+    pub fn require_inventory_subset(
+        &self,
+        descriptors: &[ArtifactDescriptorV1],
+    ) -> Result<(), LedgerError> {
+        self.check_inventory(descriptors, false)
+    }
+    /// Bounded require-existing inventory discovery. Every payload/sidecar pair
+    /// must be complete and canonical; no orphan is silently skipped or repaired.
+    pub fn verified_inventory(&self) -> Result<Vec<ArtifactDescriptorV1>, LedgerError> {
+        let mut descriptors = Vec::new();
+        let mut count = 0usize;
+        for entry in rustix::fs::Dir::read_from(self.dir.as_fd()).map_err(std::io::Error::from)? {
+            let entry = entry.map_err(std::io::Error::from)?;
+            let name = entry.file_name().to_bytes();
+            if matches!(name, b"." | b"..") {
+                continue;
+            }
+            count += 1;
+            if count > 65536 {
+                return Err(LedgerError::MetadataMismatch(
+                    "inventory discovery bound exceeded".into(),
+                ));
+            }
+            if !name.ends_with(b".meta") {
+                continue;
+            }
+            let name = std::str::from_utf8(name)
+                .map_err(|_| LedgerError::MetadataMismatch("invalid artifact filename".into()))?;
+            let bytes = read_bounded_regular_at(&self.dir, name, MAX_CHAIN_META_BYTES)?;
+            let value =
+                recursive_agent_contracts::parse_strict_json_value(&bytes).map_err(|_| {
+                    LedgerError::MetadataMismatch("invalid artifact metadata JSON".into())
+                })?;
+            let descriptor: ArtifactDescriptorV1 = serde_json::from_value(value)?;
+            if recursive_agent_contracts::jcs_canonical(&descriptor)? != bytes
+                || format!("{}.meta", artifact_name(&descriptor)?) != name
+            {
+                return Err(LedgerError::MetadataMismatch(
+                    "lossy/misnamed artifact metadata".into(),
+                ));
+            }
+            self.verify_descriptor(&descriptor)?;
+            descriptors.push(descriptor);
+        }
+        descriptors.sort_by(|a, b| a.digest.cmp(&b.digest));
+        self.require_exact_inventory(&descriptors)?;
+        Ok(descriptors)
+    }
+    fn check_inventory(
+        &self,
+        descriptors: &[ArtifactDescriptorV1],
+        complete: bool,
+    ) -> Result<(), LedgerError> {
+        let mut expected = BTreeSet::new();
+        for descriptor in descriptors {
+            let name = artifact_name(descriptor)?;
+            expected.insert(format!("{name}.meta"));
+            expected.insert(name);
+        }
+        let mut observed = BTreeSet::new();
+        for entry in rustix::fs::Dir::read_from(self.dir.as_fd()).map_err(std::io::Error::from)? {
+            let entry = entry.map_err(std::io::Error::from)?;
+            let name = entry.file_name().to_bytes();
+            if matches!(name, b"." | b"..") {
+                continue;
+            }
+            if observed.len() >= expected.len()
+                || !observed.insert(
+                    String::from_utf8(name.to_vec()).map_err(|_| {
+                        LedgerError::MetadataMismatch("invalid artifact name".into())
+                    })?,
+                )
+            {
+                return Err(LedgerError::MetadataMismatch(
+                    "unexpected artifact inventory".into(),
+                ));
+            }
+        }
+        if !observed.is_subset(&expected) || (complete && observed != expected) {
+            return Err(LedgerError::MetadataMismatch(
+                "artifact inventory differs from exact references".into(),
+            ));
+        }
+        for descriptor in descriptors {
+            let name = artifact_name(descriptor)?;
+            if complete || observed.contains(&name) || observed.contains(&format!("{name}.meta")) {
+                self.verify_descriptor(descriptor)?;
+            }
+        }
+        Ok(())
     }
 
     pub fn put(
@@ -2963,6 +3397,7 @@ fn verify_observed_bytes(
     Ok(())
 }
 
+#[derive(Clone)]
 pub struct ReceiptDraftV1 {
     pub run_id: CurrentRunId,
     pub step_id: CurrentStepId,

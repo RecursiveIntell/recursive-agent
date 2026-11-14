@@ -1,7 +1,32 @@
 //! Static allowlist and durable, single-use capability leases.
 
 mod context_authority;
+mod inference_budget;
+pub use inference_budget::*;
+mod normal_chat_attempt_v2;
+mod normal_chat_egress;
+mod normal_chat_family;
+mod normal_chat_interrupted_recovery_v2;
+mod normal_chat_ledger_v2;
+mod normal_chat_prepared_recovery_evidence_v1;
+mod normal_chat_prepared_recovery_v1;
+mod normal_chat_recovery_v1;
+pub use normal_chat_interrupted_recovery_v2::*;
+pub use normal_chat_prepared_recovery_evidence_v1::*;
+pub use normal_chat_prepared_recovery_v1::*;
+mod normal_chat_session_control;
+mod normal_chat_settlement_v2;
+mod normal_chat_terminal_metadata_v2;
+mod strict_permit_state;
 pub use context_authority::*;
+pub use normal_chat_attempt_v2::*;
+pub use normal_chat_egress::*;
+pub use normal_chat_family::*;
+pub use normal_chat_ledger_v2::*;
+pub use normal_chat_recovery_v1::*;
+pub use normal_chat_session_control::*;
+pub use normal_chat_settlement_v2::*;
+pub use normal_chat_terminal_metadata_v2::*;
 
 use std::collections::{BTreeMap, BTreeSet};
 use std::fs::File;
@@ -688,7 +713,8 @@ impl DelegationCeilingV1 {
                 || action.effect.scope_name.is_empty()
                 || (action.effect.network_allowed
                     && !is_closed_provider_egress_effect(&action.tool, &action.effect)
-                    && !is_closed_normal_chat_effect(&action.tool, &action.effect))
+                    && !is_closed_normal_chat_effect(&action.tool, &action.effect)
+                    && !normal_chat_attempt_v2::is_closed_effect_v2(&action.tool, &action.effect))
                 || action.effect_digest != content_digest(&action.effect)?
             {
                 return Err(PolicyError::InvalidLease(
@@ -762,6 +788,7 @@ impl PermitBindingV1 {
         if self.effect.network_allowed
             && !is_closed_provider_egress_effect(&self.tool, &self.effect)
             && !is_closed_normal_chat_effect(&self.tool, &self.effect)
+            && !normal_chat_attempt_v2::is_closed_effect_v2(&self.tool, &self.effect)
         {
             return Err(PolicyError::NetworkUnavailable);
         }
@@ -991,7 +1018,7 @@ pub enum PermitRevocationReasonV1 {
     OperationCancelled,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize)]
 #[serde(tag = "state", rename_all = "snake_case", deny_unknown_fields)]
 pub enum PermitStateV1 {
     Issued,
@@ -1026,6 +1053,10 @@ pub struct PermitRecordV1 {
     /// Older closed readers reject this field; never downgrade by stripping it.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub normal_chat_settlement: Option<NormalChatSettlementV1>,
+    /// Closed V2 role association; older closed readers reject rather than
+    /// stripping it or treating a V2 effect as a legacy V1 consumption.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub normal_chat_attempt_v2: Option<NormalChatAttemptRecordV2>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
@@ -1242,7 +1273,7 @@ impl PermitOutcomeReceiptV1 {
     }
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize)]
 #[serde(tag = "state", rename_all = "snake_case", deny_unknown_fields)]
 pub enum PermitEvidenceStateV1 {
     Issued,
@@ -1541,6 +1572,8 @@ pub enum PolicyError {
     FrozenClockRequired(String),
     #[error("invalid capability lease: {0}")]
     InvalidLease(String),
+    #[error(transparent)]
+    NormalChatEgressDenied(#[from] NormalChatEgressDenialV1),
     #[error("permit rejected: {reason}")]
     PermitRejected {
         permit_id: CurrentPermitId,
@@ -2227,6 +2260,10 @@ struct FamilyAuthorityStateV1 {
     grant: FamilyRootGrantV1,
     parent_revoked_at: Option<DateTime<Utc>>,
     children: std::collections::BTreeMap<CurrentRunId, FamilyChildControlPermitV1>,
+    /// Closed governed-session accounting. Older closed readers reject this
+    /// additive lane rather than dropping its authority and reservations.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    normal_chat_session: Option<normal_chat_family::NormalChatSessionBudgetV1>,
 }
 
 /// Descriptor-rooted authoritative allocation store for one causal family.
@@ -2246,14 +2283,40 @@ impl FamilyAuthorityStore {
     /// deterministic family directory. A conflicting root grant is rejected;
     /// callers cannot overwrite authority after initialization.
     pub fn from_dir_fd(root: &File, grant: FamilyRootGrantV1) -> Result<Self, PolicyError> {
+        Self::open_family_store(root, grant, true)
+    }
+
+    /// Require canonical existing family authority. Missing state/lock is never
+    /// initialized, even after a history-bearing directory has been replaced.
+    pub fn require_existing_from_dir_fd(
+        root: &File,
+        grant: FamilyRootGrantV1,
+    ) -> Result<Self, PolicyError> {
+        Self::open_family_store(root, grant, false)
+    }
+
+    fn open_family_store(
+        root: &File,
+        grant: FamilyRootGrantV1,
+        create: bool,
+    ) -> Result<Self, PolicyError> {
         grant.validate()?;
         let identity = directory_identity(root)?;
         let root = Arc::new(root.try_clone()?);
+        let flags = OFlags::RDWR | OFlags::NOFOLLOW | OFlags::CLOEXEC | OFlags::NONBLOCK;
         let lock = File::from(secure_open_at(
             &root,
             FAMILY_LOCK_NAME,
-            OFlags::RDWR | OFlags::CREATE | OFlags::NOFOLLOW | OFlags::CLOEXEC,
-            Mode::RUSR | Mode::WUSR,
+            if create {
+                flags | OFlags::CREATE
+            } else {
+                flags
+            },
+            if create {
+                Mode::RUSR | Mode::WUSR
+            } else {
+                Mode::empty()
+            },
         )?);
         if !lock.metadata()?.is_file() {
             return Err(PolicyError::UnsafePermitRoot(
@@ -2270,12 +2333,16 @@ impl FamilyAuthorityStore {
         store.with_lock(|| match store.read_state() {
             Ok(existing) if existing.grant == grant => Ok(()),
             Ok(_) => Err(PolicyError::PermitStateConflict),
-            Err(PolicyError::Io(error)) if error.kind() == std::io::ErrorKind::NotFound => store
-                .write_state(&FamilyAuthorityStateV1 {
+            Err(PolicyError::Io(error))
+                if create && error.kind() == std::io::ErrorKind::NotFound =>
+            {
+                store.write_state(&FamilyAuthorityStateV1 {
                     grant,
                     parent_revoked_at: None,
                     children: std::collections::BTreeMap::new(),
-                }),
+                    normal_chat_session: None,
+                })
+            }
             Err(error) => Err(error),
         })?;
         Ok(store)
@@ -2291,44 +2358,14 @@ impl FamilyAuthorityStore {
     ) -> Result<FamilyChildControlPermitV1, PolicyError> {
         self.with_lock(|| {
             let mut state = self.read_state()?;
-            validate_family_request(&state, request, trusted_now)?;
-            if let Some(existing) = state.children.get(&request.child_run_id) {
-                if existing.request == *request
-                    && matches!(existing.state, FamilyChildPermitStateV1::Issued)
-                {
-                    return Ok(existing.clone());
-                }
-                return Err(PolicyError::PermitStateConflict);
-            }
-            let max_children = usize::try_from(state.grant.child_run_ceiling.max_children)
-                .map_err(|_| {
-                    PolicyError::InvalidLease("family child count does not fit usize".into())
-                })?;
-            if state.children.len() >= max_children {
-                return Err(PolicyError::BudgetOverrun(
-                    "child allocation exceeds family child-count ceiling".into(),
+            if state.normal_chat_session.is_some()
+                || state.grant.policy_version.starts_with("normal-chat-grant:")
+            {
+                return Err(PolicyError::InvalidLease(
+                    "governed normal-chat families require the typed reservation API".into(),
                 ));
             }
-            let allocated = state
-                .children
-                .values()
-                .try_fold(PermitBudgetV1::zero(), |total, child| {
-                    total.checked_add(&child.request.requested_budget)
-                })?
-                .checked_add(&request.requested_budget)?;
-            if !allocated.is_within(&state.grant.child_run_ceiling.family_budget) {
-                return Err(PolicyError::BudgetOverrun(
-                    "child allocation exceeds cumulative family budget".into(),
-                ));
-            }
-            let permit = FamilyChildControlPermitV1 {
-                child_control_permit_id: derive_family_child_permit_id(request, &state.grant)?,
-                request: request.clone(),
-                state: FamilyChildPermitStateV1::Issued,
-            };
-            state
-                .children
-                .insert(request.child_run_id.clone(), permit.clone());
+            let permit = reserve_family_child(&mut state, request, trusted_now)?;
             self.write_state(&state)?;
             Ok(permit)
         })
@@ -2370,6 +2407,10 @@ impl FamilyAuthorityStore {
                 || trusted_now >= ceiling.expires_at
                 || !matches!(child.state, FamilyChildPermitStateV1::Issued)
                 || child.child_control_permit_id != *child_control_permit_id
+                || state
+                    .normal_chat_session
+                    .as_ref()
+                    .is_some_and(|session| !session.allows_dispatch_at(trusted_now))
             {
                 return Err(PolicyError::InvalidLease(
                     "child dispatch is no longer authorized by its family".into(),
@@ -2425,6 +2466,25 @@ impl FamilyAuthorityStore {
     }
 
     fn read_state(&self) -> Result<FamilyAuthorityStateV1, PolicyError> {
+        let root = directory_identity(&self.root)?;
+        let lock = File::from(secure_open_at(
+            &self.root,
+            FAMILY_LOCK_NAME,
+            OFlags::RDONLY | OFlags::NOFOLLOW | OFlags::CLOEXEC | OFlags::NONBLOCK,
+            Mode::empty(),
+        )?);
+        let observed = lock.metadata()?;
+        let pinned = self.lock.metadata()?;
+        if (root.0, root.1) != self.root_identity()
+            || !observed.is_file()
+            || observed.dev() != pinned.dev()
+            || observed.ino() != pinned.ino()
+            || observed.nlink() != 1
+            || observed.mode() & 0o777 != 0o600
+            || observed.uid() != rustix::process::getuid().as_raw()
+        {
+            return Err(PolicyError::PermitStateConflict);
+        }
         let fd = secure_open_at(
             &self.root,
             FAMILY_STATE_NAME,
@@ -2446,25 +2506,110 @@ impl FamilyAuthorityStore {
                 "family authority state exceeds its byte limit".into(),
             ));
         }
-        let state: FamilyAuthorityStateV1 = serde_json::from_slice(&bytes)?;
+        let value = recursive_agent_contracts::parse_strict_json_value(&bytes)
+            .map_err(|_| PolicyError::PermitStateConflict)?;
+        let state: FamilyAuthorityStateV1 = serde_json::from_value(value)?;
         state.grant.validate()?;
+        if let Some(session) = &state.normal_chat_session {
+            session.validate(&state)?;
+            if jcs_canonical(&state)? != bytes {
+                return Err(PolicyError::PermitStateConflict);
+            }
+        }
         Ok(state)
     }
 
     fn write_state(&self, state: &FamilyAuthorityStateV1) -> Result<(), PolicyError> {
-        let (temp_name, mut file) = create_unique_temp(&self.root, ".family-authority.tmp")?;
-        file.write_all(&jcs_canonical(state)?)?;
-        file.sync_all()?;
-        rustix::fs::renameat(
-            self.root.as_fd(),
-            &temp_name,
-            self.root.as_fd(),
-            FAMILY_STATE_NAME,
-        )
-        .map_err(std::io::Error::from)?;
-        self.root.sync_all()?;
-        Ok(())
+        self.write_state_with_interruption(state, None)
     }
+
+    fn write_state_with_interruption(
+        &self,
+        state: &FamilyAuthorityStateV1,
+        interrupt_after: Option<PermitTransitionStage>,
+    ) -> Result<(), PolicyError> {
+        let bytes = jcs_canonical(state)?;
+        if bytes.len() as u64 > MAX_FAMILY_STATE_BYTES {
+            return Err(PolicyError::BudgetOverrun(
+                "family authority state exceeds its byte ceiling".into(),
+            ));
+        }
+        let (temp_name, mut file) = create_unique_temp(&self.root, ".family-authority.tmp")?;
+        let check_stage = |stage| {
+            if interrupt_after == Some(stage) {
+                Err(PolicyError::InjectedInterruption(stage))
+            } else {
+                Ok(())
+            }
+        };
+        let result = (|| {
+            file.write_all(&bytes)?;
+            check_stage(PermitTransitionStage::TempWrite)?;
+            file.sync_all()?;
+            check_stage(PermitTransitionStage::TempFsync)?;
+            rustix::fs::renameat(
+                self.root.as_fd(),
+                &temp_name,
+                self.root.as_fd(),
+                FAMILY_STATE_NAME,
+            )
+            .map_err(std::io::Error::from)?;
+            check_stage(PermitTransitionStage::Rename)?;
+            self.root.sync_all()?;
+            check_stage(PermitTransitionStage::DirectoryFsync)
+        })();
+        if result.is_err() {
+            // A post-rename error cannot be rolled back. Preserve the new
+            // authoritative state; remove only a leftover unpublished temp.
+            let _ =
+                rustix::fs::unlinkat(self.root.as_fd(), &temp_name, rustix::fs::AtFlags::empty());
+        }
+        result
+    }
+}
+
+fn reserve_family_child(
+    state: &mut FamilyAuthorityStateV1,
+    request: &FamilyChildRequestV1,
+    trusted_now: DateTime<Utc>,
+) -> Result<FamilyChildControlPermitV1, PolicyError> {
+    validate_family_request(state, request, trusted_now)?;
+    if let Some(existing) = state.children.get(&request.child_run_id) {
+        if existing.request == *request
+            && matches!(existing.state, FamilyChildPermitStateV1::Issued)
+        {
+            return Ok(existing.clone());
+        }
+        return Err(PolicyError::PermitStateConflict);
+    }
+    let max_children = usize::try_from(state.grant.child_run_ceiling.max_children)
+        .map_err(|_| PolicyError::InvalidLease("family child count does not fit usize".into()))?;
+    if state.children.len() >= max_children {
+        return Err(PolicyError::BudgetOverrun(
+            "child allocation exceeds family child-count ceiling".into(),
+        ));
+    }
+    let allocated = state
+        .children
+        .values()
+        .try_fold(PermitBudgetV1::zero(), |total, child| {
+            total.checked_add(&child.request.requested_budget)
+        })?
+        .checked_add(&request.requested_budget)?;
+    if !allocated.is_within(&state.grant.child_run_ceiling.family_budget) {
+        return Err(PolicyError::BudgetOverrun(
+            "child allocation exceeds cumulative family budget".into(),
+        ));
+    }
+    let permit = FamilyChildControlPermitV1 {
+        child_control_permit_id: derive_family_child_permit_id(request, &state.grant)?,
+        request: request.clone(),
+        state: FamilyChildPermitStateV1::Issued,
+    };
+    state
+        .children
+        .insert(request.child_run_id.clone(), permit.clone());
+    Ok(permit)
 }
 
 fn validate_family_request(
@@ -2548,6 +2693,9 @@ pub enum PermitTransitionStage {
 #[derive(Debug, Clone)]
 pub struct DurablePermitStore {
     root: Arc<File>,
+    // Keep the admitted run inode alive and allow V2 to recheck the permit
+    // directory's descriptor-relative locator before releasing a continuation.
+    run_root: Arc<File>,
     lock: Arc<File>,
     gate: Arc<Mutex<()>>,
     run_root_device: u64,
@@ -2558,33 +2706,76 @@ pub struct DurablePermitStore {
 
 impl DurablePermitStore {
     pub fn from_run_root_fd(run_root: &File) -> Result<Self, PolicyError> {
+        Self::open_run_root(run_root, true)
+    }
+
+    pub fn require_existing_from_run_root_fd(run_root: &File) -> Result<Self, PolicyError> {
+        Self::open_run_root(run_root, false)
+    }
+
+    fn open_run_root(run_root: &File, create: bool) -> Result<Self, PolicyError> {
         let run_identity = directory_identity(run_root)?;
-        let permit_root = open_permit_child(run_root)?;
+        let permit_root = if create {
+            open_permit_child(run_root)?
+        } else {
+            File::from(secure_open_at(
+                run_root,
+                "permits",
+                OFlags::RDONLY | OFlags::DIRECTORY | OFlags::NOFOLLOW | OFlags::CLOEXEC,
+                Mode::empty(),
+            )?)
+        };
         let permit_identity = directory_identity(&permit_root)?;
         if permit_identity.2 != run_identity.2 {
             return Err(PolicyError::UnsafePermitRoot(
                 "permit root owner differs from pinned run root".into(),
             ));
         }
-        Self::from_root_file(permit_root, run_identity, permit_identity)
+        Self::from_root_file(
+            permit_root,
+            run_root.try_clone()?,
+            run_identity,
+            permit_identity,
+            create,
+        )
     }
 
     pub fn from_dir_fd(root: &File) -> Result<Self, PolicyError> {
         let identity = directory_identity(root)?;
-        Self::from_root_file(root.try_clone()?, identity, identity)
+        Self::from_root_file(
+            root.try_clone()?,
+            root.try_clone()?,
+            identity,
+            identity,
+            true,
+        )
     }
 
     fn from_root_file(
         root_file: File,
+        run_root: File,
         run_identity: (u64, u64, u32),
         permit_identity: (u64, u64, u32),
+        create: bool,
     ) -> Result<Self, PolicyError> {
         let root_file = Arc::new(root_file);
         let lock_fd = secure_open_at(
             &root_file,
             ".permit.lock",
-            OFlags::RDWR | OFlags::CREATE | OFlags::NOFOLLOW | OFlags::CLOEXEC,
-            Mode::RUSR | Mode::WUSR,
+            OFlags::RDWR
+                | OFlags::NOFOLLOW
+                | OFlags::CLOEXEC
+                | OFlags::NONBLOCK
+                | if create {
+                    OFlags::CREATE
+                } else {
+                    OFlags::empty()
+                },
+            if create {
+                Mode::RUSR | Mode::WUSR
+            } else {
+                Mode::empty()
+            },
         )?;
         let lock_file = File::from(lock_fd);
         if !lock_file.metadata()?.is_file() {
@@ -2594,6 +2785,7 @@ impl DurablePermitStore {
         }
         Ok(Self {
             root: root_file,
+            run_root: Arc::new(run_root),
             lock: Arc::new(lock_file),
             gate: Arc::new(Mutex::new(())),
             run_root_device: run_identity.0,
@@ -2811,6 +3003,7 @@ impl DurablePermitStore {
                 outcome_receipt: None,
                 retained_normal_chat_admission: None,
                 normal_chat_settlement: None,
+                normal_chat_attempt_v2: None,
             })?;
             let record = PermitRecordV1 {
                 permit: permit.clone(),
@@ -2820,6 +3013,7 @@ impl DurablePermitStore {
                 outcome_receipt: None,
                 retained_normal_chat_admission: None,
                 normal_chat_settlement: None,
+                normal_chat_attempt_v2: None,
             };
             let existing_child = match self.read_record(&permit.permit_id) {
                 Ok(existing) if existing == record => Some(existing),
@@ -3170,7 +3364,9 @@ impl DurablePermitStore {
             // before waiting on another process's permit-store lock.
             let trusted_now = clock();
             let mut record = self.read_record_or_reject(permit_id)?;
-            if record.permit.binding.tool == NORMAL_CHAT_LANE {
+            if record.permit.binding.tool == NORMAL_CHAT_LANE
+                || normal_chat_attempt_v2::is_v2_attempt_tool(&record.permit.binding.tool)
+            {
                 return Err(PolicyError::InvalidLease(
                     "normal-chat requires current-policy consumption".into(),
                 ));
@@ -3260,6 +3456,11 @@ impl DurablePermitStore {
         reported.validate()?;
         self.with_lock(|| {
             let mut record = self.read_record_or_reject(permit_id)?;
+            if normal_chat_attempt_v2::is_v2_attempt_tool(&record.permit.binding.tool) {
+                return Err(PolicyError::InvalidLease(
+                    "V2 normal-chat requires its typed settlement boundary".into(),
+                ));
+            }
             let preflight = record
                 .preflight_receipt
                 .as_ref()
@@ -3306,7 +3507,9 @@ impl DurablePermitStore {
         self.with_lock(|| {
             self.reject_legacy_context_admission()?;
             let mut record = self.read_record_or_reject(permit_id)?;
-            if record.permit.binding.tool == NORMAL_CHAT_LANE {
+            if record.permit.binding.tool == NORMAL_CHAT_LANE
+                || normal_chat_attempt_v2::is_v2_attempt_tool(&record.permit.binding.tool)
+            {
                 return Err(PolicyError::InvalidLease(
                     "normal-chat requires current-policy consumption".into(),
                 ));
@@ -3383,6 +3586,7 @@ impl DurablePermitStore {
             let record = self.read_record_or_reject(permit_id)?;
             if record.permit.binding != *expected_binding
                 || record.permit.binding.tool == NORMAL_CHAT_LANE
+                || normal_chat_attempt_v2::is_v2_attempt_tool(&record.permit.binding.tool)
                 || expected_preflight.is_some_and(|digest| {
                     record
                         .preflight_receipt
@@ -3457,6 +3661,17 @@ impl DurablePermitStore {
     }
 
     fn read_record(&self, permit_id: &CurrentPermitId) -> Result<PermitRecordV1, PolicyError> {
+        let record = self.read_record_material(permit_id)?;
+        self.validate_record_bindings(&record)?;
+        Ok(record)
+    }
+
+    // Identity-checked material only. V2 must demand Control role before
+    // following a parent so hostile Effect cycles cannot recurse.
+    fn read_record_material(
+        &self,
+        permit_id: &CurrentPermitId,
+    ) -> Result<PermitRecordV1, PolicyError> {
         let name = state_name(permit_id)?;
         let fd = secure_open_at(
             &self.root,
@@ -3475,13 +3690,15 @@ impl DurablePermitStore {
         if bytes.len() as u64 > MAX_PERMIT_RECORD_BYTES {
             return Err(rejected(permit_id, PermitRejectionReasonV1::StateCorrupted));
         }
-        let record: PermitRecordV1 = serde_json::from_slice(&bytes)?;
+        let value = recursive_agent_contracts::parse_strict_json_value(&bytes)
+            .map_err(|_| rejected(permit_id, PermitRejectionReasonV1::StateCorrupted))?;
+        let record: PermitRecordV1 = serde_json::from_value(value)?;
+        normal_chat_ledger_v2::validate_governed_record_wire(&bytes, &record)?;
         if record.permit.permit_id != *permit_id
             || derive_permit_id(&record.permit.identity_material()?)? != *permit_id
         {
             return Err(rejected(permit_id, PermitRejectionReasonV1::StateCorrupted));
         }
-        self.validate_record_bindings(&record)?;
         Ok(record)
     }
 
@@ -3489,6 +3706,11 @@ impl DurablePermitStore {
     /// and the existing issuance journal. No current policy is inferred here.
     fn validate_record_bindings(&self, record: &PermitRecordV1) -> Result<(), PolicyError> {
         record.validate_receipt_bindings()?;
+        if record.normal_chat_attempt_v2.is_some()
+            || normal_chat_attempt_v2::is_v2_attempt_tool(&record.permit.binding.tool)
+        {
+            return self.validate_normal_chat_attempt_record_v2(record);
+        }
         let Some(admission) = &record.retained_normal_chat_admission else {
             // Legacy records remain readable, never settlement/replay eligible.
             return if record.normal_chat_settlement.is_none() {
@@ -3578,8 +3800,14 @@ impl DurablePermitStore {
         interrupt_after: Option<PermitTransitionStage>,
     ) -> Result<(), PolicyError> {
         self.validate_record_bindings(record)?;
+        let bytes = jcs_canonical(record)?;
+        if bytes.len() as u64 > MAX_PERMIT_RECORD_BYTES {
+            return Err(PolicyError::BudgetOverrun(
+                "permit record exceeds its byte limit".into(),
+            ));
+        }
         let (temp_name, mut file) = create_unique_temp(&self.root, ".permit.tmp")?;
-        file.write_all(&jcs_canonical(record)?)?;
+        file.write_all(&bytes)?;
         if interrupt_after == Some(PermitTransitionStage::TempWrite) {
             return Err(PolicyError::InjectedInterruption(
                 PermitTransitionStage::TempWrite,

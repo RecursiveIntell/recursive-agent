@@ -288,9 +288,14 @@ impl ConnectionRequestIds {
     /// The budget is checked before insertion so an overflow cannot grow the
     /// set beyond the hard ceiling.
     pub fn admit(&mut self, request: &IpcRequestEnvelopeV1) -> Result<(), IpcDecodeError> {
-        if self.admitted.contains(&request.request_id) {
+        self.admit_id(&request.request_id)
+    }
+
+    /// Shared connection correlation budget across explicit v1 and v2 schemas.
+    pub fn admit_id(&mut self, request_id: &str) -> Result<(), IpcDecodeError> {
+        if self.admitted.contains(request_id) {
             return Err(IpcDecodeError::DuplicateRequestId {
-                request_id: request.request_id.clone(),
+                request_id: request_id.to_string(),
             });
         }
         if self.admitted.len() >= MAX_REQUEST_IDS_PER_CONNECTION {
@@ -298,7 +303,7 @@ impl ConnectionRequestIds {
                 max: MAX_REQUEST_IDS_PER_CONNECTION,
             });
         }
-        self.admitted.insert(request.request_id.clone());
+        self.admitted.insert(request_id.to_string());
         Ok(())
     }
 }

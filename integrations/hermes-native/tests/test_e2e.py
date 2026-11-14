@@ -89,11 +89,7 @@ def test_plugin_handler_submits_and_verifies_over_real_daemon(tmp_path):
         envelope_path = tmp_path / "operation.json"
         envelope_path.write_text(json.dumps(envelope), encoding="utf-8")
         ctx = SimpleNamespace(
-            config={
-                "plugins": {
-                    "entries": {"recursive-agent-native": {"socket_path": socket_path}}
-                }
-            }
+            get_config=lambda key, default=None: socket_path if key == "socket_path" else default
         )
         result = json.loads(plugin._handler(ctx, {"envelope_path": str(envelope_path)}))
         assert result["schema"] == "recursive-agent.hermes-result/v1"
@@ -145,7 +141,7 @@ def test_plugin_handler_refuses_missing_daemon_verification_facts(tmp_path, monk
         lambda _socket_path, _envelope: {"state": "terminal", "run_id": "run-x"},
     )
 
-    result = plugin._handler(SimpleNamespace(config={}), {"envelope_path": str(envelope_path)})
+    result = plugin._handler(SimpleNamespace(get_config=lambda key, default=None: default), {"envelope_path": str(envelope_path)})
 
     assert result == (
         "recursive_agent_execute: unavailable: daemon verification facts missing"

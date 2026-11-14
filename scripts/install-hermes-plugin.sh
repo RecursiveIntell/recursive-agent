@@ -15,7 +15,7 @@ fi
 mkdir -p "$PLUGIN_DIR"
 # Ship only the declared runtime package. Copying the whole source directory
 # would also install pytest caches and other development artifacts.
-for file in __init__.py client.py schema.py plugin.yaml pyproject.toml; do
+for file in __init__.py client.py governed_client.py governor.py schema.py plugin.yaml pyproject.toml; do
   cp "$SRC/$file" "$PLUGIN_DIR/$file"
 done
 
