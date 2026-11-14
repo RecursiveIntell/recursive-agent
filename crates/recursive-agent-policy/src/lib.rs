@@ -2,6 +2,8 @@
 
 mod context_authority;
 pub use context_authority::*;
+mod inference_budget;
+pub use inference_budget::*;
 
 use std::collections::{BTreeMap, BTreeSet};
 use std::fs::File;
