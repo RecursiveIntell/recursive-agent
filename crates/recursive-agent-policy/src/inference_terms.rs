@@ -131,7 +131,6 @@ impl InferenceBudgetTermsV1 {
     }
 }
 
-
 #[cfg(test)]
 mod reconciliation_tests {
     use super::*;
@@ -163,7 +162,10 @@ mod reconciliation_tests {
         assert_eq!(value.limits.quote_nanodollars().unwrap(), 140);
         let encoded = serde_json::to_vec(&value).unwrap();
         assert_eq!(InferenceBudgetTermsV1::from_bytes(&encoded).unwrap(), value);
-        assert_eq!(value.computed_digest().unwrap(), value.computed_digest().unwrap());
+        assert_eq!(
+            value.computed_digest().unwrap(),
+            value.computed_digest().unwrap()
+        );
     }
 
     #[test]
@@ -185,10 +187,14 @@ mod reconciliation_tests {
     #[test]
     fn duplicate_unknown_and_oversized_json_refuse() {
         let encoded = serde_json::to_string(&terms()).unwrap();
-        let duplicated = encoded.replacen("\"provider\":", "\"provider\":\"forged\",\"provider\":", 1);
+        let duplicated =
+            encoded.replacen("\"provider\":", "\"provider\":\"forged\",\"provider\":", 1);
         assert!(InferenceBudgetTermsV1::from_bytes(duplicated.as_bytes()).is_err());
         let mut value = serde_json::to_value(terms()).unwrap();
-        value.as_object_mut().unwrap().insert("unknown".into(), serde_json::json!(true));
+        value
+            .as_object_mut()
+            .unwrap()
+            .insert("unknown".into(), serde_json::json!(true));
         assert!(InferenceBudgetTermsV1::from_bytes(&serde_json::to_vec(&value).unwrap()).is_err());
         assert!(InferenceBudgetTermsV1::from_bytes(&vec![b' '; 65_537]).is_err());
     }
