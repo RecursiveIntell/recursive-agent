@@ -336,7 +336,7 @@ pub fn parse_normal_chat_operation_v1_bytes(
     Ok(operation)
 }
 
-fn validate_reference(name: &str, value: &str) -> Result<(), ContractError> {
+pub(crate) fn validate_reference(name: &str, value: &str) -> Result<(), ContractError> {
     if value.is_empty() || value.len() > MAX_REFERENCE_BYTES || value.chars().any(char::is_control)
     {
         return Err(ContractError::Malformed(format!(
@@ -346,7 +346,7 @@ fn validate_reference(name: &str, value: &str) -> Result<(), ContractError> {
     Ok(())
 }
 
-fn validate_external_digest(
+pub(crate) fn validate_external_digest(
     name: &str,
     value: &str,
     algorithms: &[&str],
