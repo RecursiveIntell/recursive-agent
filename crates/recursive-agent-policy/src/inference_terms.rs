@@ -135,14 +135,14 @@ impl InferenceBudgetTermsV1 {
 mod reconciliation_tests {
     use super::*;
 
-    fn terms() -> InferenceBudgetTermsV1 {
-        InferenceBudgetTermsV1 {
+    fn terms() -> Result<InferenceBudgetTermsV1, recursive_agent_contracts::ContractError> {
+        Ok(InferenceBudgetTermsV1 {
             schema: "recursive-agent.inference-budget-terms/v1".into(),
             provider: "fixture-provider".into(),
             model: "fixture-model".into(),
             api_mode: "chat".into(),
             reasoning_effort: "low".into(),
-            tariff_digest: content_digest(&"inert-fixture-tariff").unwrap(),
+            tariff_digest: content_digest(&"inert-fixture-tariff")?,
             limits: InferenceBudgetLimitsV1 {
                 input_nanodollars_per_token: 1,
                 output_nanodollars_per_token: 2,
@@ -153,49 +153,49 @@ mod reconciliation_tests {
                 max_sends: 2,
                 max_total_nanodollars: 500,
             },
-        }
+        })
     }
 
     #[test]
-    fn canonical_positive_terms_round_trip_without_egress_authority() {
-        let value = terms();
-        assert_eq!(value.limits.quote_nanodollars().unwrap(), 140);
-        let encoded = serde_json::to_vec(&value).unwrap();
-        assert_eq!(InferenceBudgetTermsV1::from_bytes(&encoded).unwrap(), value);
-        assert_eq!(
-            value.computed_digest().unwrap(),
-            value.computed_digest().unwrap()
-        );
+    fn canonical_positive_terms_round_trip_without_egress_authority(
+    ) -> Result<(), Box<dyn std::error::Error>> {
+        let value = terms()?;
+        assert_eq!(value.limits.quote_nanodollars()?, 140);
+        let encoded = serde_json::to_vec(&value)?;
+        assert_eq!(InferenceBudgetTermsV1::from_bytes(&encoded)?, value);
+        assert_eq!(value.computed_digest()?, value.computed_digest()?);
+        Ok(())
     }
 
     #[test]
-    fn zero_paid_and_unbounded_or_overflowing_terms_refuse_in_v1() {
-        let mut value = terms();
+    fn zero_paid_and_unbounded_or_overflowing_terms_refuse_in_v1(
+    ) -> Result<(), Box<dyn std::error::Error>> {
+        let mut value = terms()?;
         value.limits.max_total_nanodollars = 0;
         assert!(value.validate().is_err());
-        let mut value = terms();
+        let mut value = terms()?;
         value.limits.input_nanodollars_per_token = 0;
         assert!(value.validate().is_err());
-        let mut value = terms();
+        let mut value = terms()?;
         value.limits.max_total_input_tokens = 0;
         assert!(value.validate().is_err());
-        let mut value = terms();
+        let mut value = terms()?;
         value.limits.max_input_tokens_per_send = u64::MAX;
         assert!(value.validate().is_err());
+        Ok(())
     }
 
     #[test]
-    fn duplicate_unknown_and_oversized_json_refuse() {
-        let encoded = serde_json::to_string(&terms()).unwrap();
+    fn duplicate_unknown_and_oversized_json_refuse(
+    ) -> Result<(), Box<dyn std::error::Error>> {
+        let encoded = serde_json::to_string(&terms()?)?;
         let duplicated =
             encoded.replacen("\"provider\":", "\"provider\":\"forged\",\"provider\":", 1);
         assert!(InferenceBudgetTermsV1::from_bytes(duplicated.as_bytes()).is_err());
-        let mut value = serde_json::to_value(terms()).unwrap();
-        value
-            .as_object_mut()
-            .unwrap()
-            .insert("unknown".into(), serde_json::json!(true));
-        assert!(InferenceBudgetTermsV1::from_bytes(&serde_json::to_vec(&value).unwrap()).is_err());
+        let mut value = serde_json::to_value(terms()?)?;
+        value["unknown"] = serde_json::json!(true);
+        assert!(InferenceBudgetTermsV1::from_bytes(&serde_json::to_vec(&value)?).is_err());
         assert!(InferenceBudgetTermsV1::from_bytes(&vec![b' '; 65_537]).is_err());
+        Ok(())
     }
 }
