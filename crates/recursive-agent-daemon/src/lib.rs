@@ -4,7 +4,9 @@
 //! effect boundary. A later admitted phase may place transport around these
 //! data shapes; Phase 1 only shares the canonical bounded RunSpec decoder.
 
+mod governed;
 pub mod protocol;
+pub mod protocol_v2;
 pub mod repo_audit;
 pub mod server;
 pub mod socket;
