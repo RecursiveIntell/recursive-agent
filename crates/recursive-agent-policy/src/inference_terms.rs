@@ -186,8 +186,7 @@ mod reconciliation_tests {
     }
 
     #[test]
-    fn duplicate_unknown_and_oversized_json_refuse(
-    ) -> Result<(), Box<dyn std::error::Error>> {
+    fn duplicate_unknown_and_oversized_json_refuse() -> Result<(), Box<dyn std::error::Error>> {
         let encoded = serde_json::to_string(&terms()?)?;
         let duplicated =
             encoded.replacen("\"provider\":", "\"provider\":\"forged\",\"provider\":", 1);
