@@ -7,7 +7,7 @@ SRC="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)/integrations/hermes-native
 HERMES_HOME="${HERMES_HOME:-$HOME/.hermes}"
 PLUGIN_DIR="$HERMES_HOME/plugins/recursive-agent-native"
 MANIFEST="$HERMES_HOME/plugins/recursive-agent-native.manifest"
-RUNTIME_FILES=(__init__.py client.py plugin.yaml pyproject.toml schema.py)
+RUNTIME_FILES=(__init__.py client.py governed_client.py governor.py plugin.yaml pyproject.toml schema.py)
 
 verify_installed() {
   [[ -d "$PLUGIN_DIR" && ! -L "$PLUGIN_DIR" ]] || {

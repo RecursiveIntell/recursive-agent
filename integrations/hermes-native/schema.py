@@ -21,6 +21,8 @@ RECURSIVE_AGENT_EXECUTE_SCHEMA = {
         "properties": {
             "envelope_path": {
                 "type": "string",
+                "minLength": 1,
+                "maxLength": 4096,
                 "description": "Path to a canonical recursive-agent operation envelope JSON "
                 "(produced by `ra-daemon emit-envelope`). The handler submits it "
                 "verbatim over authenticated native IPC.",

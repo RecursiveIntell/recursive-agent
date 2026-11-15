@@ -5,3 +5,16 @@ author: RecursiveIntell
 kind: standalone
 provides_tools:
   - recursive_agent_execute
+config_schema:
+  terminal_timeout_seconds:
+    type: number
+    default: 10
+    description: "Bounded terminal-report/closure RPC deadline (0 < seconds <= 60); pre-send admission remains 2 seconds."
+  socket_path:
+    type: string
+    description: "Absolute private Unix socket shared with the per-home native daemon."
+  governance_mode:
+    type: string
+    default: "off"
+    enum: ["off", observe, enforce]
+    description: "off registers no governor; observe records unwitnessed failures without blocking; enforce requires physical-send admission."
