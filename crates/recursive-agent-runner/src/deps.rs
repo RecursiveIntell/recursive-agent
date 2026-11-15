@@ -242,37 +242,25 @@ impl RuntimeDependenciesBuilder {
 
     /// Install campaign funding authority for monetary egress control.
     /// When set, physical egress must reserve and consume from the campaign bank.
-    pub fn campaign_funding_authority(
-        mut self,
-        authority: CampaignFundingAuthorityV1,
-    ) -> Self {
+    pub fn campaign_funding_authority(mut self, authority: CampaignFundingAuthorityV1) -> Self {
         self.campaign_funding_authority = Some(authority);
         self
     }
 
     /// Install campaign funding grant for monetary egress control.
-    pub fn campaign_funding_grant(
-        mut self,
-        grant: CampaignFundingGrantV1,
-    ) -> Self {
+    pub fn campaign_funding_grant(mut self, grant: CampaignFundingGrantV1) -> Self {
         self.campaign_funding_grant = Some(grant);
         self
     }
 
     /// Install campaign inference terms for monetary egress control.
-    pub fn campaign_inference_terms(
-        mut self,
-        terms: InferenceBudgetTermsV1,
-    ) -> Self {
+    pub fn campaign_inference_terms(mut self, terms: InferenceBudgetTermsV1) -> Self {
         self.campaign_inference_terms = Some(terms);
         self
     }
 
     /// Install campaign grant store for monetary egress control.
-    pub fn campaign_grant_store(
-        mut self,
-        store: NormalChatEgressGrantStore,
-    ) -> Self {
+    pub fn campaign_grant_store(mut self, store: NormalChatEgressGrantStore) -> Self {
         self.campaign_grant_store = Some(store);
         self
     }

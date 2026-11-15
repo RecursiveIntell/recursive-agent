@@ -29,15 +29,13 @@ use std::time::{Duration, Instant};
 
 #[cfg(target_os = "linux")]
 mod cgroup {
+    use recursive_agent_sandbox::{CgroupLimits, SandboxError};
     use std::fs;
     use std::path::PathBuf;
-    use recursive_agent_sandbox::{CgroupLimits, SandboxError};
 
     /// Create a dedicated cgroup for sandbox execution and write resource limits.
     /// Returns the cgroup path if successful, or an error.
-    pub fn setup_cgroup(
-        limits: &CgroupLimits,
-    ) -> Result<Option<PathBuf>, SandboxError> {
+    pub fn setup_cgroup(limits: &CgroupLimits) -> Result<Option<PathBuf>, SandboxError> {
         let cgroup_base = PathBuf::from("/sys/fs/cgroup");
         if !cgroup_base.exists() {
             return Err(SandboxError::Io(
@@ -1158,57 +1156,57 @@ fn execute_linux(
     }
     enforce_retained_limit(&mut output.stderr, output_limit);
     let enforcement = EnforcementRecord {
-            mechanism: SandboxMechanism::Bubblewrap,
-            outcome: EnforcementOutcome::Enforced,
-            policy_digest: prepared.policy_digest,
-            launcher_path: DEFAULT_LAUNCHER.into(),
-            launcher_version: Some(version),
-            bash_trampoline_path: Some(BASH_TRAMPOLINE.into()),
-            launcher_argv: argv,
-            private_pid_namespace: true,
-            parent_death_control: true,
-            network_isolated: seccomp.is_some(),
-            network_mechanism: Some("shared_host_network_seccomp_socket_denial".into()),
-            seccomp_policy_digest: seccomp.as_ref().map(|policy| policy.digest.clone()),
-            denied_network_syscalls: seccomp
-                .as_ref()
-                .map_or_else(Vec::new, |policy| policy.denied_syscalls.clone()),
-            effective_operation_roots: prepared
-                .read_roots
-                .iter()
-                .map(|root| OperationRootEvidence {
-                    path: root.destination.display().to_string(),
-                    descriptor_identity: root.identity.clone(),
-                    access_mode: "read".into(),
-                })
-                .chain(
-                    prepared
-                        .write_roots
-                        .iter()
-                        .map(|root| OperationRootEvidence {
-                            path: root.destination.display().to_string(),
-                            descriptor_identity: root.identity.clone(),
-                            access_mode: "write".into(),
-                        }),
-                )
-                .collect(),
-            effective_runtime_read_roots: prepared
-                .runtime_roots
-                .iter()
-                .map(|root| root.destination.display().to_string())
-                .collect(),
-            trusted_executables: [&bwrap, &init, &prepared.command]
-                        .into_iter()
-                        .filter_map(|source| source.executable_authority.clone())
-                        .collect(),
-                    authorization: Some(authorization),
-                    setup_proof_digest: Some(
-                        recursive_agent_contracts::ContentDigest::compute(nonce.as_bytes()).to_string(),
-                    ),
-                    setup_proof_verified: true,
-                    reason_code: None,
-                    cgroup_enforced: cgroup_path.is_some(),
-                };
+        mechanism: SandboxMechanism::Bubblewrap,
+        outcome: EnforcementOutcome::Enforced,
+        policy_digest: prepared.policy_digest,
+        launcher_path: DEFAULT_LAUNCHER.into(),
+        launcher_version: Some(version),
+        bash_trampoline_path: Some(BASH_TRAMPOLINE.into()),
+        launcher_argv: argv,
+        private_pid_namespace: true,
+        parent_death_control: true,
+        network_isolated: seccomp.is_some(),
+        network_mechanism: Some("shared_host_network_seccomp_socket_denial".into()),
+        seccomp_policy_digest: seccomp.as_ref().map(|policy| policy.digest.clone()),
+        denied_network_syscalls: seccomp
+            .as_ref()
+            .map_or_else(Vec::new, |policy| policy.denied_syscalls.clone()),
+        effective_operation_roots: prepared
+            .read_roots
+            .iter()
+            .map(|root| OperationRootEvidence {
+                path: root.destination.display().to_string(),
+                descriptor_identity: root.identity.clone(),
+                access_mode: "read".into(),
+            })
+            .chain(
+                prepared
+                    .write_roots
+                    .iter()
+                    .map(|root| OperationRootEvidence {
+                        path: root.destination.display().to_string(),
+                        descriptor_identity: root.identity.clone(),
+                        access_mode: "write".into(),
+                    }),
+            )
+            .collect(),
+        effective_runtime_read_roots: prepared
+            .runtime_roots
+            .iter()
+            .map(|root| root.destination.display().to_string())
+            .collect(),
+        trusted_executables: [&bwrap, &init, &prepared.command]
+            .into_iter()
+            .filter_map(|source| source.executable_authority.clone())
+            .collect(),
+        authorization: Some(authorization),
+        setup_proof_digest: Some(
+            recursive_agent_contracts::ContentDigest::compute(nonce.as_bytes()).to_string(),
+        ),
+        setup_proof_verified: true,
+        reason_code: None,
+        cgroup_enforced: cgroup_path.is_some(),
+    };
     let wall_time_ms = u64::try_from(start.elapsed().as_millis())
         .map_err(|_| SandboxError::Wait("wall-time observation overflow".into()))?;
 
