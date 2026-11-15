@@ -61,14 +61,15 @@ fn v2_attempt_refuses_request_larger_than_its_operation_budget(
 ) -> Result<(), Box<dyn std::error::Error>> {
     use recursive_agent_contracts::{
         derive_normal_chat_attempt_id_v2, ContentDigest, CurrentRunId, NormalChatAttemptV2,
-        NormalChatBudgetV2, NormalChatOperationSchemaV2, NormalChatOperationV2,
-        NormalChatReplayV2, NormalChatRequestProjectionSchemaV2, ProvenanceRefV1,
+        NormalChatBudgetV2, NormalChatOperationSchemaV2, NormalChatOperationV2, NormalChatReplayV2,
+        NormalChatRequestProjectionSchemaV2, ProvenanceRefV1,
     };
     let operation = NormalChatOperationV2 {
         schema: NormalChatOperationSchemaV2::V2,
         conversation_ref: "r08-test".into(),
         parent_run_id: CurrentRunId::try_new(format!(
-            "v1:recursive-agent/run/v1:det:{}", "a".repeat(64)
+            "v1:recursive-agent/run/v1:det:{}",
+            "a".repeat(64)
         ))?,
         materialization_ref: "r08-materialization".into(),
         materialization_digest: format!("sha256:{}", "b".repeat(64)),
