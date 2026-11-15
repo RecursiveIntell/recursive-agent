@@ -127,7 +127,11 @@ impl InferenceBudgetTermsV1 {
         let value = parse_strict_json_value(bytes).map_err(|_| invalid())?;
         // Serde's struct visitor also accepts positional sequences. Closed
         // terms admission requires named, object-shaped fields at both levels.
-        if !value.is_object() || !value.get("limits").is_some_and(serde_json::Value::is_object) {
+        if !value.is_object()
+            || !value
+                .get("limits")
+                .is_some_and(serde_json::Value::is_object)
+        {
             return Err(invalid());
         }
         let terms: Self = serde_json::from_value(value)?;
