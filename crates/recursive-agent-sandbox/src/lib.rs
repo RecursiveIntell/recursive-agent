@@ -38,6 +38,23 @@ pub struct SandboxSpec {
     pub timeout_ms: u64,
     #[serde(default = "default_output_limit_bytes")]
     pub max_output_bytes: u64,
+    /// Optional cgroup v2 resource limits. If provided, the sandbox will be
+    /// placed in a dedicated cgroup with these limits enforced.
+    #[serde(default)]
+    pub cgroup_limits: Option<CgroupLimits>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+#[serde(deny_unknown_fields)]
+pub struct CgroupLimits {
+    /// Maximum memory in bytes (maps to memory.max)
+    pub max_memory_bytes: Option<u64>,
+    /// Maximum number of processes/threads (maps to pids.max)
+    pub max_pids: Option<u64>,
+    /// CPU quota as microseconds per period (maps to cpu.max)
+    pub cpu_quota_us: Option<u64>,
+    /// CPU period in microseconds (maps to cpu.max period)
+    pub cpu_period_us: Option<u64>,
 }
 
 fn default_output_limit_bytes() -> u64 {
@@ -50,7 +67,7 @@ pub enum SandboxMechanism {
     Bubblewrap,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum EnforcementOutcome {
     Enforced,
@@ -81,6 +98,10 @@ pub struct EnforcementRecord {
     pub setup_proof_digest: Option<String>,
     pub setup_proof_verified: bool,
     pub reason_code: Option<SandboxFailureReason>,
+    /// Whether cgroup v2 resource limits were actually applied.
+    /// If false, cgroup creation was skipped (e.g., permission denied).
+    #[serde(default)]
+    pub cgroup_enforced: bool,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]

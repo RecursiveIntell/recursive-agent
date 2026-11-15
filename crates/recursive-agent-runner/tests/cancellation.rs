@@ -101,6 +101,7 @@ fn sandbox_timeout_kills_descendant_process_group() -> Result<(), Box<dyn std::e
         allow_network: false,
         timeout_ms: 300,
         max_output_bytes: 64 * 1024,
+        cgroup_limits: None,
     };
     let run = RunSpecV1 {
         name: "cancel-descendant".into(),
