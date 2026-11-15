@@ -254,7 +254,7 @@ pub fn derive_normal_chat_attempt_id_v2(
             "normal-chat V2 attempt number must be at least one".into(),
         ));
     }
-    if provider_request_bytes == 0 || provider_request_bytes > MAX_NORMAL_CHAT_REQUEST_BYTES_V2 {
+    if provider_request_bytes == 0 || provider_request_bytes > operation.budget.max_request_bytes {
         return Err(ContractError::Malformed(
             "normal-chat V2 physical request length is zero or exceeds the hard byte limit".into(),
         ));
