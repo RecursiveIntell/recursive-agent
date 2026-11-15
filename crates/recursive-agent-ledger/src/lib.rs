@@ -3230,17 +3230,17 @@ mod r08_unverified_v2_receipts {
                 },
                 ContentDigest::compute(b"r08-predecessor"),
             )?;
-            let error = validate_authoritative_sequence(
+            let validation = validate_authoritative_sequence(
                 &root,
                 &[receipt],
                 LifecycleValidationMode::StrictCurrent,
-            )
-            .expect_err("unqualified V2 evidence must not be authoritative");
-            assert!(
-                format!("{error}")
-                    .contains("normal-chat V2 evidence lacks authoritative ledger validation"),
-                "unexpected refusal: {error}"
             );
+            assert!(matches!(
+                validation,
+                Err(error) if error.to_string().contains(
+                    "normal-chat V2 evidence lacks authoritative ledger validation"
+                )
+            ));
         }
         Ok(())
     }
