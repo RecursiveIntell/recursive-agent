@@ -11,6 +11,84 @@ use super::*;
 #[path = "inference_terms.rs"]
 mod terms;
 pub use terms::*;
+#[path = "campaign_inference.rs"]
+mod campaign;
+pub use campaign::*;
+
+// One record/accounting validator for both explicit bank versions.
+struct InferenceRecordBounds<'a> {
+    limits: InferenceBudgetLimitsV1,
+    provider: &'a str,
+    model: &'a str,
+    reasoning_effort: &'a str,
+    not_before: DateTime<Utc>,
+    expires_at: DateTime<Utc>,
+}
+fn validate_inference_records(
+    bounds: &InferenceRecordBounds<'_>,
+    sends: &BTreeMap<CurrentPermitId, InferenceSendRecordV1>,
+) -> Result<InferenceBudgetStatusV1, PolicyError> {
+    let limits = &bounds.limits;
+    let n = u64::try_from(sends.len()).map_err(|_| overrun())?;
+    let mut status = InferenceBudgetStatusV1 {
+        reserved_sends: n,
+        reserved_input_tokens: n
+            .checked_mul(limits.max_input_tokens_per_send)
+            .ok_or_else(overrun)?,
+        reserved_output_tokens: n
+            .checked_mul(limits.max_output_tokens_per_send)
+            .ok_or_else(overrun)?,
+        reserved_nanodollars: n
+            .checked_mul(limits.quote_nanodollars()?)
+            .ok_or_else(overrun)?,
+        ..Default::default()
+    };
+    if status.reserved_sends > limits.max_sends
+        || status.reserved_input_tokens > limits.max_total_input_tokens
+        || status.reserved_output_tokens > limits.max_total_output_tokens
+        || status.reserved_nanodollars > limits.max_total_nanodollars
+    {
+        return Err(overrun());
+    }
+    for (id, record) in sends {
+        if *id != record.request.permit_id
+            || record.request.provider != bounds.provider
+            || record.request.model != bounds.model
+            || record.request.reasoning_effort != bounds.reasoning_effort
+            || record.reserved_at < bounds.not_before
+            || record.reserved_at >= bounds.expires_at
+        {
+            return Err(invalid());
+        }
+        if let Some(start) = record.dispatched_at {
+            if start < record.reserved_at || start >= bounds.expires_at {
+                return Err(invalid());
+            }
+            if record.settlement.is_none() {
+                status.unsettled_dispatches += 1;
+            }
+        } else if record.settlement.is_some() {
+            return Err(invalid());
+        }
+        match &record.settlement {
+            Some(InferenceSettlementV1::Observed {
+                input_tokens,
+                output_tokens,
+                ..
+            }) => {
+                if *input_tokens > limits.max_input_tokens_per_send
+                    || *output_tokens > limits.max_output_tokens_per_send
+                {
+                    return Err(overrun());
+                }
+                status.settled_sends += 1;
+            }
+            Some(InferenceSettlementV1::Unknown { .. }) => status.unknown_sends += 1,
+            None => {}
+        }
+    }
+    Ok(status)
+}
 
 const SCHEMA: &str = "recursive-agent.inference-budget/v1";
 const STATE_NAME: &str = "inference-budget.v1.json";
@@ -49,15 +127,21 @@ fn overrun() -> PolicyError {
     PolicyError::BudgetOverrun("inference campaign reservation ceiling exceeded".into())
 }
 impl InferenceBudgetGrantV1 {
+    /// Projection only: serialized V1 grants retain their original flat fields.
+    pub fn limits(&self) -> InferenceBudgetLimitsV1 {
+        InferenceBudgetLimitsV1 {
+            input_nanodollars_per_token: self.input_nanodollars_per_token,
+            output_nanodollars_per_token: self.output_nanodollars_per_token,
+            max_input_tokens_per_send: self.max_input_tokens_per_send,
+            max_output_tokens_per_send: self.max_output_tokens_per_send,
+            max_total_input_tokens: self.max_total_input_tokens,
+            max_total_output_tokens: self.max_total_output_tokens,
+            max_sends: self.max_sends,
+            max_total_nanodollars: self.max_total_nanodollars,
+        }
+    }
     fn quote(&self) -> Result<u64, PolicyError> {
-        self.max_input_tokens_per_send
-            .checked_mul(self.input_nanodollars_per_token)
-            .and_then(|input| {
-                self.max_output_tokens_per_send
-                    .checked_mul(self.output_nanodollars_per_token)
-                    .and_then(|output| input.checked_add(output))
-            })
-            .ok_or_else(overrun)
+        self.limits().quote_nanodollars()
     }
     fn validate(&self, family: &FamilyAuthorityStateV1) -> Result<(), PolicyError> {
         let ceiling = &family.grant.child_run_ceiling;
@@ -68,15 +152,6 @@ impl InferenceBudgetGrantV1 {
             || self.not_before < ceiling.not_before
             || self.expires_at > ceiling.expires_at
             || self.expires_at <= self.not_before
-            || self.max_sends == 0
-            || self.max_sends > 1024
-            || self.input_nanodollars_per_token == 0
-            || self.output_nanodollars_per_token == 0
-            || self.max_input_tokens_per_send == 0
-            || self.max_output_tokens_per_send == 0
-            || self.max_input_tokens_per_send > self.max_total_input_tokens
-            || self.max_output_tokens_per_send > self.max_total_output_tokens
-            || self.max_total_nanodollars == 0
         {
             return Err(invalid());
         }
@@ -94,9 +169,7 @@ impl InferenceBudgetGrantV1 {
                 return Err(invalid());
             }
         }
-        if self.quote()? > self.max_total_nanodollars {
-            return Err(overrun());
-        }
+        self.quote()?;
         Ok(())
     }
     fn admits_route(&self, request: &InferenceSendRequestV1) -> bool {
@@ -185,64 +258,17 @@ impl InferenceBudgetStateV1 {
         if self.family_grant_digest != content_digest(&family.grant)? {
             return Err(invalid());
         }
-        let n = u64::try_from(self.sends.len()).map_err(|_| overrun())?;
-        let status = InferenceBudgetStatusV1 {
-            reserved_sends: n,
-            reserved_input_tokens: n
-                .checked_mul(self.grant.max_input_tokens_per_send)
-                .ok_or_else(overrun)?,
-            reserved_output_tokens: n
-                .checked_mul(self.grant.max_output_tokens_per_send)
-                .ok_or_else(overrun)?,
-            reserved_nanodollars: n.checked_mul(self.grant.quote()?).ok_or_else(overrun)?,
-            ..Default::default()
-        };
-        if status.reserved_sends > self.grant.max_sends
-            || status.reserved_input_tokens > self.grant.max_total_input_tokens
-            || status.reserved_output_tokens > self.grant.max_total_output_tokens
-            || status.reserved_nanodollars > self.grant.max_total_nanodollars
-        {
-            return Err(overrun());
-        }
-        let mut status = status;
-        for (id, record) in &self.sends {
-            if *id != record.request.permit_id
-                || !self.grant.admits_route(&record.request)
-                || record.reserved_at < self.grant.not_before
-                || record.reserved_at >= self.grant.expires_at
-            {
-                return Err(invalid());
-            }
-            if let Some(start) = record.dispatched_at {
-                if start < record.reserved_at || start >= self.grant.expires_at {
-                    return Err(invalid());
-                }
-                if record.settlement.is_none() {
-                    status.unsettled_dispatches += 1;
-                }
-            } else if record.settlement.is_some() {
-                return Err(invalid());
-            }
-            match &record.settlement {
-                Some(InferenceSettlementV1::Observed {
-                    input_tokens,
-                    output_tokens,
-                    ..
-                }) => {
-                    if *input_tokens > self.grant.max_input_tokens_per_send
-                        || *output_tokens > self.grant.max_output_tokens_per_send
-                    {
-                        return Err(overrun());
-                    }
-                    status.settled_sends += 1;
-                }
-                Some(InferenceSettlementV1::Unknown { .. }) => {
-                    status.unknown_sends += 1;
-                }
-                None => {}
-            }
-        }
-        Ok(status)
+        validate_inference_records(
+            &InferenceRecordBounds {
+                limits: self.grant.limits(),
+                provider: &self.grant.provider,
+                model: &self.grant.model,
+                reasoning_effort: &self.grant.reasoning_effort,
+                not_before: self.grant.not_before,
+                expires_at: self.grant.expires_at,
+            },
+            &self.sends,
+        )
     }
 }
 
@@ -252,6 +278,9 @@ impl FamilyAuthorityStore {
     /// is not remotely admitted by this API. Existing V1 stores are unchanged.
     pub fn bind_inference_budget(&self, grant: InferenceBudgetGrantV1) -> Result<(), PolicyError> {
         self.with_lock(|| {
+            if self.inference_path_exists(campaign::STATE_V2)? {
+                return Err(PolicyError::PermitStateConflict);
+            }
             let family = self.read_state()?;
             grant.validate(&family)?;
             if family.parent_revoked_at.is_some() {
@@ -444,6 +473,9 @@ impl FamilyAuthorityStore {
         &self,
         family: &FamilyAuthorityStateV1,
     ) -> Result<InferenceBudgetStateV1, PolicyError> {
+        if self.inference_path_exists(campaign::STATE_V2)? {
+            return Err(PolicyError::PermitStateConflict);
+        }
         let fd = secure_open_at(
             &self.root,
             STATE_NAME,
