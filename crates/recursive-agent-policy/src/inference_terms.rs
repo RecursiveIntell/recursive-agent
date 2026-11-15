@@ -125,6 +125,11 @@ impl InferenceBudgetTermsV1 {
             return Err(invalid());
         }
         let value = parse_strict_json_value(bytes).map_err(|_| invalid())?;
+        // Serde's struct visitor also accepts positional sequences. Closed
+        // terms admission requires named, object-shaped fields at both levels.
+        if !value.is_object() || !value.get("limits").is_some_and(serde_json::Value::is_object) {
+            return Err(invalid());
+        }
         let terms: Self = serde_json::from_value(value)?;
         terms.validate()?;
         Ok(terms)
@@ -195,6 +200,27 @@ mod reconciliation_tests {
         value["unknown"] = serde_json::json!(true);
         assert!(InferenceBudgetTermsV1::from_bytes(&serde_json::to_vec(&value)?).is_err());
         assert!(InferenceBudgetTermsV1::from_bytes(&vec![b' '; 65_537]).is_err());
+        let terms = terms()?;
+        let positional = serde_json::json!([
+            terms.schema,
+            terms.provider,
+            terms.model,
+            terms.api_mode,
+            terms.reasoning_effort,
+            terms.tariff_digest,
+            terms.limits,
+        ]);
+        assert!(InferenceBudgetTermsV1::from_bytes(&serde_json::to_vec(&positional)?).is_err());
+        let nested_array = serde_json::json!({
+            "schema": "recursive-agent.inference-budget-terms/v1",
+            "provider": "fixture-provider",
+            "model": "fixture-model",
+            "api_mode": "chat",
+            "reasoning_effort": "low",
+            "tariff_digest": content_digest(&"inert-fixture-tariff")?,
+            "limits": [1, 2, 100, 20, 200, 40, 2, 500]
+        });
+        assert!(InferenceBudgetTermsV1::from_bytes(&serde_json::to_vec(&nested_array)?).is_err());
         Ok(())
     }
 }
