@@ -2489,6 +2489,7 @@ mod pinned_root_tests {
             setup_proof_digest: None,
             setup_proof_verified: false,
             reason_code: Some(reason_code),
+            cgroup_enforced: false,
         }
     }
 
