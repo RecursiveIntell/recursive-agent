@@ -201,6 +201,7 @@ mod tests {
             allow_network: false,
             timeout_ms: 1_000,
             max_output_bytes: 1_024,
+            cgroup_limits: None,
         };
         assert!(validate_plan(&valid).is_ok());
         let mut networked = valid.clone();
