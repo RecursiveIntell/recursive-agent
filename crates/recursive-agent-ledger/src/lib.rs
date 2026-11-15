@@ -2229,6 +2229,31 @@ fn validate_authoritative_sequence(
     receipts: &[ReceiptV1],
     mode: LifecycleValidationMode,
 ) -> Result<(recursive_agent_contracts::LifecycleValidation, u64), LedgerError> {
+    // Contract-level shape checks cannot establish V2 receipt authority. The
+    // ledger does not yet verify admission/settlement/recovery evidence against
+    // current parent expiry, revocation, and the consumed effect permit. Until
+    // that owner lands, neither append nor strict verification may accept these
+    // historical event kinds as authoritative completion or failure evidence.
+    if !matches!(mode, LifecycleValidationMode::LegacyIntegrityOnly) {
+        if let Some((index, _)) = receipts.iter().enumerate().find(|(_, receipt)| {
+            matches!(
+                receipt.kind,
+                ReceiptKindV1::NormalChatAttemptAdmittedV2
+                    | ReceiptKindV1::NormalChatAttemptSettledV2
+                    | ReceiptKindV1::NormalChatAttemptInterruptedV2
+                    | ReceiptKindV1::NormalChatAttemptRecoveredV1
+                    | ReceiptKindV1::NormalChatPreparedAttemptRecoveredV1
+                    | ReceiptKindV1::NormalChatUnconsumedAttemptRecoveredV1
+                    | ReceiptKindV1::NormalChatPrechildAdmissionRecoveredV1
+                    | ReceiptKindV1::NormalChatSessionDegradedV1
+            )
+        }) {
+            return Err(permit_divergence(
+                index,
+                "normal-chat V2 evidence lacks authoritative ledger validation",
+            ));
+        }
+    }
     let lifecycle = validate_receipt_sequence(receipts, mode)?;
     let store = ArtifactStore::open_existing_from_root(root)?;
     let mut verified = BTreeSet::new();
