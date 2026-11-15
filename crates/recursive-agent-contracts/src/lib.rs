@@ -7,8 +7,8 @@
 
 mod egress;
 mod event;
-mod normal_chat_call_v2;
 mod native_operation;
+mod normal_chat_call_v2;
 mod normal_chat_operation;
 mod normal_chat_operation_v2;
 mod normal_chat_session;
@@ -25,11 +25,11 @@ pub use event::{
     project_runtime_events, validate_runtime_event_sequence, RuntimeEventKindV1,
     RuntimeEventSchemaV1, RuntimeEventV1,
 };
-pub use normal_chat_call_v2::{
-    parse_normal_chat_call_request_v2_bytes, NormalChatCallRequestSchemaV2, NormalChatCallRequestV2,
-};
 pub use native_operation::{
     parse_native_operation_bytes, NativeOperation, NativeOperationIngressError,
+};
+pub use normal_chat_call_v2::{
+    parse_normal_chat_call_request_v2_bytes, NormalChatCallRequestSchemaV2, NormalChatCallRequestV2,
 };
 pub use normal_chat_operation::{
     derive_normal_chat_attempt_id, parse_normal_chat_attempt_v1_bytes,
