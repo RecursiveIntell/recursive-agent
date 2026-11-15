@@ -70,6 +70,19 @@ The CLI is implemented in [`crates/recursive-agent-cli/src/main.rs`](crates/recu
 
 When `RECURSIVE_AGENT_RUNS` is present, its value is the run-data root; otherwise the CLI derives the root from `HOME` (falling back to `.` if `HOME` is absent). Embedded `ra run` uses that root directly, while `ra autonomous` appends an `autonomous/` directory. In IPC mode, the server owns the run output location; the CLI's `--out` option does not change it. The autonomous command accepts an Ollama-compatible URL and model name; no API-key environment variable is defined by this CLI parser. No external provider call is included in the validation for this README.
 
+## System build prerequisite: libseccomp
+
+`recursive-agent-runner` links the system C library through the `libseccomp` crate
+(`libseccomp = "=0.4.0"`). A host building the runner needs the libseccomp development
+package and `pkg-config` before `cargo build`:
+
+- Debian/Ubuntu: `sudo apt install libseccomp-dev pkg-config`
+- Fedora/RHEL/Nobara: `sudo dnf install libseccomp-devel pkgconf-pkg-config`
+- Arch/Omarchy: `sudo pacman -S libseccomp pkgconf`
+
+Verify with `pkg-config --exists libseccomp && echo ok`. A missing package fails the build
+at link time, not at a clear error about this dependency.
+
 ## Original M0 boundary
 
 The baseline M0 design provides a deterministic local run that emits a

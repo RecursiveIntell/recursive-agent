@@ -119,3 +119,63 @@ fn daemon_requires_explicit_write_root_with_production_verifier() -> TestResult 
     ));
     Ok(())
 }
+
+/// Audit L2 guard: a symlink at the enrollment path must never be followed.
+/// The loader must open with O_NOFOLLOW and validate the same descriptor it
+/// reads, so the check and the read cannot be separated by a swapped link.
+#[test]
+fn daemon_refuses_symlinked_production_verifier_enrollment() -> TestResult {
+    let temp = tempfile::tempdir()?;
+    let real = write_enrollment(
+        temp.path(),
+        serde_json::json!({
+            "schema": "recursive-agent.desktop-production-public-key/v1",
+            "key_id": "desktop-key",
+            "public_key": base64::engine::general_purpose::STANDARD.encode([7_u8; 32]),
+        }),
+        0o600,
+    )?;
+    let link = temp.path().join("verifier-link.json");
+    std::os::unix::fs::symlink(&real, &link)?;
+    let output = serve_with_enrollment(&link)?;
+    assert!(
+        !output.status.success(),
+        "symlinked enrollment must be refused"
+    );
+    // The refusal must be the link itself, not an unrelated startup failure. With NOFOLLOW the
+    // open fails with ELOOP ('Too many levels of symbolic links' / 'symbolic link'), so the
+    // assertion pins that cause and cannot pass on an incidental error.
+    let stderr = String::from_utf8_lossy(&output.stderr).to_lowercase();
+    assert!(
+        stderr.contains("symbolic link")
+            || stderr.contains("too many levels")
+            || stderr.contains("eloop"),
+        "symlink refusal must come from the no-follow open, got stderr: {stderr}"
+    );
+    Ok(())
+}
+
+// Phase 6.1 RED: the closed-commands loader has no behavioral coverage today. It must refuse a
+// world-readable file, which violates its own mode-0600 rule. Pins that behavior before the
+// shared bounded loader refactor, so the refactor is measured against real rejections.
+#[test]
+fn daemon_refuses_world_readable_closed_commands_file() -> TestResult {
+    let temp = tempfile::tempdir()?;
+    let closed = temp.path().join("closed-commands.json");
+    std::fs::write(&closed, b"[]")?;
+    std::fs::set_permissions(&closed, std::fs::Permissions::from_mode(0o644))?;
+    let output = Command::new(env!("CARGO_BIN_EXE_ra-daemon"))
+        .arg("serve")
+        .arg("--root")
+        .arg(temp.path().join("runs"))
+        .arg("--socket")
+        .arg(temp.path().join("ra.sock"))
+        .arg("--closed-commands-file")
+        .arg(&closed)
+        .output()?;
+    assert!(
+        !output.status.success(),
+        "a world-readable closed-commands file must be refused"
+    );
+    Ok(())
+}

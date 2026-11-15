@@ -23,7 +23,7 @@ env:
 jobs:
   paired-root:
     name: Paired root
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     timeout-minutes: 45
     steps:
       - name: Checkout recursive-agent source
@@ -90,7 +90,30 @@ jobs:
         run: |
           set -euo pipefail
           sudo apt-get update
-          sudo apt-get install --no-install-recommends -y bubblewrap libseccomp-dev strace
+          sudo apt-get install --no-install-recommends -y curl libcap-dev libseccomp-dev meson ninja-build strace xz-utils
+
+      - name: Build and install pinned Bubblewrap
+        run: |
+          set -euo pipefail
+          version=0.13.1
+          archive="$RUNNER_TEMP/bubblewrap-${version}.tar.xz"
+          expected_sha256=0e85c8702248b8dd64144f594147553650cdd0e4c951690345faace79c217c4d
+          curl --fail --location --silent --show-error \
+            --retry 3 --retry-delay 2 \
+            -o "$archive" \
+            "https://github.com/containers/bubblewrap/releases/download/v${version}/bubblewrap-${version}.tar.xz"
+          printf '%s  %s\n' "$expected_sha256" "$archive" | sha256sum --check --strict
+          tar -xJf "$archive" -C "$RUNNER_TEMP"
+          meson setup "$RUNNER_TEMP/bwrap-build" \
+            "$RUNNER_TEMP/bubblewrap-${version}" \
+            --prefix=/usr \
+            -Dtests=false -Dman=disabled -Dselinux=disabled \
+            -Dbash_completion=disabled -Dzsh_completion=disabled
+          meson compile -C "$RUNNER_TEMP/bwrap-build"
+          DESTDIR="$RUNNER_TEMP/bwrap-stage" meson install -C "$RUNNER_TEMP/bwrap-build"
+          sudo install -m 0755 "$RUNNER_TEMP/bwrap-stage/usr/bin/bwrap" /usr/bin/bwrap
+          test "$(bwrap --version)" = "bubblewrap ${version}"
+          sha256sum /usr/bin/bwrap
 
       - name: Admit Bubblewrap on the ephemeral hosted runner
         run: |
@@ -103,6 +126,20 @@ jobs:
           fi
           bwrap --ro-bind / / -- /usr/bin/true
 
+      - name: Install pinned Python adapter test runtime
+        uses: astral-sh/setup-uv@37802adc94f370d6bfd71619e3f0bf239e1f3b78
+        with:
+          version: '0.12.24'
+
+      - name: Admit Python 3.14 and isolated adapter test dependencies
+        run: |
+          set -euo pipefail
+          uv python install 3.14
+          uv venv --python 3.14 "$RUNNER_TEMP/adapter-venv"
+          uv pip install --python "$RUNNER_TEMP/adapter-venv/bin/python" 'pytest==9.2.0'
+          "$RUNNER_TEMP/adapter-venv/bin/python" -c 'import sys; assert sys.version_info >= (3, 14), sys.version'
+          printf '%s\n' "$RUNNER_TEMP/adapter-venv/bin" >> "$GITHUB_PATH"
+
       - name: Run canonical paired-root gates
         working-directory: recursive-agent
         run: |
@@ -112,6 +149,14 @@ jobs:
           cargo check --locked --workspace
           cargo clippy --locked --workspace --all-targets -- -D warnings
           cargo test --locked --workspace --all-targets --no-fail-fast
+
+      - name: Exercise the real Hermes plugin adapter
+        working-directory: recursive-agent
+        run: |
+          set -euo pipefail
+          cargo build --locked -p recursive-agent-cli -p recursive-agent-daemon --bins
+          bash scripts/verify-hermes-native.sh
+          python3 -m pytest -q tests/test_ci_workflow_contract.py
 
       - name: Verify the same pair from a relocated root
         run: |
@@ -131,7 +176,7 @@ jobs:
     name: All required checks pass
     needs: paired-root
     if: always()
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     timeout-minutes: 5
     steps:
       - name: Require the paired-root gate

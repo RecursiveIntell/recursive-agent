@@ -103,6 +103,17 @@ impl RuntimeDependencies {
         &self.tool_runtime
     }
 
+    /// Shared handle to the canonical tool runtime, for a durable-start worker
+    /// that must outlive the submitting call (audit M1, Task 3.1).
+    pub(crate) fn tool_runtime_shared(&self) -> Arc<ToolRuntime> {
+        Arc::clone(&self.tool_runtime)
+    }
+
+    /// Shared handle to the clock, for a durable-start worker.
+    pub(crate) fn clock_shared(&self) -> Arc<dyn Clock> {
+        Arc::clone(&self.clock)
+    }
+
     /// Borrow the explicit provider mode.
     pub fn provider(&self) -> &RuntimeProviderDependencyV1 {
         &self.provider

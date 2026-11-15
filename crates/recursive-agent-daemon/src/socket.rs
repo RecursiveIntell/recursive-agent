@@ -32,6 +32,12 @@ pub enum SocketError {
     PeerCredential(String),
 }
 
+/// Canonical default socket location (audit L1). Matches the Hermes plugin's
+/// default and lies under a private runtime directory that
+/// `validate_runtime_root` accepts. `/tmp` is group/other-writable and is
+/// rejected, so it can never be the default.
+pub const DEFAULT_SOCKET_PATH: &str = "~/.local/share/recursive-agent/run/ra.sock";
+
 /// The peer principal authenticated by the kernel for one accepted connection.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct PeerPrincipal {
