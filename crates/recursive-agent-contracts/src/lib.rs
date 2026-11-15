@@ -642,24 +642,6 @@ struct ShellArgsIngressV1 {
     timeout_ms: u64,
     #[serde(default = "default_ingress_output_limit")]
     max_output_bytes: u64,
-    #[serde(default)]
-    cgroup_limits: Option<CgroupLimitsIngress>,
-}
-
-/// Ingress-side cgroup limits mirroring the sandbox's CgroupLimits.
-/// Defined here to avoid circular dependency with recursive-agent-sandbox.
-#[derive(Debug, Deserialize, Default)]
-#[serde(deny_unknown_fields)]
-#[expect(dead_code)]
-struct CgroupLimitsIngress {
-    /// Maximum memory in bytes (maps to memory.max)
-    max_memory_bytes: Option<u64>,
-    /// Maximum number of processes/threads (maps to pids.max)
-    max_pids: Option<u64>,
-    /// CPU quota as microseconds per period (maps to cpu.max)
-    cpu_quota_us: Option<u64>,
-    /// CPU period in microseconds (maps to cpu.max period)
-    cpu_period_us: Option<u64>,
 }
 
 fn default_ingress_output_limit() -> u64 {
