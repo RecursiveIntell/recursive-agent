@@ -54,11 +54,11 @@ use llm_tool_runtime::{
 };
 use recursive_agent_contracts::{
     content_digest, derive_child_operation_id, derive_child_operation_proposal_digest,
-    derive_operation_id, derive_provider_egress_operation_id,
-    parse_operation_envelope_bytes, ChildOperationEnvelopeV2, ChildOperationProposalV2,
-    ChildRunAuthorityV1, ContentDigest, ContractError, CurrentPermitId, CurrentRunId,
-    OperationEnvelopeV1, ProviderEgressOperationEnvelopeV3, ReceiptKindV1, RunTerminalStateV1,
-    RuntimeEventV1, ToolCallSpecV1,
+    derive_operation_id, derive_provider_egress_operation_id, parse_operation_envelope_bytes,
+    ChildOperationEnvelopeV2, ChildOperationProposalV2, ChildRunAuthorityV1, ContentDigest,
+    ContractError, CurrentPermitId, CurrentRunId, OperationEnvelopeV1,
+    ProviderEgressOperationEnvelopeV3, ReceiptKindV1, RunTerminalStateV1, RuntimeEventV1,
+    ToolCallSpecV1,
 };
 use recursive_agent_ledger::{
     committed_events_directory_bound, verified_snapshot_directory_bound,
