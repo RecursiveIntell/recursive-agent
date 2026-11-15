@@ -1,9 +1,8 @@
 //! Reconciliation tests for the source-only V2 contract extraction.
 //! These tests do not create permits, launch providers, or admit physical egress.
 use recursive_agent_contracts::{
-    jcs_canonical, parse_normal_chat_call_request_v2_bytes,
-    parse_normal_chat_operation_v2_bytes, parse_normal_chat_session_v1_bytes,
-    NormalChatSessionSchemaV1, NormalChatSessionV1,
+    jcs_canonical, parse_normal_chat_call_request_v2_bytes, parse_normal_chat_operation_v2_bytes,
+    parse_normal_chat_session_v1_bytes, NormalChatSessionSchemaV1, NormalChatSessionV1,
 };
 
 fn session() -> NormalChatSessionV1 {
@@ -20,30 +19,29 @@ fn session() -> NormalChatSessionV1 {
 }
 
 #[test]
-fn session_identity_is_canonical_but_not_a_capability() {
+fn session_identity_is_canonical_but_not_a_capability() -> Result<(), Box<dyn std::error::Error>> {
     let expected = session();
-    let canonical = jcs_canonical(&expected).unwrap();
-    let parsed = parse_normal_chat_session_v1_bytes(&canonical).unwrap();
+    let canonical = jcs_canonical(&expected)?;
+    let parsed = parse_normal_chat_session_v1_bytes(&canonical)?;
     assert_eq!(parsed, expected);
-    assert_eq!(parsed.run_id().unwrap(), expected.run_id().unwrap());
+    assert_eq!(parsed.run_id()?, expected.run_id()?);
+    Ok(())
 }
 
 #[test]
-fn session_rejects_unknown_or_duplicate_members() {
-    let mut unknown = serde_json::to_value(session()).unwrap();
-    unknown
-        .as_object_mut()
-        .unwrap()
-        .insert("send_authorized".into(), serde_json::json!(true));
-    assert!(parse_normal_chat_session_v1_bytes(&jcs_canonical(&unknown).unwrap()).is_err());
+fn session_rejects_unknown_or_duplicate_members() -> Result<(), Box<dyn std::error::Error>> {
+    let mut unknown = serde_json::to_value(session())?;
+    unknown["send_authorized"] = serde_json::json!(true);
+    assert!(parse_normal_chat_session_v1_bytes(&jcs_canonical(&unknown)?).is_err());
 
-    let canonical = String::from_utf8(jcs_canonical(&session()).unwrap()).unwrap();
+    let canonical = String::from_utf8(jcs_canonical(&session())?)?;
     let duplicate = canonical.replacen(
         "\"grant_revision\":",
         "\"grant_revision\":2,\"grant_revision\":",
         1,
     );
     assert!(parse_normal_chat_session_v1_bytes(duplicate.as_bytes()).is_err());
+    Ok(())
 }
 
 #[test]
