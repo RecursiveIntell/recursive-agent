@@ -10,6 +10,7 @@ fn downstream_public_api_is_plan_only() {
         allow_network: false,
         timeout_ms: 1_000,
         max_output_bytes: 1_024,
+        cgroup_limits: None,
     };
     assert!(validate_plan(&plan).is_ok());
 }

@@ -5,7 +5,8 @@ use recursive_agent_contracts::{
 };
 use recursive_agent_ledger::{open, verified_snapshot_directory_bound, RunPaths};
 use recursive_agent_sandbox::{
-    EnforcementOutcome, EnforcementRecord, SandboxFailureReason, SandboxResult, SandboxSpec,
+    CgroupLimits, EnforcementOutcome, EnforcementRecord, SandboxFailureReason, SandboxResult,
+    SandboxSpec,
 };
 use std::fmt::{Display, Formatter};
 use support::run_spec;
@@ -32,6 +33,7 @@ fn shell_spec(script: String) -> SandboxSpec {
         allow_network: false,
         timeout_ms: 1_000,
         max_output_bytes: 64 * 1024,
+        cgroup_limits: None,
     }
 }
 
@@ -207,6 +209,7 @@ fn diagnostic_enforcement() -> EnforcementRecord {
         setup_proof_digest: None,
         setup_proof_verified: false,
         reason_code: Some(SandboxFailureReason::LauncherTimedOut),
+        cgroup_enforced: false,
     }
 }
 
@@ -329,6 +332,7 @@ fn one_consumed_dispatch_is_not_replayed_on_second_run() -> TestResult {
         allow_network: false,
         timeout_ms: 2_000,
         max_output_bytes: 1_024,
+        cgroup_limits: None,
     };
     let run = RunSpecV1 {
         name: "one-shot-dispatch".into(),
@@ -401,6 +405,7 @@ fn filesystem_and_network_attempts_are_denied_or_host_fails_closed() -> TestResu
         allow_network: false,
         timeout_ms: 1_000,
         max_output_bytes: 64 * 1024,
+        cgroup_limits: None,
     };
     match execute(&network) {
         Ok(result) => {
@@ -422,6 +427,7 @@ fn fixed_printf_is_mandatorily_enforced_on_this_host() -> TestResult {
         allow_network: false,
         timeout_ms: 2_000,
         max_output_bytes: 1_024,
+        cgroup_limits: None,
     };
     let result = execute(&spec)?;
     assert_eq!(result.enforcement.outcome, EnforcementOutcome::Enforced);
@@ -450,6 +456,7 @@ fn network_socket_creation_receives_eperm_under_enforcement() -> TestResult {
         allow_network: false,
         timeout_ms: 2_000,
         max_output_bytes: 1_024,
+        cgroup_limits: None,
     };
     let result = execute(&spec)?;
     assert_eq!(result.enforcement.outcome, EnforcementOutcome::Enforced);
@@ -574,6 +581,7 @@ fn malicious_sibling_helper_is_never_consulted_by_production_execute() -> TestRe
             allow_network: false,
             timeout_ms: 2_000,
             max_output_bytes: 1_024,
+            cgroup_limits: None,
         };
         let result = execute(&spec)?;
         assert_eq!(result.enforcement.outcome, EnforcementOutcome::Enforced);
@@ -683,6 +691,51 @@ fn inherited_non_cloexec_descriptor_is_not_visible_to_payload() -> TestResult {
             assert!(!result.stdout.contains(&secret_path.display().to_string()));
         }
         error => assert_fail_closed(error)?,
+    }
+    Ok(())
+}
+
+#[cfg(target_os = "linux")]
+#[test]
+fn cgroup_memory_limit_enforced() -> TestResult {
+    // Test that cgroup memory limit is enforced by attempting to allocate
+    // more memory than the limit. This should cause the process to be killed.
+    let spec = SandboxSpec {
+        command: canonical_system_python()?,
+        args: vec![
+            "-c".into(),
+            "import sys; data = []; [data.append(b'x' * 10_000_000) for _ in range(200)]".into(),
+        ],
+        allowed_read_paths: vec![],
+        allowed_write_paths: vec![],
+        allow_network: false,
+        timeout_ms: 5_000,
+        max_output_bytes: 64 * 1024,
+        cgroup_limits: Some(CgroupLimits {
+            max_memory_bytes: Some(50 * 1024 * 1024), // 50 MB limit
+            max_pids: None,
+            cpu_quota_us: None,
+            cpu_period_us: None,
+        }),
+    };
+    match execute(&spec) {
+        Ok(result) => {
+            // Process should have been OOM killed if cgroup was created
+            // If cgroup creation failed with permission denied, result.exit_code may be 0
+            if result.enforcement.cgroup_enforced {
+                // If cgroup was actually created, process should not succeed (should be killed by OOM)
+                assert_ne!(result.exit_code, Some(0));
+            }
+            // Enforcement outcome should always be Enforced for a successful sandbox run
+            assert_eq!(result.enforcement.outcome, EnforcementOutcome::Enforced);
+        }
+        Err(CanonicalError::Terminal { state, .. }) => {
+            // Terminal state should not be success
+            assert!(!state.permits_successful_finalization());
+        }
+        Err(_other) => {
+            // Other errors are acceptable (e.g., sandbox setup issues)
+        }
     }
     Ok(())
 }

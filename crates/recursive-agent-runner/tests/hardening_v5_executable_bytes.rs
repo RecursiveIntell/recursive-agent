@@ -66,6 +66,7 @@ fn user_owned_rewritable_executable_is_denied_with_zero_starts() -> TestResult {
             allow_network: false,
             timeout_ms: 2_000,
             max_output_bytes: 1_024,
+            cgroup_limits: None,
         },
         output.path(),
     );
@@ -108,6 +109,7 @@ fn trusted_printf_evidence_contains_exact_command_bash_and_bwrap_digests() -> Te
             allow_network: false,
             timeout_ms: 2_000,
             max_output_bytes: 1_024,
+            cgroup_limits: None,
         },
         output.path(),
     )?;
@@ -147,6 +149,7 @@ fn parent_components_are_rejected_before_run_root_creation() -> TestResult {
             allow_network: false,
             timeout_ms: 2_000,
             max_output_bytes: 1_024,
+            cgroup_limits: None,
         },
         &out_root,
     );
