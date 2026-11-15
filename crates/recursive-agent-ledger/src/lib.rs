@@ -3188,14 +3188,10 @@ mod r08_unverified_v2_receipts {
     ) -> Result<(), Box<dyn std::error::Error>> {
         let temporary = tempfile::tempdir()?;
         let root = File::open(temporary.path())?;
-        let run_id = CurrentRunId::try_new(format!(
-            "v1:recursive-agent/run/v1:det:{}",
-            "a".repeat(64)
-        ))?;
-        let step_id = CurrentStepId::try_new(format!(
-            "v1:recursive-agent/step/v1:det:{}",
-            "b".repeat(64)
-        ))?;
+        let run_id =
+            CurrentRunId::try_new(format!("v1:recursive-agent/run/v1:det:{}", "a".repeat(64)))?;
+        let step_id =
+            CurrentStepId::try_new(format!("v1:recursive-agent/step/v1:det:{}", "b".repeat(64)))?;
         let lineage = vec![
             AuthorityLineageEntryV1 {
                 origin: LineageOrigin::Request,
@@ -3241,7 +3237,8 @@ mod r08_unverified_v2_receipts {
             )
             .expect_err("unqualified V2 evidence must not be authoritative");
             assert!(
-                format!("{error}").contains("normal-chat V2 evidence lacks authoritative ledger validation"),
+                format!("{error}")
+                    .contains("normal-chat V2 evidence lacks authoritative ledger validation"),
                 "unexpected refusal: {error}"
             );
         }
