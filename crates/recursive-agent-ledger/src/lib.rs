@@ -3177,3 +3177,74 @@ pub fn ensure_dir(path: &Path) -> Result<(), LedgerError> {
     let _directory = open_directory_tree(path, true)?;
     Ok(())
 }
+
+#[cfg(test)]
+mod r08_unverified_v2_receipts {
+    use super::*;
+    use recursive_agent_contracts::{AuthorityLineageEntryV1, LineageOrigin};
+
+    #[test]
+    fn unvalidated_v2_receipt_kinds_cannot_create_authoritative_completion(
+    ) -> Result<(), Box<dyn std::error::Error>> {
+        let temporary = tempfile::tempdir()?;
+        let root = File::open(temporary.path())?;
+        let run_id = CurrentRunId::try_new(format!(
+            "v1:recursive-agent/run/v1:det:{}",
+            "a".repeat(64)
+        ))?;
+        let step_id = CurrentStepId::try_new(format!(
+            "v1:recursive-agent/step/v1:det:{}",
+            "b".repeat(64)
+        ))?;
+        let lineage = vec![
+            AuthorityLineageEntryV1 {
+                origin: LineageOrigin::Request,
+                principal: "r08-test".into(),
+                permit_id: None,
+                policy_version: "r08-test".into(),
+            },
+            AuthorityLineageEntryV1 {
+                origin: LineageOrigin::Effect,
+                principal: "r08-test".into(),
+                permit_id: None,
+                policy_version: "r08-test".into(),
+            },
+        ];
+        for kind in [
+            ReceiptKindV1::NormalChatAttemptAdmittedV2,
+            ReceiptKindV1::NormalChatAttemptSettledV2,
+            ReceiptKindV1::NormalChatAttemptInterruptedV2,
+            ReceiptKindV1::NormalChatAttemptRecoveredV1,
+            ReceiptKindV1::NormalChatPreparedAttemptRecoveredV1,
+            ReceiptKindV1::NormalChatUnconsumedAttemptRecoveredV1,
+            ReceiptKindV1::NormalChatPrechildAdmissionRecoveredV1,
+            ReceiptKindV1::NormalChatSessionDegradedV1,
+        ] {
+            let receipt = make_receipt(
+                ReceiptDraftV1 {
+                    run_id: run_id.clone(),
+                    step_id: step_id.clone(),
+                    kind,
+                    valid_time: Utc::now(),
+                    lineage: lineage.clone(),
+                    spec_digest: ContentDigest::compute(b"r08-spec"),
+                    args_digest: ContentDigest::compute(b"r08-args"),
+                    artifact_refs: Vec::new(),
+                    outcome: ReceiptOutcomeV1::Ok,
+                },
+                ContentDigest::compute(b"r08-predecessor"),
+            )?;
+            let error = validate_authoritative_sequence(
+                &root,
+                &[receipt],
+                LifecycleValidationMode::StrictCurrent,
+            )
+            .expect_err("unqualified V2 evidence must not be authoritative");
+            assert!(
+                format!("{error}").contains("normal-chat V2 evidence lacks authoritative ledger validation"),
+                "unexpected refusal: {error}"
+            );
+        }
+        Ok(())
+    }
+}
