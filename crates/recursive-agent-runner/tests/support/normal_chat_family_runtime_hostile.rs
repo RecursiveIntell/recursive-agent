@@ -428,12 +428,22 @@ struct SwapClock {
 }
 impl Clock for SwapClock {
     fn now(&self) -> DateTime<Utc> {
-        if self
-            .remaining
-            .try_update(Ordering::SeqCst, Ordering::SeqCst, |v| v.checked_sub(1))
-            .ok()
-            == Some(1)
-        {
+        // Preserve checked, once-only decrement on the supported Rust MSRV.
+        // Atomic::try_update is too new; fetch_sub would wrap at zero.
+        let prior = loop {
+            let observed = self.remaining.load(Ordering::SeqCst);
+            let Some(next) = observed.checked_sub(1) else {
+                break None;
+            };
+            if self
+                .remaining
+                .compare_exchange_weak(observed, next, Ordering::SeqCst, Ordering::SeqCst)
+                .is_ok()
+            {
+                break Some(observed);
+            }
+        };
+        if prior == Some(1) {
             let detached = self.path.with_extension("detached");
             let result =
                 fs::rename(&self.path, &detached).and_then(|()| copy_tree(&detached, &self.path));
