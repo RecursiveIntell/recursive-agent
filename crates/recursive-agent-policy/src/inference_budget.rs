@@ -8,6 +8,9 @@
 //! exactly once per physical attempt. That integration is not supplied here.
 //! Reservations never refund: absent/uncertain usage stays fully charged.
 use super::*;
+#[path = "inference_terms.rs"]
+mod terms;
+pub use terms::*;
 
 const SCHEMA: &str = "recursive-agent.inference-budget/v1";
 const STATE_NAME: &str = "inference-budget.v1.json";
