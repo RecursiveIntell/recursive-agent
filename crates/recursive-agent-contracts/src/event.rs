@@ -26,6 +26,51 @@ pub enum RuntimeEventKindV1 {
         /// Non-authorizing admission-evidence artifact.
         evidence: Vec<ArtifactDescriptorV1>,
     },
+    /// Historical V2 native consumption metadata, never a send continuation.
+    NormalChatAttemptAdmittedV2 {
+        step_id: CurrentStepId,
+        evidence: Vec<ArtifactDescriptorV1>,
+    },
+    /// Locally reported V2 terminal metadata, never provider confirmation.
+    NormalChatAttemptSettledV2 {
+        step_id: CurrentStepId,
+        evidence: Vec<ArtifactDescriptorV1>,
+        outcome: ReceiptOutcomeV1,
+    },
+    /// Owner-observed missing executor outcome after expiry, never a report
+    /// from the SDK or confirmation of whether a provider request was sent.
+    NormalChatAttemptRecoveredV1 {
+        step_id: CurrentStepId,
+        evidence: Vec<ArtifactDescriptorV1>,
+        outcome: ReceiptOutcomeV1,
+    },
+    NormalChatAttemptInterruptedV2 {
+        step_id: CurrentStepId,
+        evidence: Vec<ArtifactDescriptorV1>,
+        outcome: ReceiptOutcomeV1,
+    },
+    NormalChatPreparedAttemptRecoveredV1 {
+        step_id: CurrentStepId,
+        evidence: Vec<ArtifactDescriptorV1>,
+        outcome: ReceiptOutcomeV1,
+    },
+
+    NormalChatUnconsumedAttemptRecoveredV1 {
+        step_id: CurrentStepId,
+        evidence: Vec<ArtifactDescriptorV1>,
+        outcome: ReceiptOutcomeV1,
+    },
+    NormalChatPrechildAdmissionRecoveredV1 {
+        step_id: CurrentStepId,
+        evidence: Vec<ArtifactDescriptorV1>,
+        outcome: ReceiptOutcomeV1,
+    },
+    /// Root lifecycle metadata; not a provider failure or send assertion.
+    NormalChatSessionDegradedV1 {
+        step_id: CurrentStepId,
+        evidence: Vec<ArtifactDescriptorV1>,
+        outcome: ReceiptOutcomeV1,
+    },
     /// A step entered execution lifecycle.
     Started {
         /// Step whose lifecycle started.
@@ -169,6 +214,61 @@ fn event_kind(receipt: &ReceiptV1) -> RuntimeEventKindV1 {
             step_id: receipt.step_id.clone(),
             evidence: receipt.artifact_refs.clone(),
         },
+        ReceiptKindV1::NormalChatAttemptAdmittedV2 => {
+            RuntimeEventKindV1::NormalChatAttemptAdmittedV2 {
+                step_id: receipt.step_id.clone(),
+                evidence: receipt.artifact_refs.clone(),
+            }
+        }
+        ReceiptKindV1::NormalChatAttemptSettledV2 => {
+            RuntimeEventKindV1::NormalChatAttemptSettledV2 {
+                step_id: receipt.step_id.clone(),
+                evidence: receipt.artifact_refs.clone(),
+                outcome: receipt.outcome.clone(),
+            }
+        }
+        ReceiptKindV1::NormalChatAttemptRecoveredV1 => {
+            RuntimeEventKindV1::NormalChatAttemptRecoveredV1 {
+                step_id: receipt.step_id.clone(),
+                evidence: receipt.artifact_refs.clone(),
+                outcome: receipt.outcome.clone(),
+            }
+        }
+        ReceiptKindV1::NormalChatAttemptInterruptedV2 => {
+            RuntimeEventKindV1::NormalChatAttemptInterruptedV2 {
+                step_id: receipt.step_id.clone(),
+                evidence: receipt.artifact_refs.clone(),
+                outcome: receipt.outcome.clone(),
+            }
+        }
+        ReceiptKindV1::NormalChatPreparedAttemptRecoveredV1 => {
+            RuntimeEventKindV1::NormalChatPreparedAttemptRecoveredV1 {
+                step_id: receipt.step_id.clone(),
+                evidence: receipt.artifact_refs.clone(),
+                outcome: receipt.outcome.clone(),
+            }
+        }
+        ReceiptKindV1::NormalChatUnconsumedAttemptRecoveredV1 => {
+            RuntimeEventKindV1::NormalChatUnconsumedAttemptRecoveredV1 {
+                step_id: receipt.step_id.clone(),
+                evidence: receipt.artifact_refs.clone(),
+                outcome: receipt.outcome.clone(),
+            }
+        }
+        ReceiptKindV1::NormalChatPrechildAdmissionRecoveredV1 => {
+            RuntimeEventKindV1::NormalChatPrechildAdmissionRecoveredV1 {
+                step_id: receipt.step_id.clone(),
+                evidence: receipt.artifact_refs.clone(),
+                outcome: receipt.outcome.clone(),
+            }
+        }
+        ReceiptKindV1::NormalChatSessionDegradedV1 => {
+            RuntimeEventKindV1::NormalChatSessionDegradedV1 {
+                step_id: receipt.step_id.clone(),
+                evidence: receipt.artifact_refs.clone(),
+                outcome: receipt.outcome.clone(),
+            }
+        }
         ReceiptKindV1::StepStarted => RuntimeEventKindV1::Started {
             step_id: receipt.step_id.clone(),
         },
