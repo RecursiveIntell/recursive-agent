@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import json
 import os
+import stat
 from pathlib import Path
 
 try:
@@ -73,19 +74,26 @@ def _durable_start_enabled(ctx) -> bool:
 
 
 def _resolve_socket(ctx) -> str:
-    """Read the socket from Hermes' namespaced plugin settings API."""
-    if ctx is not None:
-        socket_path = ctx.get_config("socket_path")
-        if isinstance(socket_path, str) and socket_path:
-            return socket_path
-    return DEFAULT_SOCKET_PATH
+    """Read only the plugin-owned setting; explicit invalid values never reroute."""
+    if ctx is None:
+        return DEFAULT_SOCKET_PATH
+    socket_path = ctx.get_config("socket_path")
+    if socket_path is None:
+        return DEFAULT_SOCKET_PATH
+    if (not isinstance(socket_path, str) or not socket_path.strip()
+            or "\x00" in socket_path):
+        raise ValueError("recursive-agent-native socket_path must be a nonempty path string")
+    return socket_path
 
 
 def check_recursive_agent_available(ctx=None) -> bool:
     """Service-gate: the tool is only callable when the private socket exists
     and answers the version probe. This prevents the model from invoking a
     dead or missing daemon."""
-    socket_path = _resolve_socket(ctx) if ctx is not None else DEFAULT_SOCKET_PATH
+    try:
+        socket_path = _resolve_socket(ctx)
+    except ValueError:
+        return False
     return check_recursive_agent_available_stub(socket_path)
 
 
@@ -107,18 +115,31 @@ def _handler(ctx, args, **kwargs) -> str:
     plus raw daemon status/verification mappings; transport failures remain
     ``unavailable``. Presentation text is not an interchange format.
     """
-    socket_path = _resolve_socket(ctx) if ctx is not None else DEFAULT_SOCKET_PATH
-    envelope_path = str((args or {}).get("envelope_path", ""))
-    if envelope_path:
+    if type(args) is not dict or not args.get("envelope_path"):
+        return "recursive_agent_execute: unavailable: envelope_path required"
+    if set(args) != {"envelope_path"} or type(args["envelope_path"]) is not str:
+        return "recursive_agent_execute: unavailable: invalid arguments (envelope_path only)"
+    envelope_path = args["envelope_path"]
+    try:
+        if len(envelope_path.encode("utf-8")) > 4096 or "\x00" in envelope_path:
+            raise ValueError("invalid envelope_path")
+        socket_path = _resolve_socket(ctx)
+        fd = os.open(
+            envelope_path,
+            os.O_RDONLY | os.O_CLOEXEC | os.O_NONBLOCK | os.O_NOFOLLOW,
+        )
         try:
-            with open(envelope_path, "rb") as source:
+            info = os.fstat(fd)
+            if not stat.S_ISREG(info.st_mode) or info.st_size > MAX_OPERATION_INPUT_BYTES:
+                raise ValueError("operation envelope must be a bounded regular file")
+            with os.fdopen(fd, "rb", closefd=False) as source:
                 raw = source.read(MAX_OPERATION_INPUT_BYTES + 1)
             if len(raw) > MAX_OPERATION_INPUT_BYTES:
-                return "recursive_agent_execute: unavailable: operation exceeds byte limit"
-        except OSError as error:
-            return f"recursive_agent_execute: unavailable: cannot read envelope: {error}"
-    else:
-        return "recursive_agent_execute: unavailable: envelope_path required"
+                raise ValueError("operation exceeds byte limit")
+        finally:
+            os.close(fd)
+    except (OSError, ValueError, UnicodeError, RecursionError):
+        return "recursive_agent_execute: unavailable: invalid envelope or socket setting"
     try:
         if _durable_start_enabled(ctx):
             result = start_and_follow_raw(socket_path, raw)
@@ -213,3 +234,9 @@ def register(ctx) -> None:
         ),
         emoji="\u2699\ufe0f",
     )
+
+    # Governed egress is opt-in; no hook or runtime authority when mode is off.
+    mode = ctx.get_config("governance_mode")
+    if mode is not None and mode != "off":
+        from .governor import register_governor
+        register_governor(ctx)
