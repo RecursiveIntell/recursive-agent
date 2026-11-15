@@ -430,7 +430,7 @@ impl Clock for SwapClock {
     fn now(&self) -> DateTime<Utc> {
         if self
             .remaining
-            .fetch_update(Ordering::SeqCst, Ordering::SeqCst, |v| v.checked_sub(1))
+            .try_update(Ordering::SeqCst, Ordering::SeqCst, |v| v.checked_sub(1))
             .ok()
             == Some(1)
         {
