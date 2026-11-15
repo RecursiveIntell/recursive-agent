@@ -182,9 +182,18 @@ fn provider() -> Result<ProviderSpecV1, ProviderError> {
 }
 
 fn operation() -> Result<ProviderEgressOperationEnvelopeV3, Box<dyn std::error::Error>> {
+    operation_with_prompt("exact sealed prompt")
+}
+
+// Canonical builder. Every digest that depends on the sealed call (request,
+// binding, declared-effects action digest) is derived here from the same prompt,
+// so a different prompt yields a valid, distinct operation.
+fn operation_with_prompt(
+    prompt: &str,
+) -> Result<ProviderEgressOperationEnvelopeV3, Box<dyn std::error::Error>> {
     let request = CompletionRequestV1 {
         provider: provider()?,
-        prompt: "exact sealed prompt".into(),
+        prompt: prompt.into(),
         max_tokens: Some(8),
     };
     let request_value = serde_json::to_value(&request)?;
@@ -1196,4 +1205,331 @@ fn v3_candidate_enforces_declared_output_and_artifact_budget_before_success_rece
         .iter()
         .any(|receipt| receipt.kind == ReceiptKindV1::StepCompleted));
     Ok(())
+}
+
+// Audit M1 / Task 3.1 RED: a durable-start submission must return a handle
+// before the provider finishes, while the run is visibly active. Today only the
+// blocking submit exists, so this test cannot compile until start_provider_egress_v3
+// is added to RuntimeService.
+#[test]
+fn durable_start_returns_handle_before_provider_completes() -> Result<(), Box<dyn std::error::Error>>
+{
+    let output = tempfile::tempdir()?;
+    let (started_tx, started_rx) = mpsc::channel();
+    let (release_tx, release_rx) = mpsc::channel();
+    let clock: Arc<dyn Clock> = Arc::new(MutableClock::new(1_788_220_800));
+    let service = candidate_service_with_backend(
+        output.path(),
+        BlockingBackend {
+            started: started_tx,
+            release: Mutex::new(release_rx),
+        },
+        clock,
+        true,
+    )?;
+    let operation = operation()?;
+    let operation_id = derive_provider_egress_operation_id(&operation)?.to_string();
+
+    // Returns while the provider is still blocked on release_rx.
+    let handle = service.start_provider_egress_v3(&operation)?;
+    assert_eq!(handle.operation_id().to_string(), operation_id);
+    started_rx.recv_timeout(std::time::Duration::from_secs(2))?;
+    let active = service.managed_admission_snapshot()?;
+    assert_eq!(active.active, vec![operation_id]);
+    assert_eq!(active.provider_requests_in_flight, 1);
+
+    // Status before terminal evidence must not be reported as verified.
+    assert!(service.verify(handle.run_id()).is_err());
+
+    release_tx.send(())?;
+    Ok(())
+}
+
+// Task 3.1 gate: a duplicate durable start while the first run is in flight
+// must not invoke the provider a second time. It must either return the same
+// operation identity or fail closed; it must never run twice.
+#[test]
+fn duplicate_durable_start_while_in_flight_does_not_reinvoke_provider(
+) -> Result<(), Box<dyn std::error::Error>> {
+    let output = tempfile::tempdir()?;
+    let (started_tx, started_rx) = mpsc::channel();
+    let (release_tx, release_rx) = mpsc::channel();
+    let clock: Arc<dyn Clock> = Arc::new(MutableClock::new(1_788_220_800));
+    let service = candidate_service_with_backend(
+        output.path(),
+        BlockingBackend {
+            started: started_tx,
+            release: Mutex::new(release_rx),
+        },
+        clock,
+        true,
+    )?;
+    let operation = operation()?;
+    let first = service.start_provider_egress_v3(&operation)?;
+    started_rx.recv_timeout(std::time::Duration::from_secs(2))?;
+
+    // The in-flight duplicate must succeed with the same identity: it is not a
+    // new run and must not re-invoke the provider.
+    let second = service.start_provider_egress_v3(&operation)?;
+    assert_eq!(second.operation_id(), first.operation_id());
+    // Only one backend start may have been observed.
+    assert!(
+        started_rx.try_recv().is_err(),
+        "provider was invoked a second time"
+    );
+
+    release_tx.send(())?;
+    Ok(())
+}
+
+// Task 3.1 restart gate (RED). A durable start that is interrupted by a crash
+// must, on the next service over the same output root, be reported as
+// interrupted_non_resumable: never resumed, never verified, never sealed.
+// No such outcome or marker exists yet, so this cannot pass until it does.
+#[test]
+fn interrupted_durable_start_is_non_resumable_after_restart(
+) -> Result<(), Box<dyn std::error::Error>> {
+    let output = tempfile::tempdir()?;
+    let (started_tx, started_rx) = mpsc::channel();
+    let (_release_tx, release_rx) = mpsc::channel::<()>();
+    let clock: Arc<dyn Clock> = Arc::new(MutableClock::new(1_788_220_800));
+    let operation = operation()?;
+    let handle = {
+        let service = candidate_service_with_backend(
+            output.path(),
+            BlockingBackend {
+                started: started_tx,
+                release: Mutex::new(release_rx),
+            },
+            clock.clone(),
+            true,
+        )?;
+        let handle = service.start_provider_egress_v3(&operation)?;
+        started_rx.recv_timeout(std::time::Duration::from_secs(2))?;
+        // Simulate a crash: the service is dropped while the run is in flight.
+        handle
+    };
+
+    let restarted = candidate_service_with_backend(
+        output.path(),
+        FixtureBackend(Arc::new(AtomicUsize::new(0))),
+        clock,
+        true,
+    )?;
+    let status = restarted.status(handle.run_id())?;
+    assert_eq!(
+        status,
+        recursive_agent_runner::RuntimeStatusV1::InterruptedNonResumable
+    );
+    assert!(
+        restarted.verify(handle.run_id()).is_err(),
+        "interrupted run must not verify"
+    );
+    Ok(())
+}
+
+// Clean finish must clear the in-flight marker, so a completed run is never
+// reported as interrupted after restart.
+#[test]
+fn completed_durable_start_clears_inflight_marker() -> Result<(), Box<dyn std::error::Error>> {
+    let output = tempfile::tempdir()?;
+    let clock: Arc<dyn Clock> = Arc::new(MutableClock::new(1_788_220_800));
+    let calls = Arc::new(AtomicUsize::new(0));
+    let service =
+        candidate_service_with_backend(output.path(), FixtureBackend(calls.clone()), clock, true)?;
+    let operation = operation()?;
+    let handle = service.start_provider_egress_v3(&operation)?;
+    // Wait for the worker to finish and clear its marker.
+    // The marker directory is keyed to this output root's name (see
+    // inflight_marker_dir). Wait for this run's own marker to disappear.
+    let root_name = output
+        .path()
+        .file_name()
+        .unwrap_or_default()
+        .to_string_lossy()
+        .into_owned();
+    let marker_dir = output
+        .path()
+        .parent()
+        .unwrap_or(output.path())
+        .join(format!("{root_name}.provider-v3-inflight"));
+    let run_marker =
+        marker_dir.join(recursive_agent_contracts::content_digest(handle.run_id())?.to_string());
+    for _ in 0..500 {
+        if !run_marker.exists() {
+            break;
+        }
+        std::thread::sleep(std::time::Duration::from_millis(10));
+    }
+    assert!(
+        !run_marker.exists(),
+        "completed run left its in-flight marker"
+    );
+    assert_eq!(calls.load(Ordering::Relaxed), 1);
+    assert!(matches!(
+        service.status(handle.run_id())?,
+        recursive_agent_runner::RuntimeStatusV1::Terminal { .. }
+    ));
+    Ok(())
+}
+
+// Task 3.1 contended-capacity gate (RED). With physical capacity 1, a durable
+// start holds the only slot. A second, distinct durable start must be refused
+// with a typed capacity error and must not invoke the provider.
+fn capacity_one_service_with_backend<B: CompletionBackend + Send + Sync + 'static>(
+    output_root: &std::path::Path,
+    backend: B,
+    clock: Arc<dyn Clock>,
+) -> Result<RuntimeService, Box<dyn std::error::Error>> {
+    let verifier: Arc<dyn ProviderEgressAdmissionVerifier> = Arc::new(AllowCurrentEgress);
+    let runtime = tool_runtime_with_sealed_completion(
+        ToolRegistry::new(),
+        backend,
+        clock.clone(),
+        verifier.clone(),
+    );
+    let deps = RuntimeDependencies::builder()
+        .policy(RuntimePolicyDependencyV1::Native)
+        .sandbox(RuntimeSandboxDependencyV1::Native)
+        .tool_runtime(Arc::new(runtime))
+        .provider(RuntimeProviderDependencyV1::Configured(provider()?))
+        .ledger(RuntimeLedgerDependencyV1::Native)
+        .clock(clock)
+        .store(RuntimeStoreDependencyV1::Native)
+        .output_root(output_root)
+        .provider_egress_verifier(verifier)
+        .build()?;
+    Ok(RuntimeService::new_with_managed_admission(
+        deps,
+        recursive_agent_runner::ManagedAdmissionDomain::from_global(1),
+    ))
+}
+
+#[test]
+fn second_durable_start_is_refused_when_physical_capacity_is_full(
+) -> Result<(), Box<dyn std::error::Error>> {
+    let output = tempfile::tempdir()?;
+    let (started_tx, started_rx) = mpsc::channel();
+    let (release_tx, release_rx) = mpsc::channel();
+    let clock: Arc<dyn Clock> = Arc::new(MutableClock::new(1_788_220_800));
+    let service = capacity_one_service_with_backend(
+        output.path(),
+        BlockingBackend {
+            started: started_tx,
+            release: Mutex::new(release_rx),
+        },
+        clock,
+    )?;
+    let first_op = operation()?;
+    let _first = service.start_provider_egress_v3(&first_op)?;
+    started_rx.recv_timeout(std::time::Duration::from_secs(2))?;
+
+    // A distinct operation (different run identity) must not get the held slot.
+    let second_op = operation_with_prompt("a different sealed prompt")?;
+    let refused = service.start_provider_egress_v3(&second_op);
+    assert!(
+        matches!(
+            refused,
+            Err(RuntimeServiceError::ManagedAdmission(
+                recursive_agent_runner::ManagedAdmissionError::QueueTimeout
+            ))
+        ),
+        "second distinct start must be refused by capacity, got {refused:?}"
+    );
+    assert!(
+        started_rx.try_recv().is_err(),
+        "refused start must not invoke provider"
+    );
+
+    release_tx.send(())?;
+    Ok(())
+}
+
+// Task 3.1 caller-disconnect gate. A durable start must outlive the caller that
+// submitted it. Dropping the submitting handle while the provider is still in
+// flight must neither cancel the run nor cause a second provider invocation, and
+// the run must still finish exactly once and clear its marker.
+#[test]
+fn caller_disconnect_does_not_cancel_or_reinvoke_durable_start(
+) -> Result<(), Box<dyn std::error::Error>> {
+    let output = tempfile::tempdir()?;
+    let (started_tx, started_rx) = mpsc::channel();
+    let (release_tx, release_rx) = mpsc::channel();
+    let clock: Arc<dyn Clock> = Arc::new(MutableClock::new(1_788_220_800));
+    let calls = Arc::new(AtomicUsize::new(0));
+    let backend = CountingBlockingBackend {
+        started: started_tx,
+        release: Mutex::new(release_rx),
+        calls: calls.clone(),
+    };
+    let run_id;
+    {
+        let service = candidate_service_with_backend(output.path(), backend, clock, true)?;
+        let operation = operation()?;
+        let handle = service.start_provider_egress_v3(&operation)?;
+        run_id = handle.run_id().clone();
+        started_rx.recv_timeout(std::time::Duration::from_secs(2))?;
+        // Caller disconnects: the service and its handle are dropped here while
+        // the provider is still blocked.
+        drop(handle);
+        drop(service);
+    }
+    release_tx.send(())?;
+
+    // The worker must finish on its own, exactly once.
+    let marker_dir = output
+        .path()
+        .parent()
+        .unwrap_or(output.path())
+        .join(format!(
+            "{}.provider-v3-inflight",
+            output
+                .path()
+                .file_name()
+                .unwrap_or_default()
+                .to_string_lossy()
+        ));
+    let run_marker =
+        marker_dir.join(recursive_agent_contracts::content_digest(&run_id)?.to_string());
+    let existed_while_blocked = run_marker.exists();
+    assert!(
+        existed_while_blocked,
+        "marker must exist while the provider is blocked"
+    );
+    for _ in 0..500 {
+        if !run_marker.exists() {
+            break;
+        }
+        std::thread::sleep(std::time::Duration::from_millis(10));
+    }
+    assert!(
+        !run_marker.exists(),
+        "run did not finish after caller disconnect"
+    );
+    assert_eq!(
+        calls.load(Ordering::Relaxed),
+        1,
+        "provider must be invoked exactly once"
+    );
+    Ok(())
+}
+
+struct CountingBlockingBackend {
+    started: mpsc::Sender<()>,
+    release: Mutex<mpsc::Receiver<()>>,
+    calls: Arc<AtomicUsize>,
+}
+
+impl CompletionBackend for CountingBlockingBackend {
+    fn complete(
+        &self,
+        request: &CompletionRequestV1,
+    ) -> Result<CompletionResponseV1, ProviderError> {
+        self.calls.fetch_add(1, Ordering::Relaxed);
+        let _ = self.started.send(());
+        if let Ok(release) = self.release.lock() {
+            let _ = release.recv();
+        }
+        FixtureBackend(Arc::new(AtomicUsize::new(0))).complete(request)
+    }
 }

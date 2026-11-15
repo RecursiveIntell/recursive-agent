@@ -294,6 +294,12 @@ fn dispatch(
             // `Debug`, so the wire contract does not depend on a derive repr.
             let status_value = match status {
                 RuntimeStatusV1::Active => serde_json::json!({ "state": "active" }),
+                // Additive wire state: a process exit interrupted this durable
+                // start. It is neither active nor verified-terminal, and a client
+                // must not treat it as either (Task 3.1).
+                RuntimeStatusV1::InterruptedNonResumable => {
+                    serde_json::json!({ "state": "interrupted_non_resumable" })
+                }
                 RuntimeStatusV1::Terminal { state } => serde_json::json!({
                     "state": "terminal",
                     "terminal_state": serde_json::to_value(state)
@@ -508,6 +514,16 @@ fn dispatch(
                 "operation_family": "provider_egress_v3",
             }))
         }
+        IpcRequestV1::StartProviderEgressV3 { operation } => {
+            let handle = runtime.start_provider_egress_v3(operation)?;
+            Ok(serde_json::json!({
+                "request_id": request.request_id,
+                "run_id": handle.run_id().to_string(),
+                "run_dir": handle.run_dir().display().to_string(),
+                "started": true,
+                "operation_family": "provider_egress_v3",
+            }))
+        }
         IpcRequestV1::ReadRecordedProviderOutputV3 { operation } => {
             let output = runtime.read_recorded_provider_output_v3(operation)?;
             Ok(serde_json::json!({
@@ -529,6 +545,23 @@ fn dispatch(
                 "run_id": handle.run_id().to_string(),
                 "run_dir": handle.run_dir().display().to_string(),
                 "submitted": true,
+                "operation_family": family,
+            }))
+        }
+        IpcRequestV1::StartNativeRaw { operation_json_b64 } => {
+            let operation = admit_native_raw(operation_json_b64)?;
+            let (handle, family) = match operation {
+                NativeOperation::V1(operation) => (runtime.submit(&operation)?, "v1"),
+                NativeOperation::ProviderEgressV3(operation) => (
+                    runtime.start_provider_egress_v3(&operation)?,
+                    "provider_egress_v3",
+                ),
+            };
+            Ok(serde_json::json!({
+                "request_id": request.request_id,
+                "run_id": handle.run_id().to_string(),
+                "run_dir": handle.run_dir().display().to_string(),
+                "started": true,
                 "operation_family": family,
             }))
         }

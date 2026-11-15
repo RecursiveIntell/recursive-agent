@@ -1,0 +1,10 @@
+[package]
+name = "vuln-fixture"
+version = "0.0.0"
+edition = "2021"
+publish = false
+
+[workspace]
+
+[dependencies]
+atty = "=0.2.14"

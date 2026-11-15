@@ -188,6 +188,10 @@ fn run_embedded(
                 .to_string()
         }
         recursive_agent_runner::RuntimeStatusV1::Active => "active".into(),
+        // Same wire string the daemon emits, so embedded and IPC adapters agree.
+        recursive_agent_runner::RuntimeStatusV1::InterruptedNonResumable => {
+            "interrupted_non_resumable".into()
+        }
     };
     let verification = service.verify(handle.run_id())?;
     Ok(NormalizedResult {

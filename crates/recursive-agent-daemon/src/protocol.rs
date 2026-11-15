@@ -232,6 +232,13 @@ pub enum IpcRequestV1 {
         /// Complete closed provider-egress operation envelope.
         operation: Box<ProviderEgressOperationEnvelopeV3>,
     },
+    /// Durable, non-blocking start of one closed V3 provider-egress operation
+    /// (Task 3.1). Returns once the run is durably accepted; the provider may
+    /// still be in flight. Additive: the blocking submit above is unchanged.
+    StartProviderEgressV3 {
+        /// Complete closed provider-egress operation envelope.
+        operation: Box<ProviderEgressOperationEnvelopeV3>,
+    },
     /// Read a recorded provider response under fresh current authorization.
     /// A path handle or run id alone is never sufficient read authority.
     ReadRecordedProviderOutputV3 {
@@ -241,6 +248,10 @@ pub enum IpcRequestV1 {
     /// Opaque original operation bytes, encoded only for the JSON IPC carrier.
     /// The contracts owner selects V1 or V3 after strict admission.
     SubmitNativeRaw { operation_json_b64: String },
+    /// Opt-in raw carrier: contracts select the operation family from original
+    /// bytes. V1 retains synchronous submission; V3 uses the existing bounded
+    /// provider-start owner. This carrier grants no additional authority.
+    StartNativeRaw { operation_json_b64: String },
     /// Recorded V3 read using the same contracts-owned raw family admission.
     ReadRecordedProviderOutputNativeRaw { operation_json_b64: String },
 }

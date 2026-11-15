@@ -1,0 +1,87 @@
+name: Supply-chain advisories
+
+on:
+  pull_request:
+    paths:
+      - "Cargo.lock"
+      - "Cargo.toml"
+      - "deny.toml"
+      - ".github/workflows/supply-chain.yml"
+      - ".github/fixtures/advisory-witness/**"
+  push:
+    branches: [main]
+    paths:
+      - "Cargo.lock"
+      - "Cargo.toml"
+      - "deny.toml"
+      - ".github/workflows/supply-chain.yml"
+      - ".github/fixtures/advisory-witness/**"
+  schedule:
+    # Weekly, Monday 06:20 UTC — catches advisories published after merge.
+    - cron: "20 6 * * 1"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  advisories:
+    name: cargo-deny advisories
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    steps:
+      - name: Checkout source
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          ref: ${{ github.sha }}
+          fetch-depth: 1
+
+      - name: Checkout the exact Libraries source owner
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          repository: RecursiveIntell/Libraries
+          ref: 0b099ec416de60f6adafb182f1d1e83795d05c56
+          fetch-depth: 1
+          path: Libraries
+
+      - name: Stage Libraries at the workspace-adjacent path
+        # The workspace has path dependencies into ../Libraries, but
+        # actions/checkout refuses to write outside GITHUB_WORKSPACE. Stage
+        # the checkout as a sibling via symlink so cargo resolves the graph.
+        run: ln -s "$GITHUB_WORKSPACE/Libraries" ../Libraries
+
+      - name: Install pinned cargo-deny
+        # Version pinned to match the header contract in deny.toml; the
+        # action itself is pinned to an immutable commit SHA.
+        uses: taiki-e/install-action@cfdb7ed4ccc7c7dce37759eae89dc5674b469b39
+        with:
+          tool: cargo-deny@0.19.8
+
+      - name: Advisory gate (fails on vulnerabilities, unsound, yanked)
+        # Policy: deny.toml [advisories] ignore = []. Unmaintained warnings
+        # are reported but do not fail the gate; any exception must carry an
+        # owner, reachability proof, review date, and expiry (audit Task 5.2).
+        run: cargo deny --locked check advisories
+
+      - name: Negative witness — require the known atty advisory
+        run: |
+          set -euo pipefail
+          fixture=".github/fixtures/advisory-witness/Cargo.toml"
+          cargo metadata --locked --manifest-path "$fixture" --format-version 1 >/dev/null
+
+          report="$(mktemp)"
+          trap 'rm -f "$report"' EXIT
+          if cargo deny --manifest-path "$fixture" --locked --format json check advisories 2>"$report"; then
+            echo "::error::advisory gate accepted the vulnerable fixture"
+            exit 1
+          fi
+          cat "$report"
+          jq -es 'any(.[];
+            .type == "diagnostic"
+            and .fields.severity == "error"
+            and .fields.advisory.id == "RUSTSEC-2021-0145"
+            and any(.fields.graphs[]?; .Krate.name == "atty" and .Krate.version == "0.2.14")
+          )' "$report" >/dev/null

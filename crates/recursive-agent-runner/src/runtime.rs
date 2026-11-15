@@ -24,6 +24,7 @@ use recursive_agent_policy::{
     OperatorApprovalWitnessV1, PermitApprovalRequestV1, PermitBudgetV1, PermitEvidenceV1,
     PermitOutcomeReceiptV1, PermitPreflightReceiptV1, PolicyError, ProductionApprovalVerifierV1,
     ProductionApprovalWitnessV1, ProviderEgressAdmissionRequestV1, ReportedEffectOutcomeV1,
+    ValidatedProviderEgressAdmissionV1,
 };
 use recursive_agent_provider::{CompletionBackend, CompletionRequestV1, ProviderSpecV1};
 use serde::Deserialize;
@@ -116,6 +117,9 @@ pub struct RuntimeLiveParentV2<'a> {
 pub enum RuntimeStatusV1 {
     /// The operation is currently owned by this service instance.
     Active,
+    /// A durable start was interrupted by a process exit. It is never resumed
+    /// or strictly verified, and no provider call is repeated (Task 3.1).
+    InterruptedNonResumable,
     /// Strict verification found authoritative terminal evidence.
     Terminal {
         /// Exact terminal state from the verified receipt chain.
@@ -242,6 +246,20 @@ pub enum RuntimeServiceError {
     /// The live parent is already finalized and cannot receive another call.
     #[error("live parent lifecycle has already been finalized")]
     LiveParentFinalized,
+}
+
+/// Result of the shared V3 admission preamble.
+enum ProviderEgressAdmissionV3 {
+    Replayed(RuntimeHandleV1),
+    InFlight(RuntimeHandleV1),
+    Admitted(Box<ProviderEgressAdmittedV3>),
+}
+
+/// Authorized, capacity-reserved V3 provider run awaiting execution.
+struct ProviderEgressAdmittedV3 {
+    operation_id: CurrentRunId,
+    admission: ValidatedProviderEgressAdmissionV1,
+    guard: ManagedReservation,
 }
 
 struct AdmittedToolExecutor<'a> {
@@ -1011,6 +1029,117 @@ impl RuntimeService {
         &self,
         operation: &ProviderEgressOperationEnvelopeV3,
     ) -> Result<RuntimeHandleV1, RuntimeServiceError> {
+        match self.admit_provider_egress_v3(operation)? {
+            ProviderEgressAdmissionV3::Replayed(handle)
+            | ProviderEgressAdmissionV3::InFlight(handle) => Ok(handle),
+            ProviderEgressAdmissionV3::Admitted(admitted) => {
+                let ProviderEgressAdmittedV3 {
+                    operation_id,
+                    admission,
+                    guard,
+                } = *admitted;
+                guard
+                    .mark_provider_in_flight()
+                    .map_err(map_admission_error)?;
+                let tool_executor = AdmittedToolExecutor {
+                    runtime: self.dependencies.tool_runtime(),
+                };
+                let execution = run_provider_egress_operation_v3_with_run_id(
+                    operation,
+                    self.dependencies.output_root(),
+                    self.dependencies.clock(),
+                    operation_id.clone(),
+                    &tool_executor,
+                    &admission,
+                );
+                guard
+                    .mark_provider_complete()
+                    .map_err(map_admission_error)?;
+                let summary = execution?;
+                Ok(RuntimeHandleV1 {
+                    operation_id,
+                    run_id: summary.run_id,
+                    run_dir: summary.run_dir,
+                })
+            }
+        }
+    }
+
+    /// Durable-start V3 submission (audit M1, Task 3.1). Validation, policy
+    /// authorization, and managed capacity reservation happen on the caller
+    /// thread before this returns. The provider run then executes on one
+    /// worker that owns the reservation, so the handle is returned while the
+    /// provider may still be in flight. Status before terminal evidence is
+    /// reported as active or unverified, never verified.
+    pub fn start_provider_egress_v3(
+        &self,
+        operation: &ProviderEgressOperationEnvelopeV3,
+    ) -> Result<RuntimeHandleV1, RuntimeServiceError> {
+        match self.admit_provider_egress_v3(operation)? {
+            ProviderEgressAdmissionV3::Replayed(handle)
+            | ProviderEgressAdmissionV3::InFlight(handle) => Ok(handle),
+            ProviderEgressAdmissionV3::Admitted(admitted) => {
+                let ProviderEgressAdmittedV3 {
+                    operation_id,
+                    admission,
+                    guard,
+                } = *admitted;
+                let handle = RuntimeHandleV1 {
+                    operation_id: operation_id.clone(),
+                    run_id: operation_id.clone(),
+                    run_dir: self
+                        .dependencies
+                        .output_root()
+                        .join(content_digest(&operation_id)?.to_string()),
+                };
+                // Durable marker before the worker exists: a crash after this
+                // point leaves the marker, and the next status reports the run
+                // as interrupted_non_resumable instead of resuming it.
+                let marker = self.inflight_marker_path(&operation_id);
+                std::fs::create_dir_all(self.inflight_marker_dir())
+                    .and_then(|()| std::fs::write(&marker, b"in-flight\n"))
+                    .map_err(|_| RuntimeServiceError::ProviderEgressDisabled)?;
+                let worker_marker = marker.clone();
+                let worker_operation = operation.clone();
+                let worker_tools = self.dependencies.tool_runtime_shared();
+                let worker_clock = self.dependencies.clock_shared();
+                let worker_output = self.dependencies.output_root().to_path_buf();
+                std::thread::Builder::new()
+                    .name("provider-egress-v3".into())
+                    .spawn(move || {
+                        // The worker owns the reservation; dropping it on any
+                        // path releases managed capacity exactly once.
+                        let outcome = guard.mark_provider_in_flight().map_err(map_admission_error);
+                        if outcome.is_ok() {
+                            let tool_executor = AdmittedToolExecutor {
+                                runtime: &worker_tools,
+                            };
+                            let _ = run_provider_egress_operation_v3_with_run_id(
+                                &worker_operation,
+                                &worker_output,
+                                worker_clock.as_ref(),
+                                operation_id,
+                                &tool_executor,
+                                &admission,
+                            );
+                        }
+                        let _ = guard.mark_provider_complete();
+                        // Remove the marker only after the worker has finished;
+                        // terminal evidence is then the authority.
+                        let _ = std::fs::remove_file(&worker_marker);
+                    })
+                    .map_err(|_| RuntimeServiceError::ProviderEgressDisabled)?;
+                Ok(handle)
+            }
+        }
+    }
+
+    /// Shared, side-effect-ordered preamble for both submission modes: replay
+    /// an already-committed run, or validate, authorize, and reserve capacity.
+    fn admit_provider_egress_v3(
+        &self,
+        operation: &ProviderEgressOperationEnvelopeV3,
+    ) -> Result<ProviderEgressAdmissionV3, RuntimeServiceError> {
         self.require_open_execution()?;
         operation.validate_structure()?;
         let operation_id = derive_provider_egress_operation_id(operation)?;
@@ -1019,7 +1148,22 @@ impl RuntimeService {
             .output_root()
             .join(content_digest(&operation_id)?.to_string());
         if run_dir.is_dir() {
-            return self.replay_provider_egress_v3(operation);
+            // An in-flight run has an incomplete chain and must not be strictly
+            // verified (Task 3.1). Return its identity without replaying it.
+            if self
+                .admission
+                .contains_active(&operation_id.to_string())
+                .map_err(map_admission_error)?
+            {
+                return Ok(ProviderEgressAdmissionV3::InFlight(RuntimeHandleV1 {
+                    operation_id: operation_id.clone(),
+                    run_id: operation_id,
+                    run_dir,
+                }));
+            }
+            return Ok(ProviderEgressAdmissionV3::Replayed(
+                self.replay_provider_egress_v3(operation)?,
+            ));
         }
         if self
             .dependencies
@@ -1084,29 +1228,13 @@ impl RuntimeService {
                 u64::from(operation.sealed_completion.arguments.binding.output_reserve),
             ),
         )?;
-        guard
-            .mark_provider_in_flight()
-            .map_err(map_admission_error)?;
-        let tool_executor = AdmittedToolExecutor {
-            runtime: self.dependencies.tool_runtime(),
-        };
-        let execution = run_provider_egress_operation_v3_with_run_id(
-            operation,
-            self.dependencies.output_root(),
-            self.dependencies.clock(),
-            operation_id.clone(),
-            &tool_executor,
-            &admission,
-        );
-        guard
-            .mark_provider_complete()
-            .map_err(map_admission_error)?;
-        let summary = execution?;
-        Ok(RuntimeHandleV1 {
-            operation_id,
-            run_id: summary.run_id,
-            run_dir: summary.run_dir,
-        })
+        Ok(ProviderEgressAdmissionV3::Admitted(Box::new(
+            ProviderEgressAdmittedV3 {
+                operation_id,
+                admission,
+                guard,
+            },
+        )))
     }
 
     /// Read strictly verified V3 evidence only after current policy authorizes
@@ -1460,9 +1588,38 @@ impl RuntimeService {
     }
 
     /// Return active state or strict ledger-derived terminal state.
+    /// Durable in-flight marker location. It lives in a sibling of the output
+    /// root, never inside the content-addressed run directory: the strict
+    /// verifier rejects extra entries there, so a marker inside it would make a
+    /// terminal run fail verification.
+    fn inflight_marker_dir(&self) -> std::path::PathBuf {
+        // Keyed to this runtime's own output root, so independent runtimes that
+        // share a parent directory never see each other's in-flight markers.
+        let root = self.dependencies.output_root();
+        let name = root
+            .file_name()
+            .map(|n| format!("{}.provider-v3-inflight", n.to_string_lossy()))
+            .unwrap_or_else(|| "provider-v3-inflight".into());
+        root.parent()
+            .unwrap_or_else(|| std::path::Path::new("."))
+            .join(name)
+    }
+
+    /// Marker filename is the content digest of the run ID. Run IDs contain
+    /// `/` and `:`, so using them directly would create nested paths.
+    fn inflight_marker_path(&self, run_id: &CurrentRunId) -> std::path::PathBuf {
+        let name = content_digest(run_id)
+            .map(|digest| digest.to_string())
+            .unwrap_or_else(|_| "invalid".into());
+        self.inflight_marker_dir().join(name)
+    }
+
     pub fn status(&self, run_id: &CurrentRunId) -> Result<RuntimeStatusV1, RuntimeServiceError> {
         if self.is_active(run_id)? {
             return Ok(RuntimeStatusV1::Active);
+        }
+        if self.inflight_marker_path(run_id).is_file() {
+            return Ok(RuntimeStatusV1::InterruptedNonResumable);
         }
         let verification = self.verify(run_id)?;
         Ok(RuntimeStatusV1::Terminal {
@@ -1483,6 +1640,11 @@ impl RuntimeService {
         match self.status(run_id)? {
             RuntimeStatusV1::Terminal { state } => {
                 Ok(RuntimeCancelResultV1::AlreadyTerminal { state })
+            }
+            RuntimeStatusV1::InterruptedNonResumable => {
+                // No live owner exists to honor a cancel, and no terminal receipt
+                // was written. Do not fabricate a cancellation receipt (Task 3.1).
+                Err(RuntimeServiceError::ActiveCancellationUnavailable)
             }
             RuntimeStatusV1::Active => {
                 if let Some(family) = self

@@ -27,6 +27,19 @@ sources` and bounded ingress fuzzing were subsequently recorded as passing in th
 
 The root [`Cargo.toml`](Cargo.toml) resolves `boundary-compiler`, `stack-ids`, `bitemporal-runtime`, `claim-ledger`, and `llm-tool-runtime` by path from a sibling `../Libraries` checkout. Place compatible `Libraries/` and `recursive-agent/` checkouts under the same parent before building; a `recursive-agent` checkout alone cannot resolve those workspace dependencies. The dated validation below does not certify an arbitrary new pairing of their default branches.
 
+## System build prerequisite: libseccomp
+
+`recursive-agent-runner` links the system C library through the `libseccomp` crate
+(`libseccomp = "=0.4.0"`). A host building the runner needs the libseccomp development
+package and `pkg-config` before `cargo build`:
+
+- Debian/Ubuntu: `sudo apt install libseccomp-dev pkg-config`
+- Fedora/RHEL/Nobara: `sudo dnf install libseccomp-devel pkgconf-pkg-config`
+- Arch/Omarchy: `sudo pacman -S libseccomp pkgconf`
+
+Verify with `pkg-config --exists libseccomp && echo ok`. A missing package fails the build
+at link time, not at a clear error about this dependency.
+
 ## Original M0 boundary
 
 The baseline M0 design provides a deterministic local run that emits a

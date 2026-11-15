@@ -14,7 +14,7 @@ thiserror.workspace = true
 chrono.workspace = true
 recursive-agent-contracts = { path = "../recursive-agent-contracts" }
 stack-ids.workspace = true
-rusqlite = { version = "0.31", features = ["bundled"] }
+rusqlite = { version = "0.41", features = ["bundled"] }
 
 [dev-dependencies]
 tempfile = "3"
