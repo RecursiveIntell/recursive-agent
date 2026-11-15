@@ -628,7 +628,6 @@ struct RepoAuditArgsIngressV1 {
 
 #[derive(Debug, Deserialize)]
 #[serde(deny_unknown_fields)]
-#[expect(dead_code)]
 struct ShellArgsIngressV1 {
     command: String,
     #[serde(default)]
