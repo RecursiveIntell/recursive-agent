@@ -8,7 +8,10 @@
 mod egress;
 mod event;
 mod native_operation;
+mod normal_chat_call_v2;
 mod normal_chat_operation;
+mod normal_chat_operation_v2;
+mod normal_chat_session;
 mod operation;
 mod provider_egress_operation;
 mod run_pack_projection;
@@ -24,12 +27,26 @@ pub use event::{
 pub use native_operation::{
     parse_native_operation_bytes, NativeOperation, NativeOperationIngressError,
 };
+pub use normal_chat_call_v2::{
+    parse_normal_chat_call_request_v2_bytes, NormalChatCallRequestSchemaV2, NormalChatCallRequestV2,
+};
 pub use normal_chat_operation::{
     derive_normal_chat_attempt_id, parse_normal_chat_attempt_v1_bytes,
     parse_normal_chat_operation_v1_bytes, NormalChatAttemptId, NormalChatAttemptIngressError,
     NormalChatAttemptSchemaV1, NormalChatAttemptV1, NormalChatBudgetV1,
     NormalChatOperationIngressError, NormalChatOperationSchemaV1, NormalChatOperationV1,
     NormalChatReplayV1,
+};
+pub use normal_chat_operation_v2::{
+    derive_normal_chat_attempt_id_v2, parse_normal_chat_attempt_v2_bytes,
+    parse_normal_chat_operation_v2_bytes, NormalChatAttemptIdV2, NormalChatAttemptSchemaV2,
+    NormalChatAttemptV2, NormalChatAttemptV2IngressError, NormalChatBudgetV2,
+    NormalChatOperationSchemaV2, NormalChatOperationV2, NormalChatOperationV2IngressError,
+    NormalChatReplayV2, NormalChatRequestProjectionSchemaV2, MAX_NORMAL_CHAT_REQUEST_BYTES_V2,
+};
+pub use normal_chat_session::{
+    parse_normal_chat_session_v1_bytes, NormalChatSessionIngressErrorV1, NormalChatSessionSchemaV1,
+    NormalChatSessionV1,
 };
 pub use operation::{
     derive_child_operation_id, derive_child_operation_material_digest,
