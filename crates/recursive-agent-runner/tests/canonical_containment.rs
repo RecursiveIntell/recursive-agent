@@ -209,6 +209,7 @@ fn diagnostic_enforcement() -> EnforcementRecord {
         setup_proof_digest: None,
         setup_proof_verified: false,
         reason_code: Some(SandboxFailureReason::LauncherTimedOut),
+        cgroup_enforced: false,
     }
 }
 
@@ -728,7 +729,7 @@ fn cgroup_memory_limit_enforced() -> TestResult {
             // Enforcement outcome should always be Enforced for a successful sandbox run
             assert_eq!(result.enforcement.outcome, EnforcementOutcome::Enforced);
         }
-        Err(CanonicalError::Terminal(state)) => {
+        Err(CanonicalError::Terminal { state, .. }) => {
             // Terminal state should not be success
             assert!(!state.permits_successful_finalization());
         }
