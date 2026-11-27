@@ -28,14 +28,14 @@ sources` and bounded ingress fuzzing were subsequently recorded as passing in th
 
 ## Source checkout prerequisite
 
-The root [`Cargo.toml`](Cargo.toml) resolves `boundary-compiler`, `stack-ids`, `bitemporal-runtime`, `claim-ledger`, and `llm-tool-runtime` by path from a sibling `../Libraries` checkout. A `recursive-agent` checkout alone cannot resolve those workspace dependencies. CI pairs this source with [`Libraries` commit `0b099ec416de60f6adafb182f1d1e83795d05c56`](https://github.com/RecursiveIntell/Libraries/commit/0b099ec416de60f6adafb182f1d1e83795d05c56); use that pin for the documented CI pairing rather than assuming the current `Libraries` default branch is compatible.
+The root [`Cargo.toml`](Cargo.toml) resolves `boundary-compiler`, `stack-ids`, `bitemporal-runtime`, `claim-ledger`, and `llm-tool-runtime` by path from a sibling `../Libraries` checkout. A `recursive-agent` checkout alone cannot resolve those workspace dependencies. CI pairs this source with [`Libraries` commit `414193cbf2c6a958f9933ea128933946d7aa8390`](https://github.com/RecursiveIntell/Libraries/commit/414193cbf2c6a958f9933ea128933946d7aa8390); use that pin for the documented CI pairing rather than assuming the current `Libraries` default branch is compatible.
 
 From a parent directory where neither checkout already exists, create the paired roots with:
 
 ```bash
 git clone https://github.com/RecursiveIntell/recursive-agent.git
 git clone https://github.com/RecursiveIntell/Libraries.git
-git -C Libraries checkout 0b099ec416de60f6adafb182f1d1e83795d05c56
+git -C Libraries checkout 414193cbf2c6a958f9933ea128933946d7aa8390
 cd recursive-agent
 ```
 
